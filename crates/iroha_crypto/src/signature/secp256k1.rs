@@ -1,6 +1,6 @@
-use std::{format, vec::Vec};
 use self::ecdsa_secp256k1::EcdsaSecp256k1Impl;
 use crate::{Error, KeyGenOption, ParseError};
+use std::{format, vec::Vec};
 /// ECDSA over secp256k1 with SHA-256 hashing (used for interoperability).
 #[derive(Clone, Copy)]
 pub struct EcdsaSecp256k1Sha256;
@@ -85,6 +85,12 @@ impl EcdsaSecp256k1Sha256 {
     /// when the encoding is non-canonical (must match the canonical SEC1 encoding).
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
         EcdsaSecp256k1Impl::parse_public_key(payload)
+    }
+
+    /// Validate a SEC1 public key for a decode path without retaining an
+    /// encoded copy or consulting process-local state.
+    pub(crate) fn validate_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
+        EcdsaSecp256k1Impl::parse_public_key(payload).map(drop)
     }
     /// Parse a SEC1-encoded private key.
     ///
@@ -184,7 +190,8 @@ mod tests {
     }
 }
 mod ecdsa_secp256k1 {
-    use std::{format, string::ToString as _, vec::Vec};
+    use super::{PrivateKey, PublicKey};
+    use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
     use k256::{
         ecdsa::{
             RecoveryId, Signature, SigningKey, VerifyingKey,
@@ -198,9 +205,8 @@ mod ecdsa_secp256k1 {
     use rand_core::TryCryptoRng;
     use sha2::Digest as _;
     use sha3::Keccak256;
+    use std::{format, string::ToString as _, vec::Vec};
     use zeroize::{Zeroize as _, Zeroizing};
-    use super::{PrivateKey, PublicKey};
-    use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
     pub struct EcdsaSecp256k1Impl;
     impl EcdsaSecp256k1Impl {
         pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
@@ -346,8 +352,11 @@ mod ecdsa_secp256k1 {
             }
             let key =
                 PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
-            let canonical = key.to_sec1_bytes();
-            if canonical.as_ref() != payload {
+            // `EncodedPoint` stores secp256k1's fixed-width SEC1 representation
+            // inline. Avoid `PublicKey::to_sec1_bytes`, which boxes the same
+            // canonical encoding and would make decode validation heap-backed.
+            let canonical = key.to_encoded_point(true);
+            if canonical.as_bytes() != payload {
                 return Err(ParseError(
                     "non-canonical secp256k1 public key encoding".to_string(),
                 ));
@@ -381,6 +390,7 @@ impl From<elliptic_curve::Error> for Error {
 }
 #[cfg(test)]
 mod test {
+    use super::*;
     #[cfg(feature = "crypto-parity-tests")]
     use amcl::secp256k1::ecp;
     use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
@@ -392,10 +402,9 @@ mod test {
         ecdsa::EcdsaSig,
         nid::Nid,
     };
-    use sha2::Digest;
     #[cfg(feature = "rand")]
     use rand_core::{TryCryptoRng, TryRngCore};
-    use super::*;
+    use sha2::Digest;
     #[cfg(feature = "crypto-parity-tests")]
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     #[cfg(feature = "crypto-parity-tests")]
@@ -502,6 +511,27 @@ mod test {
         let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
+
+    #[test]
+    fn decode_validator_matches_public_parser_acceptance() {
+        let key = public_key();
+        let canonical = key.to_encoded_point(true);
+        let uncompressed = key.to_encoded_point(false);
+        let all_zero = [0_u8; 33];
+        for payload in [
+            canonical.as_bytes(),
+            uncompressed.as_bytes(),
+            &[][..],
+            all_zero.as_slice(),
+        ] {
+            assert_eq!(
+                EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload).is_ok(),
+                EcdsaSecp256k1Sha256::parse_public_key(payload).is_ok(),
+                "decode-only and public parsing diverged for {payload:02x?}"
+            );
+        }
+    }
+
     #[test]
     fn parse_public_key_rejects_all_zero_sec1_material() {
         for len in [33, 65] {

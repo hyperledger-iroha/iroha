@@ -99,6 +99,25 @@ fn decode_torii_proxy_query<T>(
 where
     T: norito::json::JsonDeserializeOwned,
 {
+    decode_torii_proxy_query_with_coercion(plan, query_string, true)
+}
+fn decode_torii_proxy_string_query<T>(
+    plan: ToriiRoutedReadRequestDecodePlan,
+    query_string: Option<&str>,
+) -> Result<T, Response>
+where
+    T: norito::json::JsonDeserializeOwned,
+{
+    decode_torii_proxy_query_with_coercion(plan, query_string, false)
+}
+fn decode_torii_proxy_query_with_coercion<T>(
+    plan: ToriiRoutedReadRequestDecodePlan,
+    query_string: Option<&str>,
+    coerce_scalars: bool,
+) -> Result<T, Response>
+where
+    T: norito::json::JsonDeserializeOwned,
+{
     let raw = query_string.unwrap_or_default();
     plan.admit_raw_input(raw.len())?;
     let pair_count = torii_form_pairs(raw.as_bytes()).count();
@@ -120,7 +139,7 @@ where
     let query = ToriiRoutedReadFormJson {
         raw,
         plan,
-        coerce_scalars: true,
+        coerce_scalars,
     };
     let json = norito::json::to_json_bounded_boxed(&query, plan.expanded_query_limit_bytes)
         .map_err(|error| {
@@ -676,9 +695,9 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
             output.push(':')?;
             let value = torii_exact_form_component(pair.value, self.plan.component_limit_bytes)?;
             // SAFETY: `torii_exact_form_component` constructs valid UTF-8.
-            let value = unsafe { std::str::from_utf8_unchecked(&value) }.trim();
+            let value = unsafe { std::str::from_utf8_unchecked(&value) };
             if self.coerce_scalars {
-                torii_write_form_scalar(value, output)?;
+                torii_write_form_scalar(value.trim(), output)?;
             } else {
                 norito::json::write_json_string_to(value, output)?;
             }
@@ -761,6 +780,22 @@ mod torii_routed_read_request_tests {
             decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&oversized))
                 .expect_err("pair limit plus one is rejected");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    #[test]
+    fn string_query_mode_preserves_decimal_and_whitespace_values() {
+        let phase = 64 * 1024;
+        let plan =
+            ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+                .expect("test geometry")
+                .request_decode_plan()
+                .expect("request plan");
+        let hash = "11".repeat(32);
+        let raw = format!("hash=+{hash}+&scope=%20local%20");
+        let decoded = decode_torii_proxy_string_query::<PipelineStatusQuery>(plan, Some(&raw))
+            .expect("string query values decode verbatim");
+        let expected_hash = format!(" {hash} ");
+        assert_eq!(decoded.hash.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(decoded.scope.as_deref(), Some(" local "));
     }
     #[test]
     fn json_body_preflights_and_maps_resource_failures_to_413() {

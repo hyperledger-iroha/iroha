@@ -436,7 +436,10 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
             XCTAssertNil(body["chain_id"])
-            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Iroha-Account"), owner)
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "X-Iroha-Account"),
+                try AccountAddress.parseEncoded(owner).canonicalHex()
+            )
             XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
             XCTAssertEqual(body["envelope_b64"] as? String, "AQIDBA==")
             XCTAssertNil(body["public"])

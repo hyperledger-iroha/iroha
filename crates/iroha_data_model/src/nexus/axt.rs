@@ -2,18 +2,18 @@
 //!
 //! These structures mirror the IVM syscall surface while providing Norito-compatible
 //! schemas for WSV/block persistence and gossip replication.
-use std::collections::{BTreeMap, BTreeSet};
-use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
-use norito::codec::{Decode, Encode, encode_adaptive};
-use thiserror::Error;
 use crate::{
     NetworkId,
     block::BlockHeader,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
+use norito::codec::{Decode, Encode, encode_adaptive};
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1383,9 +1383,9 @@ fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVa
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
-    use super::*;
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
         AxtDescriptor {
             dsids: vec![dsid],

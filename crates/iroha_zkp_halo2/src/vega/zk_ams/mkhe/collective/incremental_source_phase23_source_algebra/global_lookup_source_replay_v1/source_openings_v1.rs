@@ -21,12 +21,12 @@ use super::{
     validate_replay_record_v1,
 };
 use crate::{
-    generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder},
+    generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, SecretPoint},
     vega::{
         VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{
-            ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, ZeroizingT256ScalarCopyV1,
-            ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1,
+            SecretT256PointEncodingV1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1,
             zk_ams_t256_bulletproof_generator_basis_digest_v1,
         },
         sponge::Keccak256,
@@ -454,17 +454,18 @@ impl SourceOpeningAssemblyV1 {
             live.commitment_hash
                 .update(&coordinate.record.to_be_bytes());
             live.commitment_hash.update(&[coordinate.group]);
-            live.commitment_hash.update(
-                &commitment
-                    .to_non_identity_wire_bytes()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
-            );
+            let encoded = SecretT256PointEncodingV1::new(commitment.expose_ref())
+                .map_err(map_bulletproof_error_v1)?;
+            live.commitment_hash.update(encoded.as_ref());
+            drop(encoded);
             live.blinding_writer
                 .write_slot_v1(u64::from(coordinate.ordinal), blinding_chunk)
                 .map_err(map_leaf_error_v1)?;
-            live.proof_session
-                .adopt_source_commitment_v1(u32::from(coordinate.ordinal), &commitment)?;
-            live.commitments.push(commitment);
+            live.proof_session.adopt_source_commitment_v1(
+                u32::from(coordinate.ordinal),
+                commitment.expose_ref(),
+            )?;
+            live.commitments.push(*commitment.expose_ref());
             live.group_scalars.clear_and_truncate(0);
             live.next_group = live
                 .next_group
@@ -596,7 +597,7 @@ fn source_opening_commitment_for_suite_v1<S>(
     values: &[Scalar],
     blinding: &Scalar,
     exact_values: usize,
-) -> Result<Point, ZkAmsMkheErrorV1>
+) -> Result<SecretPoint<Point>, ZkAmsMkheErrorV1>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {

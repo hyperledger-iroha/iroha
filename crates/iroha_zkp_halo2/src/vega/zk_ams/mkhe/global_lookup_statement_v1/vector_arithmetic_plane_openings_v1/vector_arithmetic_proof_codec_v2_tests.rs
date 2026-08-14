@@ -18,7 +18,7 @@ fn independent_manifest_oracle_v2() -> [u8; 32] {
     let languages: [&[u8]; 5] = [
         b"for-v=0..16383;q3[v]=sum_g=0..343(kappa^g*(bD_g[v]*(bD_g[v]-1)+delta*bS_g[v]*(bS_g[v]-1)+delta^2*bD_g[v]*bS_g[v]));q5[v]=sum_g=0..343(kappa^g*(sum_h=0..17(delta^h*beta_g,h[v]*(beta_g,h[v]-1))+delta^18*(m_g[v]-bD_g[v]*beta_g,16[v])+delta^19*(beta_g,17[v]-beta_g,16[v]+m_g[v])));q8[v]=sum_u=0..1031(kappa^u*((x_u[v]+n_u[v])*n_u[v]))",
         b"logical-plane-to-commitment-session-physical-role:bD[0..343]->[12040..12383];bS[344..687]->[12384..12727];beta[688..6879]->[18576..24767];m[6880..7223]->[24768..25111];x[7224..8255]->[25112..26143];n[8256..9287]->[26144..27175];q3,q5,q8[9288..9290]->[71106..71108];9291-logical-planes;no-inverse-roles",
-        b"proof-order=S3,S5,S8;commitment-order=S3=(bD[0..343],bS[0..343],q3),S5=(bD[0..343],beta[group-major][0..17],m[0..343],q5),S8=(x[0..1031],n[0..1031],q8);gate-order=coordinate-v-major;S3-then-group-major-then-(bD-boolean,bS-boolean,bD-times-bS);S5-then-group-major-then-(beta-boolean-h=0..17,bD-times-beta16);S8-then-unit-major-(x-plus-n)-times-n;constraint-order=two-input-links-per-multiplication-in-gate-order-then-one-output-aggregate-per-coordinate;constraint-count=2*actual-gates+16384;padded-gates-have-no-logical-plane-or-extra-aggregate",
+        b"proof-order=S3,S5,S8;commitment-order=S3=(bD[0..343],bS[0..343],q3),S5=(bD[0..343],beta[group-major][0..17],m[0..343],q5),S8=(x[0..1031],n[0..1031],q8);gate-order=v-is-coordinate-fastest-within-each-outer-group-or-unit-and-term,never-globally-v-major;S3-gate=((g*3+term)*16384+v),g=0..343,v=0..16383,term0=bD_boolean,term1=bS_boolean,term2=bD_times_bS;S5-gate=((g*19+term)*16384+v),g=0..343,v=0..16383,term0..17=beta_boolean_h0..17,term18=bD_times_beta16;S5-two-post-gate-aggregate-terms-per-group-and-coordinate=delta^18*(m_g[v]-bD_g[v]*beta_g,16[v]),delta^19*(beta_g,17[v]-beta_g,16[v]+m_g[v]);S8-gate=u*16384+v,u=0..1031,v=0..16383,term0=(x_plus_n)_times_n;constraint-order=two-input-links-per-multiplication-in-gate-order-then-one-output-aggregate-per-coordinate;constraint-count=2*actual-gates+16384;padded-gates-have-no-logical-plane-or-extra-aggregate",
         b"one-aggregate-purpose-manifest-shared-by-all-three-envelopes;ZGVA||codec-version:u8=1||flags:u8=0||statement:u8||logP:u8||C:u16be||actual-gates:u32be||core-len:u32be||aggregate-purpose-manifest:[u8;32];exactly-50-bytes;wire=50-byte-envelope||raw-generalized-Bulletproof-core;core-order=(2*C+7)-nonidentity-points,3-canonical-scalars,2*logP-nonidentity-IPA-points,2-canonical-final-scalars;exact-consumption",
         b"current-T256-generalized-Bulletproof-basis-cap=65536-gates;required-padded-gates=(33554432,134217728,33554432);current-eager-backend-cannot-instantiate-any-shape;raising-only-the-cap-is-insufficient;requires-streaming-sparse-tensor-aware-backend-or-new-product-argument;chunking-at-65536-requires-2150-cores-and-at-least-3252950B>709746B-pre-envelope-room;raw-cores=(47515,456319,138331);three-50B-envelopes;known-base=32844686;section=642315;conditional-total=33487001;cap=33554432;margin=67431;about-226.42-bit-simple-union-estimate-is-not-an-accepted-soundness-theorem;all-readiness-gates-zero",
     ];
@@ -111,7 +111,7 @@ fn manifest_kat_is_reproduced_by_an_independent_oracle() {
     assert_eq!(digest, independent_manifest_oracle_v2());
     assert_eq!(
         hex::encode(digest),
-        "108ae021b7519ecdf7f2f917e3dfd10702d7939911ccc24182054f32441c5840"
+        "51462064e1d673135753b6fce89cd56a0bd6f4f1a3eb90e8d8e73e125527c2ce"
     );
 }
 
@@ -148,6 +148,29 @@ fn exact_equations_dense_mapping_and_fixed_order_are_frozen() {
         );
     }
     assert!(COMMITMENT_GATE_ORDER_LANGUAGE_V2.starts_with(b"proof-order=S3,S5,S8"));
+    for literal in [
+        b"v-is-coordinate-fastest-within-each-outer-group-or-unit-and-term".as_slice(),
+        b"S3-gate=((g*3+term)*16384+v)",
+        b"term0=bD_boolean,term1=bS_boolean,term2=bD_times_bS",
+        b"S5-gate=((g*19+term)*16384+v)",
+        b"term0..17=beta_boolean_h0..17,term18=bD_times_beta16",
+        b"S5-two-post-gate-aggregate-terms-per-group-and-coordinate",
+        b"delta^18*(m_g[v]-bD_g[v]*beta_g,16[v])",
+        b"delta^19*(beta_g,17[v]-beta_g,16[v]+m_g[v])",
+        b"S8-gate=u*16384+v",
+        b"term0=(x_plus_n)_times_n",
+    ] {
+        assert!(
+            COMMITMENT_GATE_ORDER_LANGUAGE_V2
+                .windows(literal.len())
+                .any(|part| part == literal)
+        );
+    }
+    assert!(
+        !COMMITMENT_GATE_ORDER_LANGUAGE_V2
+            .windows(b"gate-order=coordinate-v-major".len())
+            .any(|part| part == b"gate-order=coordinate-v-major")
+    );
     assert!(
         COMMITMENT_GATE_ORDER_LANGUAGE_V2
             .windows(b"constraint-count=2*actual-gates+16384".len())
@@ -218,9 +241,9 @@ fn shapes_core_formula_and_wire_accounting_are_exact() {
 #[test]
 fn envelopes_are_exact_share_one_manifest_and_reject_mutation() {
     let expected = [
-        "5a4756410100031902b1010200000000b99b108ae021b7519ecdf7f2f917e3dfd10702d7939911ccc24182054f32441c5840",
-        "5a4756410100051b1ae1066200000006f67f108ae021b7519ecdf7f2f917e3dfd10702d7939911ccc24182054f32441c5840",
-        "5a4756410100081908110102000000021c5b108ae021b7519ecdf7f2f917e3dfd10702d7939911ccc24182054f32441c5840",
+        "5a4756410100031902b1010200000000b99b51462064e1d673135753b6fce89cd56a0bd6f4f1a3eb90e8d8e73e125527c2ce",
+        "5a4756410100051b1ae1066200000006f67f51462064e1d673135753b6fce89cd56a0bd6f4f1a3eb90e8d8e73e125527c2ce",
+        "5a4756410100081908110102000000021c5b51462064e1d673135753b6fce89cd56a0bd6f4f1a3eb90e8d8e73e125527c2ce",
     ];
     let manifest = vector_arithmetic_manifest_digest_v2().unwrap();
     for (ordinal, expected) in expected.into_iter().enumerate() {

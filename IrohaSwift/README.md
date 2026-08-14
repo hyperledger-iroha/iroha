@@ -617,7 +617,9 @@ Authenticated app-facing Torii endpoints require `X-Iroha-Account`,
 `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
 Use `ToriiCanonicalRequest` to build them; it signs the canonical request plus
 the freshness metadata and auto-generates timestamp/nonce values when you do not
-pass them explicitly:
+pass them explicitly. I105 remains the account spelling in data and paths; the
+builder emits that identity in `X-Iroha-Account` as portable lowercase ASCII
+canonical-address hex (`0x…`). Exact printable-ASCII aliases remain unchanged:
 
 ```swift
 let url = URL(string: "https://torii.example/v1/accounts/<account_i105>/assets?limit=5")!

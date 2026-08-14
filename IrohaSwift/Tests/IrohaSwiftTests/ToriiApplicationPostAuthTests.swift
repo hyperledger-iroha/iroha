@@ -188,7 +188,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/v1/rwas/query")
         XCTAssertEqual(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-            auth.accountId
+            try AccountAddress.parseEncoded(auth.accountId).canonicalHex()
         )
         let body = try XCTUnwrap(toriiClientTestBodyData(from: request))
         let signature = try XCTUnwrap(Data(base64Encoded: signatures[0]))
@@ -201,7 +201,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
         let publicKey = try Curve25519.Signing.PrivateKey(
             rawRepresentation: signingSeed
         ).publicKey
-        let exactMessage = ToriiCanonicalRequest.signatureMessage(
+        let exactMessage = try ToriiCanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: try XCTUnwrap(request.url),
@@ -211,7 +211,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
         )
         XCTAssertTrue(publicKey.isValidSignature(signature, for: exactMessage))
 
-        let substitutedPathMessage = ToriiCanonicalRequest.signatureMessage(
+        let substitutedPathMessage = try ToriiCanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: try XCTUnwrap(URL(string: "https://torii.example/v1/accounts/query")),
@@ -222,7 +222,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
         XCTAssertFalse(publicKey.isValidSignature(signature, for: substitutedPathMessage))
         var substitutedBody = body
         substitutedBody.append(0x20)
-        let substitutedBodyMessage = ToriiCanonicalRequest.signatureMessage(
+        let substitutedBodyMessage = try ToriiCanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: try XCTUnwrap(request.url),

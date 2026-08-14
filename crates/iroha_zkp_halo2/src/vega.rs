@@ -376,9 +376,14 @@ impl VegaT256ScalarV1 {
     /// Return the exact canonical 32-byte little-endian proof encoding.
     #[must_use]
     pub fn to_le_bytes(self) -> [u8; 32] {
-        let mut bytes = self.to_be_bytes();
-        bytes.reverse();
+        let mut bytes = [0_u8; 32];
+        self.write_le_bytes_ref(&mut bytes);
         bytes
+    }
+    /// Write a borrowed scalar directly into a caller-owned canonical
+    /// little-endian proof-encoding slot.
+    fn write_le_bytes_ref(&self, destination: &mut [u8; 32]) {
+        *destination = self.0.to_repr().into();
     }
     /// Return whether this field element is zero.
     #[must_use]

@@ -1,4 +1,5 @@
 //! Route-to-instruction validation for native `SoraFS` moderation submissions.
+use super::SorafsModerationCommandRoute;
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::sorafs::{
@@ -10,7 +11,6 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
-use super::SorafsModerationCommandRoute;
 impl SorafsModerationCommandRoute {
     pub(super) const fn expected_instruction_label(self) -> &'static str {
         match self {
@@ -64,7 +64,11 @@ pub(super) fn validate_transaction_route(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::client::{
+        SORAFS_MODERATION_TRANSACTION_TTL,
+        evidence_http_tests::{base_url, client_with_base_url},
+    };
     use iroha_data_model::{
         Level,
         isi::{InstructionBox, Log, sorafs::SubmitSorafsModerationCommit},
@@ -73,11 +77,7 @@ mod tests {
             Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
         },
     };
-    use super::*;
-    use crate::client::{
-        SORAFS_MODERATION_TRANSACTION_TTL,
-        evidence_http_tests::{base_url, client_with_base_url},
-    };
+    use std::num::NonZeroU64;
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()

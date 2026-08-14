@@ -21,8 +21,8 @@
 ## 1. Describe the lane and dataspace catalog
 
 Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+below (trimmed from `defaults/nexus/config.toml`) registers three logical lanes
+inside one physical `universal` dataspace:
 
 ```toml
 [nexus]
@@ -38,35 +38,24 @@ dataspace = "universal"
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
-dataspace = "governance"
+dataspace = "universal"
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
-dataspace = "zk"
+dataspace = "universal"
 
 [[nexus.dataspace_catalog]]
 alias = "universal"
 id = 0
-description = "Single-lane data space"
-fault_tolerance = 1
-
-[[nexus.dataspace_catalog]]
-alias = "governance"
-id = 1
-description = "Governance proposals & manifests"
-fault_tolerance = 1
-
-[[nexus.dataspace_catalog]]
-alias = "zk"
-id = 2
-description = "Zero-knowledge proofs and attachments"
+description = "Shared public data space for core, governance, and zero-knowledge lanes"
 fault_tolerance = 1
 ```
 
 Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+they identify physical server/validator boundaries and are independent of lane
+indexes and namespace identifiers. Multiple lanes may bind to one dataspace.
 
 ## 2. Set routing defaults and optional overrides
 
@@ -84,17 +73,17 @@ default_dataspace = "universal"    # reuse the public dataspace for the fallback
 
 [[nexus.routing_policy.rules]]
 lane = 1
-dataspace = "governance"
+dataspace = "universal"
 [nexus.routing_policy.rules.matcher]
 instruction = "governance"
-description = "Route governance instructions to the governance lane"
+description = "Route governance instructions to the governance lane in the universal data space"
 
 [[nexus.routing_policy.rules]]
 lane = 2
-dataspace = "zk"
+dataspace = "universal"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the zk lane for proof tracking"
+description = "Route contract deployments to the zk lane in the universal data space"
 ```
 
 When you later add new lanes, update the catalog first, then extend the routing
@@ -194,8 +183,8 @@ Sample output:
   "default_lane": 0,
   "default_dataspace": "universal",
   "rules": [
-    {"lane": 1, "dataspace": "governance", "matcher": {"instruction": "governance"}},
-    {"lane": 2, "dataspace": "zk", "matcher": {"instruction": "smartcontract::deploy"}}
+    {"lane": 1, "dataspace": "universal", "matcher": {"instruction": "governance"}},
+    {"lane": 2, "dataspace": "universal", "matcher": {"instruction": "smartcontract::deploy"}}
   ]
 }
 ```

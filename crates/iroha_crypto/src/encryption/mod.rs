@@ -17,13 +17,13 @@
 //!
 //! [`crate::encryption::ChaCha20Poly1305`] is the only algorithm currently supported,
 //! as it is the only one used by the Iroha p2p transport protocol.
-use std::{convert::TryFrom, mem, vec::Vec};
+use crate::SessionKey;
 use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
 use rand_core::{OsError, TryRngCore};
-use crate::SessionKey;
+use std::{convert::TryFrom, mem, vec::Vec};
 /// An error that can occur during encryption or decryption
 #[derive(thiserror::Error, Display, Debug, Clone, Copy)]
 pub enum Error {

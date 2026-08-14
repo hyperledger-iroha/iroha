@@ -34,6 +34,9 @@ CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
 )
+CANONICAL_AUTH_HEADER = AccountAddress.parse_encoded(
+    CANONICAL_AUTH.account_id, expected_discriminant=0x02F1
+).canonical_hex()
 
 
 class _FakeCrypto:
@@ -156,7 +159,7 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
     assert isinstance(manifest, _FakeManifest)
     assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
     assert requests[0][2]["Accept"] == "application/x-norito"
-    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH.account_id
+    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH_HEADER
     assert requests[0][3:] == (False, False)
     assert events == ["decode-capabilities"]
 

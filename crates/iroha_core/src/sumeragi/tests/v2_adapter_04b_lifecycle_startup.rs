@@ -233,20 +233,78 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             kura_replica_advert_refresh,
             exact_output_handoff_owner,
         );
-    let launched = owner
+    let mut launched = owner
         .launch(launch_inputs)
         .unwrap_or_else(|error| panic!("launch exact Kura-bound lifecycle owner: {error}"));
     assert!(crate::sumeragi::status::v2_status().is_none());
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
 
-    let activation =
+    let mut setup_runner =
+        super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    let mut activation =
         super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
             Arc::clone(&ingress_ready),
             Arc::clone(&leader_wire_ingress),
         );
+    launched
+        .with_canonical_body_recovery_ingress(
+            &mut setup_runner,
+            &mut activation,
+            |aperture, executor, services| {
+                assert!(ingress_ready.load(Ordering::Acquire));
+                assert!(leader_wire_ingress.state.lock().open);
+                assert!(std::ptr::eq(
+                    aperture.ingress(),
+                    leader_wire_ingress.as_ref()
+                ));
+                assert!(executor.lifecycle_live_clocks_are_unarmed());
+                assert!(services.matches_lifecycle_executor_output_guard(executor));
+                assert!(crate::sumeragi::status::v2_status().is_none());
+                Ok::<
+                    _,
+                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+                >(())
+            },
+        )
+        .expect("temporarily open the exact preactivation recovery ingress");
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+    assert!(!output_guard.restart_required());
+    assert!(crate::sumeragi::status::v2_status().is_none());
+    let directive = launched
+        .with_runner_setup(&mut setup_runner, |executor, _services| {
+            executor.local_proposal_directive().map_err(
+                super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1::LocalProposalDirective,
+            )
+        })
+        .expect("read the exact preactivation local-Proposal directive");
+    assert!(directive.locked_body().is_none());
+    assert!(directive.decided_subject().is_none());
+    let recovered_attempt = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
+        directive.tag(),
+        wire::ConsensusRound {
+            context_id: context.id(),
+            height: directive.tag().height(),
+            view: directive.tag().view(),
+        },
+        wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"recovered lifecycle local Proposal attempt",
+            )),
+            payload_hash: Hash::new(b"recovered lifecycle local Proposal payload"),
+        },
+    );
+    launched.retain_recovered_local_proposal_attempt_for_test(recovered_attempt);
+    let (joined_directive, local_proposal_state) = launched
+        .initialize_recovered_local_proposal(setup_runner)
+        .expect("join the opaque recovered Proposal owner to runner-local state");
+    assert_eq!(joined_directive, directive);
+    assert!(local_proposal_state.already_attempted(directive));
+
     let activated = launched
-        .activate(Instant::now(), activation)
+        .activate(Instant::now(), activation, local_proposal_state)
         .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
@@ -528,6 +586,38 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         !storage_root.join("lifecycle-v1").exists(),
         "input binding must not open lifecycle storage"
     );
+
+    let exact_state =
+        lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
+    let placeholder_cadence = exact_state.sumeragi_block_cadence();
+    let authenticated_cadence = placeholder_cadence
+        .checked_add(Duration::from_millis(1))
+        .expect("fixture authenticated cadence remains representable");
+    assert_ne!(
+        placeholder_cadence, authenticated_cadence,
+        "fixture must distinguish recovered cadence from placeholder State"
+    );
+    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue = Arc::new(crate::queue::Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events_sender.clone(),
+    ));
+    let cadence_inputs = authenticated
+        .bind_production_lifecycle_owner_factory_inputs_v1(
+            super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
+                signer.clone(),
+                authenticated_cadence,
+            ),
+            storage(),
+            exact_state,
+            queue,
+            Arc::clone(&kura),
+            None,
+            None,
+            events_sender,
+        )
+        .expect("authenticated cadence must cross the runner-only factory seal");
+    assert_eq!(cadence_inputs.block_cadence, authenticated_cadence);
 }
 
 #[test]
@@ -703,16 +793,16 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         )
         .expect("open production marker-replay body store");
         let durable = body_store
-            .store(manifest, canonical_wire)
+            .store(manifest.clone(), canonical_wire.clone())
             .expect("persist production marker-replay body");
         if persist_matching_outcome {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Ok::<_, String>(semantic_commitment)
                 })
                 .expect("persist matching semantic marker");
         } else {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Err::<wire::ExecutionCommitment, _>(
                         "deliberately mismatched recovered rejection".to_owned(),
@@ -754,7 +844,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             &proofs,
             0,
             [marker; 32],
-            vec![WalRecordV2::Decision(decision)],
+            vec![WalRecordV2::Decision(decision.clone())],
         )
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|(error, _startup)| {
@@ -774,6 +864,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             .bind_production_lifecycle_owner_factory_inputs_v1(
                 super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
                     local_signer.clone(),
+                    state.sumeragi_block_cadence(),
                 ),
                 storage,
                 Arc::clone(&state),
@@ -870,7 +961,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     Duration::from_secs(10),
                     super::super::v2_runtime::RuntimeQueueConfig::default(),
                     super::super::v2_effects::EffectQueueConfig::default(),
-                    local_peer,
+                    local_peer.clone(),
                     Some(local_validator),
                     local_signer.clone(),
                     crate::IrohaNetwork::closed_for_tests(),
@@ -878,7 +969,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     Arc::clone(&kura),
                     None,
                     64,
-                    64,
+                    1,
                     64,
                     Arc::clone(&output_guard),
                     Arc::clone(&leader_wire_ingress),
@@ -888,45 +979,504 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let mut launched = owner
                 .launch(launch_inputs)
                 .unwrap_or_else(|error| panic!("launch recovered-Apply lifecycle owner: {error}"));
-            let queued = launched
-                .dispatch_recovered_decision_apply(
-                    super::super::v2_runner::lifecycle_completion_rank_snapshot_for_test(
-                        &recovered_context,
-                    ),
-                )
-                .unwrap_or_else(|error| panic!("dispatch recovered Apply: {error:?}"));
+            use super::super::{
+                v2_lifecycle_coordinator::{
+                    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+                    ProductionLifecycleIngressTurnV1,
+                    ProductionPreparedCertifiedServeTestSettlementV1,
+                },
+                v2_runner::{
+                    LifecycleRunnerRankTarget, ProductionLifecyclePreActivationRunnerBorrowV1,
+                    with_lifecycle_current_runner_turn_for_test,
+                },
+            };
+
+            let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+            let setup_tag = launched
+                .with_runner_setup(&mut setup_runner, |executor, services| {
+                    assert_eq!(executor.context(), &recovered_context);
+                    assert!(services.matches_lifecycle_executor_output_guard(executor));
+                    Ok::<_, super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1>(
+                        executor.current_tag(),
+                    )
+                })
+                .expect("closed-ingress runner setup borrows the launched stack");
+            assert_eq!(setup_tag.height(), recovered_context.height);
+            assert!(
+                !leader_wire_ingress.state.lock().open,
+                "runner setup must leave the jointly bound ingress closed"
+            );
+            let ((), after_ingress_pass_through) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match launched.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        assert_eq!(runner.target(), LifecycleRunnerRankTarget::Ingress);
+                        drop(runner);
+                    }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("empty lifecycle ingress cannot mint an ordinary handoff")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("empty lifecycle ingress must pass through")
+                    }
+                },
+            );
+            assert_eq!(
+                after_ingress_pass_through,
+                LifecycleRunnerRankTarget::Completion
+            );
+
+            let ((), after_wrong_class_pass_through) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Runtime,
+                |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                    ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                        assert_eq!(runner.target(), LifecycleRunnerRankTarget::Runtime);
+                        drop(runner);
+                    }
+                    ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                        panic!("wrong runner class must not select lifecycle work")
+                    }
+                },
+            );
+            assert_eq!(
+                after_wrong_class_pass_through,
+                LifecycleRunnerRankTarget::Ingress
+            );
+            assert!(!output_guard.restart_required());
+
+            let mut foreign_context = recovered_context.clone();
+            foreign_context.height = foreign_context
+                .height
+                .checked_add(1)
+                .expect("fixture foreign height remains in range");
+            let ((), after_foreign_context_pass_through) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &foreign_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                        ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                            assert_eq!(runner.target(), LifecycleRunnerRankTarget::Completion);
+                            drop(runner);
+                        }
+                        ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                            panic!("foreign runner context must not select lifecycle work")
+                        }
+                    },
+                );
+            assert_eq!(
+                after_foreign_context_pass_through,
+                LifecycleRunnerRankTarget::Runtime
+            );
+            assert!(!output_guard.restart_required());
+
+            let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Completion,
+                |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                    ProductionLifecycleCompletionTurnV1::Selected(
+                        ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result),
+                    ) => {
+                        result.unwrap_or_else(|error| panic!("dispatch recovered Apply: {error:?}"))
+                    }
+                    ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("ready recovered Apply must select lifecycle work")
+                    }
+                    ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                        panic!("ready recovered Apply selected the wrong lifecycle class")
+                    }
+                },
+            );
+            assert_eq!(after_apply_selection, LifecycleRunnerRankTarget::Runtime);
             assert!(matches!(
                 queued,
-                super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyDispatchV1::Queued { .. }
+                super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::ApplyQueued { .. }
             ));
             let completion_deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                match launched.settle_recovered_decision_apply_completion(&mut lane_work) {
-                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::Applied) => break,
-                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::None)
-                        if Instant::now() < completion_deadline =>
-                    {
-                        std::thread::yield_now();
-                    }
-                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::None) => {
-                        panic!("timed out waiting for recovered Apply completion")
-                    }
-                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::Deferred(_)) => {
-                        panic!("empty recovered block must not need a merge sidecar")
-                    }
-                    Err(error) => panic!("settle recovered Apply completion: {error}"),
+                let (applied, after_completion_turn) = with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| {
+                        match launched.drive_completion_turn(runner, &mut lane_work) {
+                            ProductionLifecycleCompletionTurnV1::Selected(
+                                ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied,
+                            ) => true,
+                            ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                                assert_eq!(runner.target(), LifecycleRunnerRankTarget::Completion);
+                                drop(runner);
+                                false
+                            }
+                            ProductionLifecycleCompletionTurnV1::Selected(
+                                ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred,
+                            ) => panic!("empty recovered block must not need a merge sidecar"),
+                            ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                                panic!("recovered Apply completion selected an unexpected class")
+                            }
+                        }
+                    },
+                );
+                assert_eq!(after_completion_turn, LifecycleRunnerRankTarget::Runtime);
+                if applied {
+                    break;
                 }
+                if Instant::now() >= completion_deadline {
+                    panic!("timed out waiting for recovered Apply completion");
+                }
+                std::thread::yield_now();
             }
 
+            let (prepared_directive, local_proposal_state) = launched
+                .initialize_recovered_local_proposal(setup_runner)
+                .expect("prepare the fresh runner local-Proposal state for activation");
+            assert_eq!(prepared_directive.tag(), setup_tag);
             let activation = super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
                 Arc::clone(&ingress_ready),
                 Arc::clone(&leader_wire_ingress),
             );
-            let activated = launched
-                .activate(Instant::now(), activation)
+            let mut activated = launched
+                .activate(Instant::now(), activation, local_proposal_state)
                 .unwrap_or_else(|error| {
                     panic!("activate recovered-Apply lifecycle owner: {error}")
                 });
+            let ((), after_activated_completion_pass_through) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                        ProductionLifecycleCompletionTurnV1::PassThrough(runner) => drop(runner),
+                        ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                            panic!("quiescent activated lifecycle Completion must pass through")
+                        }
+                    },
+                );
+            assert_eq!(
+                after_activated_completion_pass_through,
+                LifecycleRunnerRankTarget::Runtime
+            );
+
+            let ordinary_message =
+                crate::sumeragi::message::BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+                ));
+            assert!(matches!(
+                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
+                    ordinary_message,
+                    Some(local_peer.clone()),
+                )),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let ordinary_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            let invalid_response = wire::CertifiedBodyResponse {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"unrelated malformed response family",
+                )),
+                manifest: manifest.clone(),
+                body: canonical_wire.clone(),
+                responder: 0,
+                signature: Vec::new(),
+            };
+            let invalid_response_message = wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(invalid_response),
+            );
+            assert!(matches!(
+                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
+                    crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
+                    Some(local_peer.clone()),
+                )),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let invalid_response_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            assert!(ordinary_ordinal < invalid_response_ordinal);
+
+            let (ordinary_turn, after_ordinary_ingress) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Ingress,
+                    |runner| match activated.drive_ingress_turn(runner) {
+                        ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                        ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                            drop(runner);
+                            panic!("an exact ordinary winner cannot return the unchanged cursor")
+                        }
+                        ProductionLifecycleIngressTurnV1::Selected(_) => {
+                            panic!("an ordinary head cannot be poisoned by a later response family")
+                        }
+                    },
+                );
+            assert_eq!(
+                after_ordinary_ingress,
+                LifecycleRunnerRankTarget::Completion
+            );
+            assert_eq!(ordinary_turn.physical_ordinal_for_test(), ordinary_ordinal);
+            assert!(!ordinary_turn.has_prepared_serve_for_test());
+            assert_eq!(
+                leader_wire_ingress.len(),
+                1,
+                "the unrelated malformed response remains behind the exact drained head"
+            );
+            let mut ordinary_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            let mut block_sync_server = super::super::v2_block_sync::V2BlockSyncServer::new(
+                recovered_context.network_id.clone(),
+                4,
+            )
+            .expect("open ordinary-tail block-sync server");
+            let mut block_sync = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+                recovered_context.clone(),
+                local_peer.clone(),
+                4,
+            )
+            .expect("open ordinary-tail block-sync discovery");
+            let mut block_sync_request = None;
+            let mut npos_vrf = super::super::v2_npos::V2NposVrfLifecycle::open(
+                &recovered_context,
+                state.as_ref(),
+                Some(local_validator),
+                &local_signer,
+            )
+            .expect("open ordinary-tail NPoS lifecycle");
+            assert_eq!(
+                activated
+                    .consume_prepared_ordinary_ingress_turn(
+                        &mut ordinary_runner,
+                        ordinary_turn,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &local_signer,
+                        &mut block_sync_server,
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                    )
+                    .expect("consume the exact ordinary runner handoff"),
+                super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
+            );
+            assert!(!output_guard.restart_required());
+
+            let (invalid_turn, after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("invalid-signature response is a drainable ordinary winner")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("invalid unrelated response cannot claim recovered Phase A")
+                    }
+                },
+            );
+            assert_eq!(after_invalid_ingress, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(
+                invalid_turn.physical_ordinal_for_test(),
+                invalid_response_ordinal
+            );
+            let mut invalid_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            assert_eq!(
+                activated
+                    .consume_prepared_ordinary_ingress_turn(
+                        &mut invalid_runner,
+                        invalid_turn,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &local_signer,
+                        &mut block_sync_server,
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                    )
+                    .expect("consume the exact malformed-response ordinary handoff"),
+                super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
+            );
+            assert_eq!(leader_wire_ingress.len(), 0);
+            assert!(!output_guard.restart_required());
+
+            let local_validator_index =
+                usize::try_from(local_validator).expect("marker-replay validator index fits usize");
+            let rejected_requester_index = (local_validator_index + 1) % keys.len();
+            let admitted_requester_index = (local_validator_index + 2) % keys.len();
+            let non_local_signers = (0..keys.len())
+                .filter(|index| *index != local_validator_index)
+                .collect::<Vec<_>>();
+            let all_signers = (0..keys.len()).collect::<Vec<_>>();
+            let (rejected_serve, _rejected_pops) =
+                super::super::v2_worker::tests::production_authenticated_serve_request(
+                    &recovered_context,
+                    &keys,
+                    &keys[rejected_requester_index],
+                    round,
+                    subject,
+                    wire::GlobalPhase::Commit,
+                    &non_local_signers,
+                );
+            let (admitted_serve, _admitted_pops) =
+                super::super::v2_worker::tests::production_authenticated_serve_request(
+                    &recovered_context,
+                    &keys,
+                    &keys[admitted_requester_index],
+                    round,
+                    subject,
+                    wire::GlobalPhase::Commit,
+                    &all_signers,
+                );
+            assert!(matches!(
+                leader_wire_ingress.try_push(
+                    super::super::v2_worker::tests::certified_serve_inbound(
+                        rejected_serve.request(),
+                        local_peer.clone(),
+                    ),
+                ),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let rejected_serve_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            assert!(matches!(
+                leader_wire_ingress.try_push(
+                    super::super::v2_worker::tests::certified_serve_inbound(
+                        admitted_serve.request(),
+                        local_peer.clone(),
+                    ),
+                ),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let admitted_serve_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            assert!(rejected_serve_ordinal < admitted_serve_ordinal);
+            let auxiliary_hold = activated
+                .hold_auxiliary_io_admission_for_test()
+                .expect("hold the sole auxiliary I/O admission unit");
+
+            let (rejected_turn, after_rejected_serve) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("current certified Serve rejection must own ingress")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("retention-owner rejection must drain as ordinary")
+                    }
+                },
+            );
+            assert_eq!(after_rejected_serve, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(
+                rejected_turn.physical_ordinal_for_test(),
+                rejected_serve_ordinal
+            );
+            let mut serve_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            let rejected_settlement = activated
+                .settle_prepared_certified_serve_for_test(&mut serve_runner, rejected_turn)
+                .expect("retire exact deterministic Serve negative");
+            assert!(matches!(
+                rejected_settlement,
+                ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
+                    if reason.contains("not a certified-body retention owner")
+            ));
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert!(!output_guard.restart_required());
+
+            let (retained, after_retained_serve) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| {
+                    match activated.drive_ingress_turn(runner) {
+                        ProductionLifecycleIngressTurnV1::Selected(
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
+                        ) => true,
+                        ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                            drop(runner);
+                            panic!("backpressured certified Serve remains lifecycle-owned")
+                        }
+                        ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                            drop(turn);
+                            panic!("full auxiliary prefix cannot drain the prepared Serve")
+                        }
+                        ProductionLifecycleIngressTurnV1::Selected(_) => {
+                            panic!("backpressured certified Serve selected the wrong outcome")
+                        }
+                    }
+                },
+            );
+            assert!(retained);
+            assert_eq!(after_retained_serve, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert_eq!(
+                leader_wire_ingress.state.lock().last_admission_ordinal,
+                admitted_serve_ordinal
+            );
+            assert!(
+                activated
+                    .certified_serve_barrier_matches_for_test(admitted_serve.request_hash())
+                    .expect("inspect the exact retained Serve barrier")
+            );
+            assert!(!output_guard.restart_required());
+
+            drop(auxiliary_hold);
+            let (admitted_turn, after_admitted_serve) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("released auxiliary capacity must admit exact Serve")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("released certified Serve selected the wrong outcome")
+                    }
+                },
+            );
+            assert_eq!(after_admitted_serve, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(
+                admitted_turn.physical_ordinal_for_test(),
+                admitted_serve_ordinal
+            );
+            assert!(admitted_turn.has_prepared_serve_for_test());
+            assert_eq!(leader_wire_ingress.len(), 0);
+            assert_eq!(
+                activated
+                    .settle_prepared_certified_serve_for_test(&mut serve_runner, admitted_turn,)
+                    .expect("abort exact admitted Serve before worker commit"),
+                ProductionPreparedCertifiedServeTestSettlementV1::AdmittedAborted
+            );
+            assert!(
+                activated
+                    .certified_serve_owners_are_clear_for_test()
+                    .expect("inspect cleared Serve owners")
+            );
+            assert!(
+                activated
+                    .discharge_certified_serve_producer_episode_for_test()
+                    .expect("finish the due local-producer episode")
+            );
+            assert!(!output_guard.restart_required());
+
+            let ((), after_activated_ingress_pass_through) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Ingress,
+                    |runner| match activated.drive_ingress_turn(runner) {
+                        ProductionLifecycleIngressTurnV1::PassThrough(runner) => drop(runner),
+                        ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                            drop(turn);
+                            panic!("empty activated lifecycle cannot mint an ordinary handoff")
+                        }
+                        ProductionLifecycleIngressTurnV1::Selected(_) => {
+                            panic!("empty activated lifecycle Ingress must pass through")
+                        }
+                    },
+                );
+            assert_eq!(
+                after_activated_ingress_pass_through,
+                LifecycleRunnerRankTarget::Completion
+            );
             let mut runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
             let finalized = activated

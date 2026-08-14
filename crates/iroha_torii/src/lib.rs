@@ -9384,21 +9384,50 @@ struct CanonicalAccountBodyAuthState {
     app: SharedAppState,
     max_body_bytes: usize,
 }
+#[cfg(feature = "app_api")]
+fn admitted_app_routed_read_body_for_auth(parts: &axum::http::request::Parts) -> Option<Bytes> {
+    if !app_routed_read_http_admission_is_active() {
+        return None;
+    }
+    parts
+        .extensions
+        .get::<AdmittedAppRoutedReadBody>()
+        .map(|body| body.bytes.clone())
+}
+#[cfg(not(feature = "app_api"))]
+fn admitted_app_routed_read_body_for_auth(_parts: &axum::http::request::Parts) -> Option<Bytes> {
+    None
+}
 async fn enforce_canonical_account_body_authentication(
     State(state): State<CanonicalAccountBodyAuthState>,
     request: axum::http::Request<Body>,
     next: Next,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
-    let body = match axum::body::to_bytes(body, state.max_body_bytes).await {
-        Ok(body) => body,
-        Err(error) => {
-            iroha_logger::warn!(%error, "canonical account request body exceeded its route limit");
+    let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
+        if admitted.len() > state.max_body_bytes {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "request body exceeds the route limit",
             )
                 .into_response();
+        }
+        // Routed-read admission has already drained and retained this exact
+        // body under the fanout lease. Reuse its ref-counted bytes instead of
+        // collecting a second representation inside authentication.
+        drop(body);
+        admitted
+    } else {
+        match axum::body::to_bytes(body, state.max_body_bytes).await {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::warn!(%error, "canonical account request body exceeded its route limit");
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "request body exceeds the route limit",
+                )
+                    .into_response();
+            }
         }
     };
     let network_id = state.app.signed_query_admission.network_id();
@@ -26616,7 +26645,7 @@ async fn execute_torii_read_request_locally(
             )
         }
         ToriiReadEndpointV1::PipelineTransactionStatusGet => {
-            let query = match decode_torii_proxy_query::<PipelineStatusQuery>(
+            let query = match decode_torii_proxy_string_query::<PipelineStatusQuery>(
                 request_decode_plan,
                 request.query_string.as_deref(),
             ) {

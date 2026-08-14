@@ -17,7 +17,7 @@ use super::{
     divisor::NormalizedDivisor,
     proof_math::{
         ProofGeneratorView, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
-        SecretMultiexpBuilder, VerifierTranscript,
+        SecretMultiexpBuilder, SecretPoint, VerifierTranscript,
     },
 };
 const COMMITMENT_WORD_LEN: usize = 128;
@@ -525,7 +525,8 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
         mut self,
         generators: ProofGeneratorView<'_, S>,
         masks: &[F],
-    ) -> Result<(Vec<S::Point>, Vec<VectorCommitmentOpening<F>>), FcmpNativeErrorV1> {
+    ) -> Result<(Vec<SecretPoint<S::Point>>, Vec<VectorCommitmentOpening<F>>), FcmpNativeErrorV1>
+    {
         if self.values.len() != self.layout.commitments || masks.len() != self.values.len() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -1786,7 +1787,7 @@ mod tests {
             .append_branch(&second_values)
             .expect("second commitment");
         let masks = vec![Field25519::from_u64(5), Field25519::from_u64(7)];
-        let (commitments, openings) = tape
+        let (secret_commitments, openings) = tape
             .commitments_and_openings::<SeleneSuite>(generators, &masks)
             .expect("commitments");
         let mut circuit = Circuit::<SeleneSuite>::prove(openings, 128).expect("prover circuit");
@@ -1796,11 +1797,13 @@ mod tests {
         circuit.constrain_equal_to_zero(LinComb::from(product).constant(-Field25519::from_u64(12)));
         circuit
             .constrain_equal_to_zero(LinComb::from(second[0]).constant(-Field25519::from_u64(9)));
-        let (statement, witness) = circuit
-            .proving_statement(generators, commitments.clone())
-            .expect("proving statement");
         let mut transcript = ProverTranscript::new(context);
-        transcript.write_commitments::<SeleneSuite>(commitments, Vec::new());
+        let commitments = transcript
+            .write_secret_commitments::<SeleneSuite>(secret_commitments)
+            .expect("borrowed secret commitment publication");
+        let (statement, witness) = circuit
+            .proving_statement(generators, commitments)
+            .expect("proving statement");
         let mut rng = StdRng::seed_from_u64(0xc1_0017);
         statement
             .prove(

@@ -1238,6 +1238,10 @@ Map<String, String> headers =
     CanonicalRequestSigner.buildHeaders(networkId, "get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
+The signer keeps `<account_i105>` as the semantic SDK identity but emits its
+lowercase canonical-hex address in `X-Iroha-Account`, which is safe on strict
+ASCII HTTP stacks. Active printable-ASCII aliases are emitted unchanged.
+
 Signatures cover the exact genesis-derived `NetworkId`, canonical
 method/path/query/body layout, and freshness metadata. Labels and legacy chain
 identifiers are never accepted as a signing domain.

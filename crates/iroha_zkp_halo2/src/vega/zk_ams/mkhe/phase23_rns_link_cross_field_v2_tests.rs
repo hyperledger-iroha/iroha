@@ -390,6 +390,23 @@ fn source_budget_and_uninhabited_api_boundary_are_static() {
     assert!(!production.contains("impl Default for BoundCommitmentViewV2"));
     assert!(!production.contains("detached_commitment"));
     assert!(!production.contains("callback"));
+    let prover_transcript = production
+        .split_once("impl ProverTranscript<ZkAmsT256BulletproofSuiteV1>")
+        .expect("cross-field prover transcript")
+        .1
+        .split_once("struct CrossFieldVerifierTranscriptV2")
+        .expect("cross-field prover transcript boundary")
+        .0;
+    assert!(prover_transcript.contains("fn push_scalar(&mut self, scalar: &Scalar)"));
+    assert!(prover_transcript.contains("with_borrowed_t256_scalar_encoding_v1(scalar"));
+    assert!(!prover_transcript.contains("scalar.to_le_bytes()"));
+    assert!(prover_transcript.contains("fn push_point(&mut self, point: &Point)"));
+    assert!(prover_transcript.contains("let encoded = SecretT256PointEncodingV1::new(point)?;"));
+    assert!(prover_transcript.contains("self.state.extend_from_slice(encoded.as_ref());"));
+    assert!(prover_transcript.contains("let result = self.push_bytes_v2(encoded.as_ref());"));
+    assert!(prover_transcript.contains("drop(encoded);"));
+    assert!(!prover_transcript.contains("point.to_non_identity_wire_bytes()"));
+    assert!(!prover_transcript.contains("fn push_point(&mut self, point: Point)"));
     for seal in [
         "enum SourceCommitmentSealV2",
         "enum RadixRangeSealV2",

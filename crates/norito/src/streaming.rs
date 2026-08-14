@@ -19,14 +19,14 @@ pub const BUNDLED_RANS_GPU_BUILD_AVAILABLE: bool = cfg!(all(
         feature = "codec-gpu-cuda"
     )
 ));
-use core::{fmt, str::FromStr};
-use thiserror::Error;
 use crate::{
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFromSlice, Error as CoreError},
     json,
     json::Value as NoritoJsonValue,
 };
+use core::{fmt, str::FromStr};
+use thiserror::Error;
 /// Blake3-based 32-byte hash used across NSC metadata (chunk commitments, IDs, etc.).
 pub type Hash = [u8; 32];
 /// Compute the canonical BLAKE3 digest used by content-addressed streaming artifacts.
@@ -1435,6 +1435,7 @@ pub struct SignedRansTablesV1 {
     pub signature: Option<RansTablesSignatureV1>,
 }
 pub mod crypto {
+    use super::{CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate};
     use chacha20poly1305::{
         ChaCha20Poly1305, XChaCha20Poly1305,
         aead::{Aead, KeyInit, Payload},
@@ -1442,7 +1443,6 @@ pub mod crypto {
     use hkdf::Hkdf;
     use sha3::Sha3_256;
     use thiserror::Error;
-    use super::{CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate};
     const STS_SALT: &[u8] = b"nsc-sts";
     const STS_ROOT_LABEL: &[u8] = b"nsc-sts-root";
     const STS_SEND_LABEL: &[u8] = b"nsc-sts-send";
@@ -2455,13 +2455,13 @@ pub mod crypto {
     }
 }
 pub mod chunk {
-    use thiserror::Error;
     use super::{AudioCodecError, Hash, MerkleProof, saturating_usize_to_u32};
     use crate::streaming::codec::{
         Chroma420Frame, EncodedSegment, FRAME_HEADER_LEN, FrameDimensions, FrameType, SegmentError,
         decode_block_rle, dequantize_coeffs, inverse_dct, predictor_block, verify_segment,
         write_reconstructed_block,
     };
+    use thiserror::Error;
     const LEAF_DOMAIN: &[u8] = b"nsc_ct_leaf";
     const NODE_DOMAIN: &[u8] = b"nsc_ct_node";
     const STORAGE_DOMAIN: &[u8] = b"nsc_storage";
@@ -3146,17 +3146,6 @@ pub mod chunk {
     }
 }
 pub mod codec {
-    use std::{
-        collections::{BTreeMap, VecDeque},
-        convert::TryInto,
-        fs,
-        path::Path,
-        sync::{Arc, OnceLock},
-    };
-    use norito_derive::{NoritoDeserialize, NoritoSerialize};
-    use sha2::{Digest, Sha256};
-    use thiserror::Error;
-    use toml::Value as TomlValue;
     use super::{
         AudioCodecError, AudioCodecLayoutMismatchInfo, AudioEncoderSampleCountMismatchInfo,
         AudioFrame, AudioLayout, AudioTrackSummary, BundleAcceleration, Bytes, CapabilityFlags,
@@ -3174,6 +3163,17 @@ pub mod codec {
         json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
     };
     use crate as norito;
+    use norito_derive::{NoritoDeserialize, NoritoSerialize};
+    use sha2::{Digest, Sha256};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        convert::TryInto,
+        fs,
+        path::Path,
+        sync::{Arc, OnceLock},
+    };
+    use thiserror::Error;
+    use toml::Value as TomlValue;
     pub(crate) const BLOCK_SIZE: usize = 8;
     pub(crate) const BLOCK_PIXELS: usize = BLOCK_SIZE * BLOCK_SIZE;
     pub(crate) const FRAME_HEADER_LEN: usize = 16;
@@ -8094,7 +8094,6 @@ pub mod codec {
     }
     #[cfg(test)]
     mod tests {
-        use std::{str::FromStr, sync::Arc};
         use super::*;
         use crate::streaming::{
             Hash,
@@ -8103,6 +8102,7 @@ pub mod codec {
                 read_frame_header_u32_le, read_frame_header_u64_le,
             },
         };
+        use std::{str::FromStr, sync::Arc};
         fn hash_seed(seed: u8) -> Hash {
             let mut bytes = [0u8; 32];
             bytes.fill(seed);
@@ -9834,7 +9834,6 @@ pub use codec::{
 };
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
     use super::*;
     use crate::{
         deserialize_from, json,
@@ -9844,6 +9843,7 @@ mod tests {
         },
         to_bytes,
     };
+    use sha2::{Digest, Sha256};
     include!("streaming/shared_hash_tests.rs");
     #[test]
     fn decode_from_slice_rejects_short_payloads() {

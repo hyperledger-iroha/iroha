@@ -3,16 +3,16 @@
 //! The types below encode the `ProofTokenV1` structure from the SoraFS gateway
 //! compliance plan and provide deterministic helpers for minting and verifying
 //! response headers (`Sora-Moderation-Token`).
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use blake3::Hasher;
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
+use rand_core::TryCryptoRng;
 use std::{
     convert::TryFrom as _,
     string::String,
     time::{Duration, SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use blake3::Hasher;
-use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
-use rand_core::TryCryptoRng;
 use thiserror::Error;
 use zeroize::Zeroizing;
 const FRAME_MAGIC: &[u8; 4] = b"SFGT";
@@ -688,6 +688,7 @@ fn proof_token_signature_placeholder() -> Signature {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use curve25519_dalek::{
         edwards::EdwardsPoint,
         traits::{Identity, IsIdentity},
@@ -698,7 +699,6 @@ mod tests {
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
     use sha2::{Digest, Sha512};
-    use super::*;
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

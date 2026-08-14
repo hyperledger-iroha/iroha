@@ -1,12 +1,3 @@
-use std::{fs::OpenOptions, io::Write as _, num::NonZeroU64, time::Duration};
-#[cfg(feature = "bls")]
-use std::collections::BTreeMap;
-use iroha_config::parameters::actual::{
-    SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, SumeragiV2KeyPolicy, SumeragiV2Limits,
-};
-use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
-use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-use tempfile::TempDir;
 use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
 use super::*;
 use crate::sumeragi::{
@@ -15,6 +6,15 @@ use crate::sumeragi::{
         PendingRuntimeEffectBinding, RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
     },
 };
+use iroha_config::parameters::actual::{
+    SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, SumeragiV2KeyPolicy, SumeragiV2Limits,
+};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+#[cfg(feature = "bls")]
+use std::collections::BTreeMap;
+use std::{fs::OpenOptions, io::Write as _, num::NonZeroU64, time::Duration};
+use tempfile::TempDir;
 fn test_network_id(seed: u8) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,

@@ -424,9 +424,11 @@ fn try_lifecycle_factory_inputs_for_test(
         iroha_config::parameters::actual::Queue::default(),
         events_sender.clone(),
     ));
+    let block_cadence = state.sumeragi_block_cadence();
     startup.bind_production_lifecycle_owner_factory_inputs_v1(
         super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
             local_signer.clone(),
+            block_cadence,
         ),
         storage,
         state,

@@ -335,6 +335,10 @@ impl RecoveredDecisionApplyStoragePreviewV1<'_> {
         self.staged.validates(verified) && self.body.exactly_matches_decision(self.staged.fetch())
     }
     /// Borrow the opaque logical lineage for exact ledger staging.
+    #[allow(
+        dead_code,
+        reason = "reviewed inspection seam retained beside the consuming restore path"
+    )]
     pub(in crate::sumeragi) const fn staged(
         &self,
     ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
@@ -1159,6 +1163,10 @@ impl RevalidatedV2BodyStore {
     /// signature policy crosses the sealed startup handoff. Production uses it
     /// to prove that the body owner came from the same Kura-derived storage
     /// layout as the lifecycle ledger before either owner is opened.
+    #[allow(
+        dead_code,
+        reason = "reviewed comparison seam retained for revalidated-startup diagnostics"
+    )]
     pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
         &self,
         root: &Path,

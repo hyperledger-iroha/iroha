@@ -7,11 +7,6 @@
 //! Norito frames and persist a monotonic wall-clock high-water mark. Loading
 //! admits only a stable direct regular file under capacity-derived byte and
 //! decoder-allocation limits.
-use std::{collections::HashMap, fs, io, path::PathBuf};
-#[cfg(test)]
-use norito::encode_canonical;
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_canonical_with_limits};
-use thiserror::Error;
 use super::{
     replay_lock::ExclusiveLedgerLock,
     snapshot_file::{
@@ -19,6 +14,11 @@ use super::{
         read_optional_bounded_regular_file,
     },
 };
+#[cfg(test)]
+use norito::encode_canonical;
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_canonical_with_limits};
+use std::{collections::HashMap, fs, io, path::PathBuf};
+use thiserror::Error;
 const SNAPSHOT_VERSION_V1: u8 = 1;
 const NAMESPACE_DOMAIN_V1: &[u8] = b"iroha.soranet.replay-ledger.namespace.v1";
 const SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
@@ -448,8 +448,8 @@ fn io_error(error: &io::Error) -> ReplayLedgerError {
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     const NAMESPACE: &[u8] = b"test.soranet.replay-ledger.v1";
     fn limits(capacity: usize) -> ReplayLedgerLimits {
         ReplayLedgerLimits::new(capacity, 1_000).expect("valid limits")

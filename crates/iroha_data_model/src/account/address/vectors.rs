@@ -1,12 +1,4 @@
 //! Deterministic address test vector generator for ADDR-2.
-use core::fmt;
-use std::convert::TryInto;
-use hex;
-use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use norito::{
-    json,
-    json::{JsonSerialize, Value},
-};
 use super::{
     AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG,
     DEFAULT_DOMAIN_NAME, DomainSelector, compute_local_digest,
@@ -15,6 +7,14 @@ use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
 };
+use core::fmt;
+use hex;
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+use norito::{
+    json,
+    json::{JsonSerialize, Value},
+};
+use std::convert::TryInto;
 /// Default I105 prefix used for deterministic vectors.
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [

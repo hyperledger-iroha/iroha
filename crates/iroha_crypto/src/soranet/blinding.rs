@@ -5,13 +5,13 @@
 //! to an additional nonce so that popular content remains unlinkable across
 //! distinct circuits, while the exit gateway retains a deterministic cache key
 //! derived from the published salt.
-use std::fmt;
+use crate::secrecy::{ExposeSecret, Secret};
 use blake3::Hasher;
 use rand_core::TryCryptoRng;
 use soranet_pq::{HkdfDomain, HkdfSuite, derive_labeled_hkdf};
+use std::fmt;
 use thiserror::Error;
 use zeroize::Zeroizing;
-use crate::secrecy::{ExposeSecret, Secret};
 /// Length in bytes of the derived blinding key.
 pub const BLINDING_KEY_LEN: usize = 32;
 /// Length in bytes of a request nonce.
@@ -186,8 +186,8 @@ impl fmt::Debug for CircuitBlindingKey {
 }
 #[cfg(test)]
 mod tests {
-    use rand_core::{TryCryptoRng, TryRngCore};
     use super::*;
+    use rand_core::{TryCryptoRng, TryRngCore};
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;

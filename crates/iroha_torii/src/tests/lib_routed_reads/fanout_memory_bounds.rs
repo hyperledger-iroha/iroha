@@ -414,6 +414,18 @@ fn fanout_envelope_covers_retain_first_singular_comparison() {
     );
 }
 #[test]
+fn fanout_fixed_overhead_matches_config_default() {
+    let runtime = query_fanout_fixed_overhead_bytes()
+        .expect("runtime fanout fixed overhead must fit the platform address space");
+    let runtime =
+        u64::try_from(runtime).expect("runtime fanout fixed overhead must fit the config type");
+    assert_eq!(
+        runtime,
+        iroha_config::parameters::defaults::torii::QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1,
+        "the config default must track the runtime protocol-derived fixed envelope"
+    );
+}
+#[test]
 fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     let ingress_fixed = query_ingress_fixed_overhead_bytes()
         .expect("ingress fixed overhead must fit the platform address space");

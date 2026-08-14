@@ -215,6 +215,67 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     assert!(!source.contains("mem::forget"));
 }
 #[test]
+fn module_graph_and_context_authority_remain_private_and_fail_closed() {
+    let incremental = include_str!("incremental_source.rs");
+    let collective = include_str!("../collective.rs");
+    let mkhe = include_str!("../../mkhe.rs");
+    let source = include_str!("incremental_source_phase23.rs");
+    let rns_link = include_str!("../phase23_rns_link.rs");
+    let child_declaration =
+        "#[path = \"incremental_source_phase23.rs\"]\nmod incremental_source_phase23;";
+    assert_eq!(incremental.matches(child_declaration).count(), 1);
+    for broad_declaration in [
+        "pub mod incremental_source_phase23;",
+        "pub(crate) mod incremental_source_phase23;",
+        "pub(super) mod incremental_source_phase23;",
+    ] {
+        assert!(!incremental.contains(broad_declaration));
+    }
+    assert!(!collective.contains("incremental_source_phase23"));
+    assert!(!mkhe.contains("incremental_source_phase23"));
+    let global_declaration =
+        "#[path = \"mkhe/global_lookup_statement_v1.rs\"]\nmod global_lookup_statement_v1;";
+    assert_eq!(mkhe.matches(global_declaration).count(), 1);
+    assert!(!mkhe.contains("pub mod global_lookup_statement_v1;"));
+    assert!(!mkhe.contains("pub(crate) mod global_lookup_statement_v1;"));
+    assert!(!mkhe.contains("pub(super) mod global_lookup_statement_v1;"));
+    assert!(!mkhe.contains("pub use global_lookup_statement_v1"));
+    for facade in [collective, mkhe] {
+        assert!(!facade.contains("Phase23ContextCorrespondenceSealV1"));
+        assert!(!facade.contains("materialize_encrypt_and_publish_phase23_source_v1"));
+    }
+    let context_impl = rns_link
+        .split_once("impl ZkAmsPhase23RnsLinkContextV1 {")
+        .unwrap()
+        .1
+        .split_once("\n}\n/// Producer-claimed roots")
+        .unwrap()
+        .0;
+    assert_eq!(context_impl.matches("pub(super) fn new(").count(), 1);
+    assert!(context_impl.contains(
+        "#[cfg(test)]\n    #[allow(clippy::too_many_arguments)]\n    pub(super) fn new("
+    ));
+    assert!(rns_link.contains("#[cfg(test)]\ntype RnsLinkContextConstructorV1 = fn("));
+    assert!(rns_link.contains(
+        "#[cfg(test)]\nconst RNS_LINK_CONTEXT_SIGNATURE_GUARD_V1: RnsLinkContextConstructorV1"
+    ));
+    let seal_body = source
+        .split_once("enum Phase23ContextCorrespondenceSealV1 {")
+        .unwrap()
+        .1
+        .split_once("\n}")
+        .unwrap()
+        .0;
+    assert_eq!(seal_body.trim(), "#[cfg(test)]\n    TestOnly,");
+    assert_eq!(
+        source.matches("Phase23ContextCorrespondenceSealV1").count(),
+        2
+    );
+    assert!(!source.contains("Phase23ContextCorrespondenceSealV1::"));
+    assert!(!source.contains("-> Phase23ContextCorrespondenceSealV1"));
+    assert!(!source.contains("Result<Phase23ContextCorrespondenceSealV1"));
+}
+#[test]
 fn source_files_remain_below_the_global_budget_without_exceptions() {
     assert!(
         include_str!("incremental_source_phase23.rs")

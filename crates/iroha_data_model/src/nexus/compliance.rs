@@ -1,9 +1,4 @@
 //! Lane compliance policy data structures shared across hosts and SDKs.
-use std::collections::BTreeSet;
-use iroha_crypto::{Hash, LaneCommitmentId};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -13,6 +8,11 @@ use crate::{
     metadata::Metadata,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
+use iroha_crypto::{Hash, LaneCommitmentId};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeSet;
 /// Identifier attached to a [`LaneCompliancePolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -203,8 +203,8 @@ pub enum JurisdictionFlag {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
     use super::*;
+    use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedTransferLimit {
         asset_id: Option<AssetDefinitionId>,

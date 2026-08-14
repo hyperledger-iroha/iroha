@@ -36,8 +36,8 @@ use super::{
     },
     proof_math::{
         FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
-        SecretMultiexpBuilder, SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng,
-        selene_bp_generators,
+        SecretMultiexpBuilder, SecretPoint, SeleneSuite, helios_bp_generators,
+        random_scalar_from_fcmp_rng, selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
     sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
@@ -113,14 +113,14 @@ impl<F: ProofScalar> Drop for BorrowedProverScalarSlotV1<'_, F> {
     }
 }
 impl<F: ProofScalar> ProverSecretScalarV1<F> {
+    fn copy_from_borrowed(value: &F) -> Self {
+        Self(*value)
+    }
     fn take(value: &mut F) -> Self {
         let incoming = BorrowedProverScalarSlotV1(value);
         let owned = Self(incoming.expose_copy());
         drop(incoming);
         owned
-    }
-    fn expose_copy(&self) -> F {
-        self.0
     }
     fn expose_ref(&self) -> &F {
         &self.0
@@ -186,25 +186,27 @@ impl<P: ProofPoint> Drop for BorrowedProverPointSlotV1<'_, P> {
     }
 }
 impl<P: ProofPoint> ProverSecretPointV1<P> {
+    fn from_secret(point: SecretPoint<P>) -> Self {
+        let mut owned = Self(P::identity());
+        point.move_into(&mut owned.0);
+        owned
+    }
     fn take(value: &mut P) -> Self {
         let incoming = BorrowedProverPointSlotV1(value);
         let owned = Self(incoming.expose_copy());
         drop(incoming);
         owned
     }
-    fn expose_copy(&self) -> P {
-        self.0
-    }
     fn expose_ref(&self) -> &P {
         &self.0
     }
 }
 impl ProverSecretPointV1<SelenePoint> {
-    fn secret_x_copy_v1(&self) -> Option<SecretCycleScalarV1<HelioseleneField>> {
-        self.0.secret_x_v1()
+    fn secret_x_owner_v1(&self) -> Option<SecretCycleScalarV1<HelioseleneField>> {
+        self.0.secret_x_ref_v1()
     }
-    fn secret_encoding_copy_v1(&self) -> Option<SecretEncodedScalarV1> {
-        self.0.secret_encode_v1()
+    fn secret_encoding_owner_v1(&self) -> Option<SecretEncodedScalarV1> {
+        self.0.secret_encode_ref_v1()
     }
     /// Publish only the canonical root-nonce commitment bytes while the
     /// concrete secret point and its encoding remain in erasing owners.
@@ -218,11 +220,11 @@ impl ProverSecretPointV1<SelenePoint> {
     }
 }
 impl ProverSecretPointV1<HeliosPoint> {
-    fn secret_x_copy_v1(&self) -> Option<SecretCycleScalarV1<Field25519>> {
-        self.0.secret_x_v1()
+    fn secret_x_owner_v1(&self) -> Option<SecretCycleScalarV1<Field25519>> {
+        self.0.secret_x_ref_v1()
     }
-    fn secret_encoding_copy_v1(&self) -> Option<SecretEncodedScalarV1> {
-        self.0.secret_encode_v1()
+    fn secret_encoding_owner_v1(&self) -> Option<SecretEncodedScalarV1> {
+        self.0.secret_encode_ref_v1()
     }
     /// Helios counterpart of the owner-confined Selene publication boundary.
     fn encode_public_and_clear_v1(&mut self) -> Result<[u8; 32], FcmpNativeErrorV1> {
@@ -299,11 +301,22 @@ fn push_secret_scalar_v1<F: ProofScalar + Zeroize>(
 }
 fn push_owned_secret_scalar_v1<F: ProofScalar + Zeroize>(
     values: &mut Zeroizing<Vec<F>>,
-    value: ProverSecretScalarV1<F>,
+    mut value: ProverSecretScalarV1<F>,
 ) -> Result<(), FcmpNativeErrorV1> {
-    require_preallocated_push(values.len(), values.capacity())?;
-    values.push(value.expose_copy());
+    let allocation_capacity = values.capacity();
+    let allocation_ptr = values.as_ptr();
+    let preflight = require_preallocated_push(values.len(), allocation_capacity);
+    if let Err(error) = preflight {
+        drop(value);
+        return Err(error);
+    }
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
+    values.push(value.0);
+    value.0.clear_secret();
     drop(value);
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
     Ok(())
 }
 fn prover_secret_decode_edwards_point_v1(
@@ -457,7 +470,7 @@ fn ct_secret_selene_point_eq_v1(
     public_right: &SelenePoint,
 ) -> Result<bool, FcmpNativeErrorV1> {
     let left = left
-        .secret_encoding_copy_v1()
+        .secret_encoding_owner_v1()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
     let public_right = Zeroizing::new(public_right.encode());
     Ok(bool::from(
@@ -469,7 +482,7 @@ fn ct_secret_helios_point_eq_v1(
     public_right: &HeliosPoint,
 ) -> Result<bool, FcmpNativeErrorV1> {
     let left = left
-        .secret_encoding_copy_v1()
+        .secret_encoding_owner_v1()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
     let public_right = Zeroizing::new(public_right.encode());
     Ok(bool::from(
@@ -1159,8 +1172,8 @@ fn prover_secret_hash_selene_v1(
     for (scalar, generator) in values.iter().zip(selene_generators()) {
         terms.push(scalar, generator)?;
     }
-    let mut point = terms.evaluate()?;
-    Ok(ProverSecretPointV1::take(&mut point))
+    let point = terms.evaluate()?;
+    Ok(ProverSecretPointV1::from_secret(point))
 }
 fn prover_secret_hash_helios_v1(
     values: &[HelioseleneField],
@@ -1177,21 +1190,21 @@ fn prover_secret_hash_helios_v1(
     for (scalar, generator) in values.iter().zip(helios_generators()) {
         terms.push(scalar, generator)?;
     }
-    let mut point = terms.evaluate()?;
-    Ok(ProverSecretPointV1::take(&mut point))
+    let point = terms.evaluate()?;
+    Ok(ProverSecretPointV1::from_secret(point))
 }
 fn prover_secret_selene_x_v1(
     point: &ProverSecretPointV1<SelenePoint>,
 ) -> Result<SecretCycleScalarV1<HelioseleneField>, FcmpNativeErrorV1> {
     point
-        .secret_x_copy_v1()
+        .secret_x_owner_v1()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
 }
 fn prover_secret_helios_x_v1(
     point: &ProverSecretPointV1<HeliosPoint>,
 ) -> Result<SecretCycleScalarV1<Field25519>, FcmpNativeErrorV1> {
     point
-        .secret_x_copy_v1()
+        .secret_x_owner_v1()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1221,7 +1234,7 @@ fn fcmp_fixture_secret_helios_encoding_v1(
     point: &ProverSecretPointV1<HeliosPoint>,
 ) -> Result<SecretEncodedScalarV1, FcmpNativeErrorV1> {
     point
-        .secret_encoding_copy_v1()
+        .secret_encoding_owner_v1()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
 }
 /// Build the canonical deterministic FCMP++ release fixture.
@@ -1581,8 +1594,9 @@ fn random_proof_scalar<F: ProofScalar>(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<ProverSecretScalarV1<F>, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
-        if let Some(mut scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)? {
-            let scalar = ProverSecretScalarV1::take(&mut scalar);
+        if let Some(sampled) = random_scalar_from_fcmp_rng::<F, _>(rng)? {
+            let scalar = ProverSecretScalarV1::copy_from_borrowed(sampled.expose_ref());
+            drop(sampled);
             if scalar.expose_ref() != &F::ZERO {
                 return Ok(scalar);
             }
@@ -1595,16 +1609,16 @@ fn root_nonce_commitment_v1<S: ProofSuite>(
 ) -> Result<ProverSecretPointV1<S::Point>, FcmpNativeErrorV1> {
     let mut terms = SecretMultiexpBuilder::<S>::new(1)?;
     terms.push(nonce, &S::generators().h)?;
-    let mut point = terms.evaluate()?;
-    Ok(ProverSecretPointV1::take(&mut point))
+    let point = terms.evaluate()?;
+    Ok(ProverSecretPointV1::from_secret(point))
 }
 fn prepared_secret_point_v1<S: ProofSuite>(
     scalar: &S::Scalar,
 ) -> Result<ProverSecretPointV1<S::Point>, FcmpNativeErrorV1> {
     let mut terms = SecretMultiexpBuilder::<S>::new(1)?;
     terms.push(scalar, &S::generators().h)?;
-    let mut point = terms.evaluate()?;
-    Ok(ProverSecretPointV1::take(&mut point))
+    let point = terms.evaluate()?;
+    Ok(ProverSecretPointV1::from_secret(point))
 }
 struct PreparedEdBlind {
     decomposition: Vec<u64>,
@@ -1637,16 +1651,14 @@ fn prepare_ed_blind(
     })
 }
 struct PreparedSeleneBlind {
-    scalar: Field25519,
+    scalar: ProverSecretScalarV1<Field25519>,
     decomposition: Vec<u64>,
     divisor: NormalizedDivisor<HelioseleneField>,
-    point: SelenePoint,
+    point: ProverSecretPointV1<SelenePoint>,
 }
 impl Drop for PreparedSeleneBlind {
     fn drop(&mut self) {
-        self.scalar.zeroize();
         self.decomposition.zeroize();
-        self.point.zeroize();
     }
 }
 fn prepare_selene_blind(
@@ -1665,23 +1677,21 @@ fn prepare_selene_blind(
         point.expose_ref(),
     )?;
     Ok(PreparedSeleneBlind {
-        scalar: scalar.expose_copy(),
+        scalar,
         decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        point: point.expose_copy(),
+        point,
     })
 }
 struct PreparedHeliosBlind {
-    scalar: HelioseleneField,
+    scalar: ProverSecretScalarV1<HelioseleneField>,
     decomposition: Vec<u64>,
     divisor: NormalizedDivisor<Field25519>,
-    point: HeliosPoint,
+    point: ProverSecretPointV1<HeliosPoint>,
 }
 impl Drop for PreparedHeliosBlind {
     fn drop(&mut self) {
-        self.scalar.zeroize();
         self.decomposition.zeroize();
-        self.point.zeroize();
     }
 }
 fn prepare_helios_blind(
@@ -1700,10 +1710,10 @@ fn prepare_helios_blind(
         point.expose_ref(),
     )?;
     Ok(PreparedHeliosBlind {
-        scalar: scalar.expose_copy(),
+        scalar,
         decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        point: point.expose_copy(),
+        point,
     })
 }
 fn commitment_index(variable: Variable) -> Result<usize, FcmpNativeErrorV1> {
@@ -1807,7 +1817,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
             require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?;
             let blind = prepare_selene_blind(random_proof_scalar(rng)?)?;
-            push_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.neg_ref())?;
+            push_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.expose_ref().neg_ref())?;
             selene_blinds.push(blind);
         }
         let mut c2_non_root = Vec::with_capacity(path.c2_non_root.len());
@@ -1816,7 +1826,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
             require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?;
             let blind = prepare_helios_blind(random_proof_scalar(rng)?)?;
-            push_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.neg_ref())?;
+            push_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.expose_ref().neg_ref())?;
             helios_blinds.push(blind);
         }
         transcripted_paths.push(TranscriptedPath {
@@ -1950,19 +1960,18 @@ fn prove_fcmp_plus_plus_once_v1(
     // Selene branch blinds.
     let mut c1_blind_claims = Vec::with_capacity(helios_blinds.len());
     for blind in &helios_blinds {
-        let coordinates = Zeroizing::new(
-            blind
-                .point
-                .coordinates()
-                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
-        );
+        let coordinates = blind
+            .point
+            .expose_ref()
+            .secret_coordinates_ref_v1()
+            .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         c1_blind_claims.push(
             c1_tape
                 .append_claimed_point(
                     CYCLE_DLOG_PARAMETERS,
                     &blind.decomposition,
                     &blind.divisor,
-                    &coordinates,
+                    coordinates.component_pair_ref(),
                     &[],
                 )?
                 .0,
@@ -1970,19 +1979,18 @@ fn prove_fcmp_plus_plus_once_v1(
     }
     let mut c2_blind_claims = Vec::with_capacity(selene_blinds.len());
     for blind in &selene_blinds {
-        let coordinates = Zeroizing::new(
-            blind
-                .point
-                .coordinates()
-                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
-        );
+        let coordinates = blind
+            .point
+            .expose_ref()
+            .secret_coordinates_ref_v1()
+            .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         c2_blind_claims.push(
             c2_tape
                 .append_claimed_point(
                     CYCLE_DLOG_PARAMETERS,
                     &blind.decomposition,
                     &blind.divisor,
-                    &coordinates,
+                    coordinates.component_pair_ref(),
                     &[],
                 )?
                 .0,
@@ -2009,9 +2017,9 @@ fn prove_fcmp_plus_plus_once_v1(
         (root.curve() == FcmpTreeCurveV1::Selene).then(|| &c1_masks[root_commitment_index]);
     let root_mask_c2 =
         (root.curve() == FcmpTreeCurveV1::Helios).then(|| &c2_masks[root_commitment_index]);
-    let (c1_commitments, c1_openings) =
+    let (c1_secret_commitments, c1_openings) =
         c1_tape.commitments_and_openings::<SeleneSuite>(c1_generators, c1_masks.as_slice())?;
-    let (c2_commitments, c2_openings) =
+    let (c2_secret_commitments, c2_openings) =
         c2_tape.commitments_and_openings::<HeliosSuite>(c2_generators, c2_masks.as_slice())?;
     let (root_blind_commitment, mut root_nonce_c1, mut root_nonce_c2): (
         [u8; 32],
@@ -2048,8 +2056,10 @@ fn prove_fcmp_plus_plus_once_v1(
     super::verify_fcmp_commitment_balance_v1(&public_inputs, &new_outputs)?;
     let context = membership_context(root, &public_inputs, root_blind_commitment)?;
     let mut transcript = ProverTranscript::new(context);
-    transcript.write_commitments::<SeleneSuite>(c1_commitments.clone(), Vec::new());
-    transcript.write_commitments::<HeliosSuite>(c2_commitments.clone(), Vec::new());
+    let c1_commitments =
+        transcript.write_secret_commitments::<SeleneSuite>(c1_secret_commitments)?;
+    let c2_commitments =
+        transcript.write_secret_commitments::<HeliosSuite>(c2_secret_commitments)?;
     let root_blind_response = match root.curve() {
         FcmpTreeCurveV1::Selene => {
             let challenge = transcript.challenge::<SeleneSuite>()?;

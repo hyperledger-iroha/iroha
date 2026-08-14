@@ -50,7 +50,7 @@ use super::{
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
-use crate::generalized_bulletproof::SecretMultiexpBuilder;
+use crate::generalized_bulletproof::{SecretMultiexpBuilder, SecretPoint};
 use crate::vega::{
     VegaT256PointV1, VegaT256ScalarV1 as Scalar, VegaTranscriptV1,
     algebra::{decompress_univariate, eq_evals, eq_evaluate, evaluate_univariate},
@@ -796,9 +796,9 @@ pub(super) struct ZkAmsPhase23RnsLinkContextV1 {
     canonical_map_set_digest: [u8; 32],
 }
 impl ZkAmsPhase23RnsLinkContextV1 {
-    /// Construct the release-profile context. The immutable profile and
-    /// algorithm manifest are derived internally. Readiness and release-KAT
-    /// evidence are intentionally enforced outside proof verification.
+    /// Construct a test-only release-profile context fixture. Production must
+    /// instead receive a context through a future state-owned authority path.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         network_context_digest: [u8; 32],
@@ -1370,8 +1370,9 @@ pub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1<'a>(
         &mut relation_sink,
     )
 }
-// Compile-time API guards: mutable readiness and KAT evidence have no place in
-// either production context construction or production challenge derivation.
+// The raw digest-only context fixture remains test-only. The production
+// challenge API guard still excludes mutable readiness and KAT evidence.
+#[cfg(test)]
 type RnsLinkContextConstructorV1 = fn(
     [u8; 32],
     [u8; 32],
@@ -1385,6 +1386,7 @@ type RnsLinkChallengeConstructorV1 =
     fn(
         &ZkAmsPhase23RnsLinkPrechallengeV1,
     ) -> Result<ZkAmsPhase23RnsLinkChallengeSetV1, ZkAmsMkheErrorV1>;
+#[cfg(test)]
 const RNS_LINK_CONTEXT_SIGNATURE_GUARD_V1: RnsLinkContextConstructorV1 =
     ZkAmsPhase23RnsLinkContextV1::new;
 const RNS_LINK_CHALLENGE_SIGNATURE_GUARD_V1: RnsLinkChallengeConstructorV1 =
@@ -1655,14 +1657,14 @@ fn rns_link_secret_inner_product_v1(
 fn rns_link_secret_msm_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
-) -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
+) -> Result<SecretPoint<VegaT256PointV1>, ZkAmsMkheErrorV1> {
     rns_link_secret_msm_with_extra_v1(scalars, points, None)
 }
 fn rns_link_secret_msm_with_extra_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
     extra: Option<(&Scalar, &VegaT256PointV1)>,
-) -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
+) -> Result<SecretPoint<VegaT256PointV1>, ZkAmsMkheErrorV1> {
     if scalars.len() != points.len() || scalars.is_empty() {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
@@ -1686,6 +1688,27 @@ fn rns_link_secret_msm_with_extra_v1(
         .evaluate()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+struct ZeroizingRnsLinkTranscriptPointV1([u8; 64]);
+impl ZeroizingRnsLinkTranscriptPointV1 {
+    fn new(point: &VegaT256PointV1) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut owned = Self([0; 64]);
+        point
+            .write_transcript_bytes_ref(&mut owned.0)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        Ok(owned)
+    }
+    fn as_ref(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
+impl Drop for ZeroizingRnsLinkTranscriptPointV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+    }
+}
 fn rns_link_squeeze_nonzero_v1(
     transcript: &mut VegaTranscriptV1,
     label: &'static [u8],
@@ -1702,27 +1725,17 @@ fn rns_link_squeeze_nonzero_v1(
 }
 fn absorb_rns_link_ipa_round_v1(
     transcript: &mut VegaTranscriptV1,
-    left: VegaT256PointV1,
-    right: VegaT256PointV1,
+    left: &VegaT256PointV1,
+    right: &VegaT256PointV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    if left.is_identity() || right.is_identity() {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
+    let left = ZeroizingRnsLinkTranscriptPointV1::new(left)?;
     transcript
-        .absorb_raw(
-            IPA_LEFT_LABEL_V1,
-            &left
-                .to_transcript_bytes()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
-        )
+        .absorb_raw(IPA_LEFT_LABEL_V1, left.as_ref())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+    drop(left);
+    let right = ZeroizingRnsLinkTranscriptPointV1::new(right)?;
     transcript
-        .absorb_raw(
-            IPA_RIGHT_LABEL_V1,
-            &right
-                .to_transcript_bytes()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
-        )
+        .absorb_raw(IPA_RIGHT_LABEL_V1, right.as_ref())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 fn prove_rns_link_ipa_v1(
@@ -1736,7 +1749,7 @@ fn prove_rns_link_ipa_v1(
     if witness.len() != key.generators.len() || public_weights.len() != witness.len() {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    if rns_link_secret_msm_v1(witness.as_slice(), &key.generators)? != statement.commitment
+    if !rns_link_secret_msm_v1(witness.as_slice(), &key.generators)?.equals(&statement.commitment)
         || rns_link_secret_inner_product_v1(witness.as_slice(), public_weights)?.get()
             != statement.evaluation
     {
@@ -1769,7 +1782,7 @@ fn prove_rns_link_ipa_v1(
             g_left,
             Some((c_right.as_ref(), &key.evaluation_generator)),
         )?;
-        absorb_rns_link_ipa_round_v1(transcript, left, right)?;
+        absorb_rns_link_ipa_round_v1(transcript, left.expose_ref(), right.expose_ref())?;
         let challenge = rns_link_squeeze_nonzero_v1(transcript, IPA_CHALLENGE_LABEL_V1)?;
         let inverse = challenge
             .inverse()
@@ -1786,8 +1799,8 @@ fn prove_rns_link_ipa_v1(
         witness = folded_witness;
         weights = folded_weights;
         generators = folded_generators;
-        left_rounds.push(left);
-        right_rounds.push(right);
+        left_rounds.push(*left.expose_ref());
+        right_rounds.push(*right.expose_ref());
     }
     if left_rounds.len() > RNS_LINK_IPA_MAX_ROUNDS_V1 {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
@@ -1825,7 +1838,7 @@ fn verify_rns_link_ipa_v1(
     let mut generators = key.generators.clone();
     let mut weights = public_weights.to_vec();
     for (&left, &right) in proof.left.iter().zip(&proof.right) {
-        absorb_rns_link_ipa_round_v1(transcript, left, right)?;
+        absorb_rns_link_ipa_round_v1(transcript, &left, &right)?;
         let challenge = rns_link_squeeze_nonzero_v1(transcript, IPA_CHALLENGE_LABEL_V1)?;
         let inverse = challenge
             .inverse()
@@ -2574,10 +2587,11 @@ fn prove_rns_link_bitness_v1(
         ipa_witness.push(Scalar::zero());
     }
     ipa_witness.push(blinding.get());
-    let commitment = rns_link_secret_msm_v1(ipa_witness.as_slice(), &key.generators)?;
-    if commitment.is_identity() {
+    let secret_commitment = rns_link_secret_msm_v1(ipa_witness.as_slice(), &key.generators)?;
+    if secret_commitment.is_identity() {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
+    let commitment = *secret_commitment.expose_ref();
     let statement = ZkAmsPhase23RnsLinkBitnessStatementV1 {
         relation_context_digest,
         value_count: u16::try_from(value_count)
@@ -3158,6 +3172,41 @@ mod tests {
         assert!(!secret_msm.contains(".fold(VegaT256PointV1::identity()"));
         assert!(secret_msm.contains("SecretMultiexpBuilder::<ZkAmsT256BulletproofSuiteV1>::new"));
         assert!(secret_msm.contains("for (scalar, point) in scalars.iter().zip(points)"));
+        assert!(secret_msm.contains("Result<SecretPoint<VegaT256PointV1>"));
+        assert!(!secret_msm.contains("Ok(*commitment.expose_ref())"));
+        assert!(production.contains(
+            "absorb_rns_link_ipa_round_v1(transcript, left.expose_ref(), right.expose_ref())"
+        ));
+        let ipa_prover = production
+            .split_once("fn prove_rns_link_ipa_v1(")
+            .expect("RNS-link IPA prover")
+            .1
+            .split_once("\nfn verify_rns_link_ipa_v1(")
+            .expect("RNS-link IPA prover boundary")
+            .0;
+        let borrowed_absorb = ipa_prover
+            .find("absorb_rns_link_ipa_round_v1(transcript, left.expose_ref(), right.expose_ref())")
+            .expect("borrowed IPA point publication");
+        let left_public_copy = ipa_prover
+            .find("left_rounds.push(*left.expose_ref());")
+            .expect("public left proof point copy");
+        let right_public_copy = ipa_prover
+            .find("right_rounds.push(*right.expose_ref());")
+            .expect("public right proof point copy");
+        assert!(borrowed_absorb < left_public_copy && borrowed_absorb < right_public_copy);
+        let transcript_owner = production
+            .split_once("struct ZeroizingRnsLinkTranscriptPointV1")
+            .expect("RNS-link transcript point owner")
+            .1
+            .split_once("fn rns_link_squeeze_nonzero_v1(")
+            .expect("RNS-link transcript point owner boundary")
+            .0;
+        assert!(transcript_owner.contains("impl Drop for ZeroizingRnsLinkTranscriptPointV1"));
+        assert!(transcript_owner.contains("bytes.fill(0);"));
+        assert!(transcript_owner.contains("compiler_fence"));
+        assert!(production.contains("write_transcript_bytes_ref(&mut owned.0)"));
+        assert!(!production.contains("left.to_transcript_bytes()"));
+        assert!(!production.contains("right.to_transcript_bytes()"));
         assert!(!production.contains("mul_scalar(c_left.get())"));
         assert!(!production.contains("mul_scalar(c_right.get())"));
         assert!(production.contains("Some((c_left.as_ref(), &key.evaluation_generator))"));

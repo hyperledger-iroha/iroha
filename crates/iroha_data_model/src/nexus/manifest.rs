@@ -1,15 +1,15 @@
 //! Space Directory manifest representations and evaluation helpers.
-use std::{convert::TryFrom, fmt, str::FromStr};
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use super::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{asset::AssetDefinitionId, name::Name};
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize, Map, Value};
+use std::{convert::TryFrom, fmt, str::FromStr};
 /// Universal account identifier shared across all dataspaces.
 ///
 /// UAIDs provide a stable capability anchor for multi-lane Nexus deployments.
@@ -1091,12 +1091,12 @@ pub enum DenyReason {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use super::*;
+    use crate::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     #[cfg(feature = "json")]
     use norito::json::JsonDeserialize;
-    use super::*;
-    use crate::domain::DomainId;
+    use std::{fs, path::Path};
     #[derive(Encode)]
     struct ForgedAllowance {
         max_amount: Option<Numeric>,

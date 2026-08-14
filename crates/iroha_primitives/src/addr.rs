@@ -5,7 +5,7 @@
 //! Iroha data model. A companion [`socket_addr!`] macro parses address literals at compile
 //! time for convenience while keeping the canonical Norito codecs.
 #![allow(unexpected_cfgs)]
-use std::{borrow::Cow, format, string::String, vec::Vec};
+use crate::{conststr::ConstString, ffi};
 use derive_more::{AsRef, Debug, Display, From, IntoIterator};
 use iroha_macro::FromVariant;
 /// Parses an IPv4 or IPv6 socket address literal at compile time.
@@ -14,7 +14,7 @@ use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use norito::{Decode, Encode, literal};
-use crate::{conststr::ConstString, ffi};
+use std::{borrow::Cow, format, string::String, vec::Vec};
 /// Error when parsing an address
 #[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
 pub enum ParseError {
@@ -675,6 +675,34 @@ impl JsonDeserialize for SocketAddr {
 // so the explicit impls for `IpAddr` and `SocketAddr` are redundant and have
 // been removed to avoid conflicts.
 impl SocketAddr {
+    /// Parse an address while charging an exact retained hostname allocation.
+    ///
+    /// Numeric IPv4 and IPv6 addresses remain allocation-free. Host addresses
+    /// use [`ConstString::try_from_str_for_decode`] so a source-controlled host
+    /// cannot allocate outside the active decode budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed parse error for malformed addresses or the underlying
+    /// decode resource error for a retained hostname.
+    #[doc(hidden)]
+    pub fn from_str_for_decode(value: &str) -> Result<Self, norito::core::Error> {
+        if let Ok(address) = value.parse::<SocketAddrV4>() {
+            return Ok(Self::Ipv4(address));
+        }
+        if let Ok(address) = value.parse::<SocketAddrV6>() {
+            return Ok(Self::Ipv6(address));
+        }
+        let (host, port) = value
+            .split_once(':')
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let port = port
+            .parse()
+            .map_err(|_| norito::core::Error::LengthMismatch)?;
+        let host = ConstString::try_from_str_for_decode(host)?;
+        Ok(Self::Host(SocketAddrHost { host, port }))
+    }
+
     /// Extracts [`IpAddr`] from [`Self::Ipv4`] and [`Self::Ipv6`] variants
     pub fn ip(&self) -> Option<IpAddr> {
         match self {
@@ -730,8 +758,8 @@ impl SocketAddr {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use norito::json::{self, FastJsonWrite};
     use super::*;
+    use norito::json::{self, FastJsonWrite};
     #[test]
     fn socket_addr_json_roundtrip() {
         let addr: SocketAddr = "127.0.0.1:8080".parse::<SocketAddrV4>().unwrap().into();
@@ -845,8 +873,8 @@ impl core::str::FromStr for SocketAddr {
     }
 }
 mod std_compat {
-    use std::net::ToSocketAddrs;
     use super::*;
+    use std::net::ToSocketAddrs;
     impl From<Ipv4Addr> for std::net::Ipv4Addr {
         #[inline]
         fn from(other: Ipv4Addr) -> Self {
@@ -1131,5 +1159,41 @@ mod test {
                 port: 9019
             }
         );
+    }
+
+    #[test]
+    fn bounded_socket_parser_charges_only_retained_host_bytes() {
+        fn limits(bytes: usize) -> norito::core::DecodeLimits {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        }
+
+        let numeric = "127.0.0.1:9019";
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(0), || {
+            SocketAddr::from_str_for_decode(numeric)
+        });
+        assert_eq!(decoded.expect("numeric address"), numeric.parse().unwrap());
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let host = "source-controlled-hostname.example";
+        let candidate = format!("{host}:9019");
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(host.len()), || {
+                SocketAddr::from_str_for_decode(&candidate)
+            });
+        assert_eq!(
+            decoded.expect("exact host address"),
+            candidate.parse().unwrap()
+        );
+        assert_eq!(usage.total_allocated_bytes(), host.len());
+
+        let (rejected, usage) =
+            norito::core::with_decode_limits_measured(limits(host.len() - 1), || {
+                SocketAddr::from_str_for_decode(&candidate)
+            });
+        assert!(matches!(
+            rejected,
+            Err(norito::core::Error::TotalAllocationExceeded { .. })
+        ));
+        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 }

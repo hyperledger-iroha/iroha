@@ -14,20 +14,6 @@
 //! - a BFV-backed secret affine evaluator that consumes BFV-encrypted input,
 //! - and a BFV-backed secret programmed evaluator with an instruction-driven
 //!   RAM-style encrypted state machine.
-use std::{fmt, ops::Deref, str::FromStr, string::String, sync::Arc, vec::Vec};
-use hex::FromHex as _;
-use hkdf::Hkdf;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::derive::{JsonDeserialize, JsonSerialize};
-#[cfg(feature = "json")]
-use norito::json;
-use sha3::Sha3_512;
-use thiserror::Error;
-use zeroize::{Zeroize as _, Zeroizing};
-use rand::{Rng as _, SeedableRng as _};
-use rand_chacha::ChaCha20Rng;
 use crate::{
     BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8, BfvAffineCircuit, BfvCiphertext, BfvError,
     BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters,
@@ -38,6 +24,20 @@ use crate::{
     registered_bfv_rns_modulus_chain, subtract_ciphertexts_rns_exact,
     validate_registered_bfv_parameters,
 };
+use hex::FromHex as _;
+use hkdf::Hkdf;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::derive::{JsonDeserialize, JsonSerialize};
+#[cfg(feature = "json")]
+use norito::json;
+use rand::{Rng as _, SeedableRng as _};
+use rand_chacha::ChaCha20Rng;
+use sha3::Sha3_512;
+use std::{fmt, ops::Deref, str::FromStr, string::String, sync::Arc, vec::Vec};
+use thiserror::Error;
+use zeroize::{Zeroize as _, Zeroizing};
 const POLICY_DOMAIN: &[u8] = b"iroha.ram_lfe.policy.hkdf_sha3_512_prf.v1";
 const SECRET_COMMITMENT_DOMAIN: &[u8] = b"iroha.ram_lfe.policy_secret.hkdf_sha3_512_prf.v1";
 const HKDF_SALT_DOMAIN: &[u8] = b"iroha.ram_lfe.hkdf_salt.hkdf_sha3_512_prf.v1";
@@ -1601,13 +1601,13 @@ fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
         BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
         BfvParameters, bootstrap_key_from_seed, decrypt, derive_identifier_key_material_from_seed,
         encrypt_identifier_from_seed, keygen_from_seed, ram_lfe_bfv_parameters_v1,
         rotation_key_from_seed,
     };
-    use super::*;
     #[test]
     fn ram_lfe_secret_is_validated_shared_and_redacted() {
         let secret: RamLfeSecret = "0X01020304".parse().expect("valid RAM-LFE secret");

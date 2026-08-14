@@ -1,8 +1,9 @@
 //! Candidate-only canonical wire for the six-witness direct relations.
 //!
-//! This module freezes statement and body framing plus structural predecode.
-//! It deliberately supplies no proof equations, authentication, read receipt,
-//! admission receipt, or release transition.
+//! This module freezes statement/body framing and structural predecode, and
+//! privately replays the candidate RKG-round-one proof equations plus typed
+//! object authentication. It deliberately supplies no admission or release
+//! receipt, no public verification result, and no release transition.
 use super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyRoundV1,
@@ -18,6 +19,15 @@ use super::{
 use crate::vega::sponge::Keccak256;
 #[path = "direct_relation_wire_v1/predecode_v1.rs"]
 mod predecode_v1;
+#[allow(
+    unused_imports,
+    reason = "candidate-only semantic verifier seam is retained for the pending direct-relation owner and cannot mint admission or release authority"
+)]
+pub(super) use predecode_v1::{
+    CompletedDirectRkgOneSemanticVerificationV1, verify_direct_rkg_one_semantic_candidate_v1,
+};
+#[path = "direct_relation_wire_v1/response_commitment_v1.rs"]
+pub(super) mod response_commitment_v1;
 #[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
 #[cfg(test)]

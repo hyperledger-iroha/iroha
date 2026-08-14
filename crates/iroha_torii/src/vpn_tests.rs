@@ -36,17 +36,23 @@ fn signed_app_headers_for_network(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )
+    .expect("canonical VPN test request is within V1 limits");
     let signature = Signature::try_new(key_pair.private_key(), &message)
         .expect("sign exact-network VPN request fixture");
     let mut headers = HeaderMap::new();
     headers.insert(
         crate::HEADER_ACCOUNT,
-        account.to_string().parse().expect("account header"),
+        account
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     headers.insert(
         crate::HEADER_SIGNATURE,
         crate::app_auth::signature_header_value(&signature)
+            .expect("encode valid signature header")
             .parse()
             .expect("signature header"),
     );

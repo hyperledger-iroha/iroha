@@ -105,14 +105,14 @@ fn fixture_v2(hyrax_basis: &CheckedBasisV2, bp_basis: &CheckedBasisV2) -> Fixtur
             for value in first.as_slice() {
                 openings.push(*value);
             }
-            hyrax_commitments.push(hyrax_first);
-            bp_commitments.push(bp_first);
+            hyrax_commitments.push(*hyrax_first.expose_ref());
+            bp_commitments.push(*bp_first.expose_ref());
         } else {
             for value in second.as_slice() {
                 openings.push(*value);
             }
-            hyrax_commitments.push(hyrax_second);
-            bp_commitments.push(bp_second);
+            hyrax_commitments.push(*hyrax_second.expose_ref());
+            bp_commitments.push(*bp_second.expose_ref());
         }
     }
     FixtureV2 {
@@ -162,6 +162,13 @@ fn exact_topology_proof_size_and_fail_closed_gates_are_frozen() {
     assert!(source.contains("sample_mask_v2"));
     assert!(source.contains("schnorr_challenge_v2"));
     assert!(source.contains("respond_v2"));
+    assert!(source.contains("Result<SecretPoint<Point>, BridgeErrorV2>"));
+    assert!(!source.contains("Ok(*commitment.expose_ref())"));
+    assert!(source.contains("fn point(&mut self, point: &Point)"));
+    assert!(source.contains("SecretT256PointEncodingV1::new(point)"));
+    assert!(source.contains("writer.point(hyrax_mask.expose_ref())"));
+    assert!(source.contains("writer.point(bp_mask.expose_ref())"));
+    assert!(!source.contains("fn point(&mut self, point: Point)"));
 }
 #[test]
 fn literal_framing_commitment_order_and_challenges_match_independent_kats() {
@@ -189,8 +196,8 @@ fn literal_framing_commitment_order_and_challenges_match_independent_kats() {
                 [0x44; 32],
                 [0x11; 32],
                 [0x22; 32],
-                point("8016f70c3f35b3257896971b306635647bc52eb7cad7a5eca1a42f2340737749e3"),
-                point("00a37dc092877e239385cd8392ba2360ce1859a37f7a2b9c626b336608d2ce4cfe"),
+                &point("8016f70c3f35b3257896971b306635647bc52eb7cad7a5eca1a42f2340737749e3"),
+                &point("00a37dc092877e239385cd8392ba2360ce1859a37f7a2b9c626b336608d2ce4cfe"),
             )
             .unwrap()
             .to_le_bytes()
@@ -233,21 +240,27 @@ fn representation_sigma_simulates_and_extracts_the_same_opening() {
         simulated_response.push(scalar((column as u64).wrapping_mul(31).wrapping_add(7)));
     }
     let aggregate = AggregatedRowsV2 {
-        hyrax_commitment: secret_commit_v2(&hyrax_basis.points, opening.as_slice()).unwrap(),
-        bp_commitment: secret_commit_v2(&bp_basis.points, opening.as_slice()).unwrap(),
+        hyrax_commitment: *secret_commit_v2(&hyrax_basis.points, opening.as_slice())
+            .unwrap()
+            .expose_ref(),
+        bp_commitment: *secret_commit_v2(&bp_basis.points, opening.as_slice())
+            .unwrap()
+            .expose_ref(),
         opening,
     };
     // Perfect HVZK simulator for a chosen challenge/response: compute both
     // first messages without reading the witness opening.
     let simulated_challenge = scalar(41);
-    let simulated_hyrax_mask = secret_commit_v2(&hyrax_basis.points, simulated_response.as_slice())
-        .unwrap()
+    let simulated_hyrax_response =
+        secret_commit_v2(&hyrax_basis.points, simulated_response.as_slice()).unwrap();
+    let simulated_hyrax_mask = *simulated_hyrax_response.expose_ref()
         + aggregate
             .hyrax_commitment
             .mul_scalar(simulated_challenge)
             .negate();
-    let simulated_bp_mask = secret_commit_v2(&bp_basis.points, simulated_response.as_slice())
-        .unwrap()
+    let simulated_bp_response =
+        secret_commit_v2(&bp_basis.points, simulated_response.as_slice()).unwrap();
+    let simulated_bp_mask = *simulated_bp_response.expose_ref()
         + aggregate
             .bp_commitment
             .mul_scalar(simulated_challenge)

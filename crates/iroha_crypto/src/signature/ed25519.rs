@@ -1,5 +1,5 @@
-use core::convert::TryFrom;
 use blake2::{Blake2b, digest::consts::U32};
+use core::convert::TryFrom;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
@@ -552,6 +552,18 @@ impl Ed25519Sha512 {
         let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
         validate_signature_r_for_strict_batch(signature)?;
         pk.verify_strict(message, &s)
+            .map_err(|_| Error::BadSignature)
+    }
+
+    /// Verify one admission-bound signature without consulting or populating
+    /// the thread-local success cache.
+    pub(crate) fn verify_uncached(
+        message: &[u8],
+        signature: &[u8],
+        pk: &PublicKey,
+    ) -> Result<(), Error> {
+        let parsed = Self::parse_signature(signature)?;
+        pk.verify_strict(message, &parsed)
             .map_err(|_| Error::BadSignature)
     }
     /// Deterministic batch verification helper using already parsed public keys.

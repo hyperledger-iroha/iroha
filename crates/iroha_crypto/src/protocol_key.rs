@@ -1,7 +1,7 @@
 //! Deterministic public points for protocol-owned, non-signing identities.
+use crate::{Algorithm, PublicKey};
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest as _, Sha512};
-use crate::{Algorithm, PublicKey};
 const NON_SIGNING_ED25519_TRANSCRIPT_V1: &[u8] = b"iroha:non-signing-ed25519-public-point:v1";
 fn update_framed(hasher: &mut Sha512, bytes: &[u8]) {
     let len = u64::try_from(bytes.len())

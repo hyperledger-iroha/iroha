@@ -25,7 +25,14 @@ Terminology
 - Public Data Space: Permissionless participation; full data and state are publicly available.
 - Data Space Manifest (DS Manifest): A Norito-encoded manifest that declares DS parameters (validators/QC keys, privacy class, ISI policy, DA parameters, retention, quotas, ZK policy, fees). The manifest hash is anchored on the nexus chain. Unless overridden, DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class) as the default post‑quantum signature scheme.
 - Space Directory: A global on‑chain directory contract that tracks DS manifests, versions, and governance/rotation events for resolvability and audits.
-- DSID: A globally unique identifier for a Data Space. Used to namespace all objects and references.
+- DSID: A globally unique identifier for a physical Data Space. It qualifies an
+  object's execution/storage location but is not the object's namespace.
+- Namespace: An independently governed logical naming scope with an explicit
+  home-DS binding. Namespace identity remains distinct from both `DataSpaceId`
+  and `LaneId`, even when a rendered identifier includes a dataspace suffix.
+- Lane: A logical execution/routing stream inside exactly one Data Space. A
+  Data Space may contain multiple lanes without creating additional physical
+  validator cohorts.
 - Anchor: A cryptographic commitment from a DS block/header included into the nexus chain to bind DS history into the global ledger.
 - Kura: Iroha block storage. Extended here with erasure‑coded blob storage and commitments.
 - WSV: Iroha World State View. Extended here with versioned, snapshot‑capable, erasure‑coded state segments.
@@ -33,10 +40,12 @@ Terminology
  - AIR: Algebraic Intermediate Representation. An algebraic view of computation for STARK‑style proofs, describing execution as field‑based traces with transition and boundary constraints.
 
 Data Spaces Model
-- Identity: `DataSpaceId (DSID)` identifies a DS and namespaces everything. DS can be instantiated at two granularities:
-  - Domain‑DS: `ds::domain::<domain_name>` — execution and state scoped to a domain.
-  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — execution and state scoped to a single asset definition.
-  Both forms coexist; transactions can touch multiple DSIDs atomically.
+- Identity: `DataSpaceId (DSID)` identifies a physical execution, storage, and
+  validator boundary. Domains, account aliases, and asset definitions retain
+  their own logical identifiers and bind explicitly to a home DSID. Creating a
+  domain, namespace, asset, governance module, or lane never implicitly creates
+  a Data Space. Multiple such objects and multiple lanes may share one DSID;
+  transactions can touch multiple DSIDs atomically.
 - Manifest lifecycle: DS creation, updates (key rotation, policy changes), and retirement are recorded in the Space Directory. Each per‑slot DS artifact references the latest manifest hash.
 - Classes: Public DS (open participation, public DA) and Private DS (permissioned, confidential DA). Hybrid policies are possible via manifest flags.
 - Policies per DS: ISI permissions, DA parameters `(k,m)`, encryption, retention, quotas (min/max tx share per block), ZK/optimistic proof policy, fees.
@@ -206,8 +215,14 @@ Consensus and Scheduling
 - Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
 
 Data Model and Namespacing
-- DS‑Qualified IDs: All entities (domains, accounts, assets, roles) are qualified by `dsid`. Example: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- Global References: A global reference is a tuple `(dsid, object_id, version_hint)` and can be placed on‑chain in the nexus layer or in AMX descriptors for cross‑DS use.
+- Namespace bindings: logical namespaces bind explicitly to a home `dsid`;
+  the namespace identifier and the `DataSpaceId` remain separate typed values.
+  Canonical `AccountId` remains domainless, while account labels, domains, and
+  assets carry their own identity and routing context outside that account ID.
+- Global References: A global reference is a tuple
+  `(dsid, namespace_or_object_id, version_hint)` and can be placed on-chain in
+  the nexus layer or in AMX descriptors for cross-DS use. The DSID selects the
+  physical boundary; it does not replace the logical namespace or object ID.
 - Norito Serialization: All cross‑DS messages (AMX descriptors, proofs) use Norito codecs. No serde usage in production paths.
 
 Smart Contracts and IVM Extensions

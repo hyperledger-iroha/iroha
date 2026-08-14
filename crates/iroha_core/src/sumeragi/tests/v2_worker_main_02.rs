@@ -53,6 +53,34 @@ fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
     drop(service.io.take());
 }
 #[test]
+fn unified_lifecycle_take_restores_an_ordinary_held_head_exactly() {
+    let (mut service, _) = fixture();
+    service.held_io_completion = Some(V2IoCompletion::AuxiliaryNoop);
+
+    assert!(matches!(
+        service
+            .take_next_recovered_lifecycle_completion()
+            .expect("ordinary completion classification is non-fatal"),
+        RecoveredLifecycleCompletionTakeV1::PassThrough
+    ));
+    assert!(matches!(
+        service.held_io_completion.as_ref(),
+        Some(V2IoCompletion::AuxiliaryNoop)
+    ));
+
+    assert!(matches!(
+        service
+            .take_next_recovered_lifecycle_completion()
+            .expect("repeated classification observes the same ordinary head"),
+        RecoveredLifecycleCompletionTakeV1::PassThrough
+    ));
+    assert!(matches!(
+        service.held_io_completion.as_ref(),
+        Some(V2IoCompletion::AuxiliaryNoop)
+    ));
+}
+
+#[test]
 fn completion_sources_alternate_under_simultaneous_bursts() {
     let (mut service, _) = fixture();
     let (command_tx, _command_rx, admission) = test_io_command_channel(2);

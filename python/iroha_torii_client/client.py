@@ -29,14 +29,13 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import requests
 from blake3 import blake3
 
-from . import identifier_receipts as _identifier_receipts
+from . import connect_session as _connect_session, identifier_receipts as _identifier_receipts
 from .attachment_client import authenticated_attachment_request
-from . import connect_session as _connect_session
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
     SUMERAGI_EVIDENCE_KIND_FILTERS,
@@ -87,6 +86,18 @@ from .client_status_models import (
     TransportNoritoRpcConfig,
     _KAIGI_HEALTH_STATUSES,
     parse_sumeragi_json_object,
+)
+from .canonical_request_v1 import (
+    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+    CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+    CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+    CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+    CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
+    account_header_value as _canonical_account_header_value,
+    canonical_query_string,
+    require_account_literal as _require_canonical_account_literal,
+    require_nonce as _require_canonical_nonce,
+    validate_target as _validate_canonical_request_target,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
@@ -974,6 +985,11 @@ __all__ = [
     "ToriiCanonicalRequestAuth",
     "ToriiOperatorSigningContext",
     "ToriiLocalSigningContext",
+    "CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1",
+    "CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1",
+    "CANONICAL_REQUEST_MAX_METHOD_BYTES_V1",
+    "CANONICAL_REQUEST_MAX_PATH_BYTES_V1",
+    "CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1",
     "canonical_query_string",
     "canonical_request_message",
     "canonical_network_request_signature_message",
@@ -1088,16 +1104,6 @@ def _read_header_value(
         if isinstance(key, str) and key.lower() == lowered and isinstance(value, str):
             return value
     return None
-
-
-def canonical_query_string(raw: Optional[str]) -> str:
-    """Return Torii's canonical form for a raw query string."""
-
-    if not raw:
-        return ""
-    pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=False)
-    pairs.sort(key=lambda item: (item[0].encode("utf-8"), item[1].encode("utf-8")))
-    return urlencode(pairs)
 
 
 def _split_path_query(path: str) -> Tuple[str, str]:
@@ -1266,15 +1272,19 @@ def canonical_request_message(
     path: str,
     body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
 ) -> bytes:
-    """Build the canonical request bytes accepted by Torii app endpoints."""
+    """Build the canonical request bytes accepted by Torii app endpoints.
+    V1 method, path, query-byte, and query-pair limits are enforced before hashing.
+    """
 
     path_part, query = _split_path_query(path)
+    _validate_canonical_request_target(method, path_part)
+    canonical_query = canonical_query_string(query)
     body_hash = hashlib.sha256(_canonical_body_bytes(body)).hexdigest()
     rendered = "\n".join(
         (
             method.upper(),
             path_part,
-            canonical_query_string(query),
+            canonical_query,
             body_hash,
         )
     )
@@ -1321,7 +1331,7 @@ class ToriiCanonicalRequestAuth:
 
     def __post_init__(self) -> None:
         _offline_hash_literal(self.network_id, "ToriiCanonicalRequestAuth.network_id")
-        _require_exact_non_empty_string(
+        _require_canonical_account_literal(
             self.account_id,
             "ToriiCanonicalRequestAuth.account_id",
         )
@@ -1436,9 +1446,9 @@ def build_canonical_request_headers(
     timestamp_ms: Optional[int] = None,
     nonce: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Build exact-network canonical `X-Iroha-*` headers for a request body."""
+    """Build exact-network headers; I105 accounts use ASCII canonical address hex."""
 
-    account = _require_exact_non_empty_string(account_id, "account_id")
+    account = _require_canonical_account_literal(account_id, "account_id")
     if not callable(signer):
         raise TypeError("signer must be callable")
     effective_timestamp = _require_u64(
@@ -1462,7 +1472,7 @@ def build_canonical_request_headers(
     if not isinstance(signature, (bytes, bytearray, memoryview)):
         raise TypeError("signer must return bytes")
     return {
-        HEADER_ACCOUNT: account,
+        HEADER_ACCOUNT: _canonical_account_header_value(account, _decode_canonical_i105_string),
         HEADER_SIGNATURE: base64.b64encode(bytes(signature)).decode("ascii"),
         HEADER_TIMESTAMP_MS: str(effective_timestamp),
         HEADER_NONCE: effective_nonce,
@@ -1486,16 +1496,6 @@ def _require_u64(value: Any, context: str) -> int:
     if value < 0 or value > (1 << 64) - 1:
         raise ValueError(f"{context} must be an unsigned 64-bit integer")
     return value
-
-
-def _require_canonical_nonce(value: Any, context: str) -> str:
-    nonce = _require_exact_non_empty_string(value, context)
-    encoded = nonce.encode("utf-8")
-    if len(encoded) > 256:
-        raise ValueError(f"{context} must contain at most 256 ASCII bytes")
-    if not nonce.isascii() or any(byte in b" \t\n\r\v\f" for byte in encoded):
-        raise ValueError(f"{context} must contain no ASCII whitespace")
-    return nonce
 
 
 

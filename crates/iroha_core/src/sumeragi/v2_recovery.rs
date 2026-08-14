@@ -1601,6 +1601,7 @@ pub(crate) enum RecoveredSuccessorActivationAuthority {
 pub(crate) struct VerifiedSuccessorHeight {
     verified_context: VerifiedHeightContext,
     activation: DurableSuccessorActivationAuthority,
+    kura_identity: KuraInstanceIdentity,
 }
 impl VerifiedSuccessorHeight {
     /// Borrow the successor's frozen context in recovery fixtures.
@@ -1611,6 +1612,53 @@ impl VerifiedSuccessorHeight {
     /// Consume the successor into its runtime context and one-shot activation authority.
     pub(crate) fn into_parts(self) -> (VerifiedHeightContext, DurableSuccessorActivationAuthority) {
         (self.verified_context, self.activation)
+    }
+
+    /// Consume the verified successor into its runner parts and exact lifecycle storage seal.
+    ///
+    /// The Kura comparison is retained from the same State which authenticated
+    /// successor construction. The signature policy is fixed to rotating leader
+    /// for every post-genesis height; neither policy nor a storage root crosses
+    /// this boundary as a caller-selected input.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn into_parts_with_lifecycle_storage_authority(
+        self,
+        kura: &Kura,
+        genesis_account: &AccountId,
+    ) -> Result<
+        (
+            VerifiedHeightContext,
+            DurableSuccessorActivationAuthority,
+            RecoveredLifecycleStorageAuthorityV1,
+        ),
+        V2RecoveryError,
+    > {
+        let Self {
+            verified_context,
+            activation,
+            kura_identity,
+        } = self;
+        if !kura_identity.matches(kura) {
+            return Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch {
+                height: verified_context.context().height,
+            });
+        }
+        let signature_policy = BlockSignaturePolicy::RotatingLeader;
+        let permit = RecoveredLifecycleStorageMintPermitV1::new(
+            kura,
+            &verified_context,
+            &signature_policy,
+            genesis_account,
+        );
+        let lifecycle_storage_authority =
+            RecoveredLifecycleStorageAuthorityV1::mint_from_recovered_height(
+                kura,
+                &verified_context,
+                &signature_policy,
+                genesis_account,
+                permit,
+            );
+        Ok((verified_context, activation, lifecycle_storage_authority))
     }
 }
 /// Canonical Kura tip which WAL/body replay must bind before ingress opens.
@@ -2056,6 +2104,7 @@ pub(crate) fn build_verified_successor(
                     successor_context_id: verified.context().id(),
                 },
                 verified_context: verified,
+                kura_identity: state.kura().instance_identity(),
             });
         }
     };
@@ -2072,6 +2121,7 @@ pub(crate) fn build_verified_successor(
             successor_context_id: verified_context.context().id(),
         },
         verified_context,
+        kura_identity: state.kura().instance_identity(),
     })
 }
 fn verify_persisted_height(
@@ -2412,6 +2462,12 @@ pub(crate) enum V2RecoveryError {
     /// Persisted successor differs from the unique projection of finalized state.
     #[error("persisted Sumeragi v2 context conflicts with finalized state at height {0}")]
     ConflictingDerivedContext(wire::Height),
+    /// Successor storage projection was asked to cross the Kura instance used for verification.
+    #[error("Sumeragi v2 successor lifecycle storage changed Kura ownership at height {height}")]
+    SuccessorLifecycleStorageKuraMismatch {
+        /// Verified successor height whose storage owner changed.
+        height: wire::Height,
+    },
     /// Height arithmetic overflowed.
     #[error("Sumeragi v2 height overflow")]
     HeightOverflow,
@@ -4493,6 +4549,46 @@ mod tests {
                     && authority.successor_context_id() == first_context.id()
         ));
     }
+    #[test]
+    fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
+        let (verified, keys) = verified_context();
+        let context = verified.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_consensus_keys(&kura, context.network_id, &keys);
+        let block = dummy_block(&keys[0], 1, None);
+        kura.store_block(block.clone())
+            .expect("persist canonical predecessor block");
+        commit_to_state(&state, &block, &context);
+        let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
+        let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+        let store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+        store
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist canonical predecessor context");
+        let genesis_account = AccountId::new(keys[0].public_key().clone());
+
+        let successor = build_verified_successor(&state, &store, &artifact, &receipt)
+            .expect("build exact successor storage projection");
+        let successor_context_id = successor.context().id();
+        let (successor, activation, _storage) = successor
+            .into_parts_with_lifecycle_storage_authority(kura.as_ref(), &genesis_account)
+            .expect("project exact successor lifecycle storage authority");
+        assert_eq!(successor.context().id(), successor_context_id);
+        assert_eq!(activation.successor_context_id(), successor_context_id);
+
+        let foreign_kura = Kura::blank_kura_for_testing();
+        let successor = build_verified_successor(&state, &store, &artifact, &receipt)
+            .expect("rebuild successor before foreign Kura rejection");
+        assert!(matches!(
+            successor.into_parts_with_lifecycle_storage_authority(
+                foreign_kura.as_ref(),
+                &genesis_account,
+            ),
+            Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 2 })
+        ));
+    }
+
     #[test]
     fn successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt() {
         let (verified, keys) = verified_context();

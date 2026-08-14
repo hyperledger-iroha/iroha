@@ -5,8 +5,9 @@
 //! locally and then call the authoritative Soracloud control plane through
 //! Torii. Model-training, Hugging Face shared-lease, and weight-lifecycle
 //! helpers also execute through live Torii endpoints. Outbound mutation DTOs
-//! carry signed provenance only; account identity uses HTTP signature/witness
-//! headers, while protected GETs require the exact NetworkId and local key.
+//! carry signed provenance only; single-signature account headers use canonical
+//! lowercase hex while signed bodies and paths retain I105. Protected GETs
+//! require the exact NetworkId and local key.
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -17,10 +18,14 @@ use std::{
     process::Command as ProcessCommand,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use base64::Engine as _;
 use eyre::{Report, Result, WrapErr, eyre};
 use iroha::{
-    client::Client,
+    client::{
+        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1, Client, canonical_network_request_hash,
+        canonical_network_request_signature_message, canonical_request_account_header_value,
+        canonical_request_signature_header_value, canonical_request_timestamp_header_value,
+        canonical_request_witness_header_value,
+    },
     config::Config as ClientConfig,
     data_model::{
         Encode,
@@ -86,10 +91,7 @@ use iroha_core::soracloud_runtime::{
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use norito::{
-    json::{self, JsonDeserialize, JsonSerialize},
-    to_bytes,
-};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
     rngs::OsRng,
@@ -152,6 +154,8 @@ const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
 const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
 const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
+const SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1: u64 =
+    (CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1 * 2) as u64;
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
     static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
@@ -11728,77 +11732,46 @@ fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
         )),
     })
 }
-fn canonical_query_string(raw: Option<&str>) -> String {
-    let Some(raw) = raw else {
-        return String::new();
-    };
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in pairs {
-        serializer.append_pair(&key, &value);
-    }
-    serializer.finish()
-}
-fn canonical_request_message(method: &str, endpoint: &reqwest::Url, body: &[u8]) -> Vec<u8> {
-    let body_hash = Sha256::digest(body);
-    format!(
-        "{}\n{}\n{}\n{}",
-        method.to_ascii_uppercase(),
-        endpoint.path(),
-        canonical_query_string(endpoint.query()),
-        hex::encode(body_hash)
-    )
-    .into_bytes()
-}
-fn canonical_network_request_message(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-) -> Vec<u8> {
-    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
-    let request = canonical_request_message(method, endpoint, body);
-    let mut message =
-        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
-    message.extend_from_slice(DOMAIN);
-    message.extend_from_slice(network_id.as_bytes());
-    message.extend_from_slice(&request);
-    message
-}
-fn canonical_network_request_hash(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-) -> Hash {
-    Hash::new(canonical_network_request_message(
-        network_id, method, endpoint, body,
-    ))
-}
-fn canonical_network_request_signature_message(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-    timestamp_ms: u64,
-    nonce: &str,
-) -> Vec<u8> {
-    let mut message = canonical_network_request_message(network_id, method, endpoint, body);
-    message.push(b'\n');
-    message.extend_from_slice(timestamp_ms.to_string().as_bytes());
-    message.push(b'\n');
-    message.extend_from_slice(nonce.as_bytes());
-    message
-}
 fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1> {
-    let bytes = fs::read(path)
+    let mut file = fs::File::open(path)
+        .wrap_err_with(|| format!("failed to open Soracloud witness file `{}`", path.display()))?;
+    let file_bytes = file
+        .metadata()
+        .wrap_err_with(|| {
+            format!(
+                "failed to inspect Soracloud witness file `{}`",
+                path.display()
+            )
+        })?
+        .len();
+    if file_bytes > SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "Soracloud witness file `{}` exceeds the V1 limit of {SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1} bytes",
+            path.display()
+        ));
+    }
+    let file_bytes = usize::try_from(file_bytes)
+        .wrap_err("Soracloud witness file length exceeds platform capacity")?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(file_bytes)
+        .wrap_err_with(|| format!("failed to reserve {file_bytes} Soracloud witness bytes"))?;
+    bytes.resize(file_bytes, 0);
+    file.read_exact(&mut bytes)
         .wrap_err_with(|| format!("failed to read Soracloud witness file `{}`", path.display()))?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).wrap_err_with(|| {
+        format!(
+            "failed to finish Soracloud witness file `{}`",
+            path.display()
+        )
+    })? != 0
+    {
+        return Err(eyre!(
+            "Soracloud witness file `{}` changed while it was being read",
+            path.display()
+        ));
+    }
     let witness: CanonicalRequestWitnessV1 = json::from_slice(&bytes).wrap_err_with(|| {
         format!(
             "failed to decode Soracloud witness file `{}`",
@@ -11836,22 +11809,26 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
                 submission_config.account
             ));
         }
-        let expected_hash =
-            canonical_network_request_hash(&submission_config.network_id, "POST", endpoint, body);
+        let expected_hash = canonical_network_request_hash(
+            &submission_config.network_id,
+            &reqwest::Method::POST,
+            endpoint,
+            body,
+        )?;
         if witness.canonical_request_hash != expected_hash {
             return Err(eyre!(
                 "Soracloud witness canonical_request_hash does not match the POST {} request",
                 endpoint.path()
             ));
         }
-        return Ok(vec![
-            (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
-            (
-                HEADER_IROHA_WITNESS,
-                base64::engine::general_purpose::STANDARD
-                    .encode(to_bytes(&witness).wrap_err("failed to encode Soracloud witness")?),
-            ),
-        ]);
+        let witness_header = canonical_request_witness_header_value(&witness)
+            .wrap_err("failed to encode Soracloud witness header")?;
+        let mut headers = Vec::new();
+        headers
+            .try_reserve_exact(1)
+            .wrap_err("failed to reserve Soracloud witness header")?;
+        headers.push((HEADER_IROHA_WITNESS, witness_header));
+        return Ok(headers);
     }
     build_soracloud_signature_auth_headers_with_rng(submission_config, "POST", endpoint, body, rng)
 }
@@ -11883,25 +11860,42 @@ fn build_soracloud_signature_auth_headers_with_rng<R: TryCryptoRng>(
     let mut nonce_bytes = [0_u8; 16];
     rng.try_fill_bytes(&mut nonce_bytes)
         .map_err(|error| eyre!("Soracloud request signature nonce OS RNG failed: {error}"))?;
-    let nonce = hex::encode(nonce_bytes);
+    let nonce_encoded_bytes = nonce_bytes
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| eyre!("Soracloud request signature nonce length exceeds capacity"))?;
+    let mut nonce_encoded = Vec::new();
+    nonce_encoded
+        .try_reserve_exact(nonce_encoded_bytes)
+        .wrap_err("failed to reserve Soracloud request signature nonce")?;
+    nonce_encoded.resize(nonce_encoded_bytes, 0);
+    hex::encode_to_slice(nonce_bytes, &mut nonce_encoded)
+        .wrap_err("failed to encode Soracloud request signature nonce")?;
+    let nonce = String::from_utf8(nonce_encoded)
+        .wrap_err("Soracloud request signature nonce is not UTF-8")?;
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .wrap_err("invalid Soracloud canonical request method")?;
     let message = canonical_network_request_signature_message(
         &submission_config.network_id,
-        method,
+        &method,
         endpoint,
         body,
         timestamp_ms,
         &nonce,
-    );
+    )?;
     let signature = sign_soracloud_payload(&submission_config.key_pair, &message)?;
-    Ok(vec![
-        (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
-        (
-            HEADER_IROHA_SIGNATURE,
-            base64::engine::general_purpose::STANDARD.encode(signature.payload()),
-        ),
-        (HEADER_IROHA_TIMESTAMP_MS, timestamp_ms.to_string()),
-        (HEADER_IROHA_NONCE, nonce),
-    ])
+    let account = canonical_request_account_header_value(&submission_config.account)?;
+    let signature = canonical_request_signature_header_value(&signature)?;
+    let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
+    let mut headers = Vec::new();
+    headers
+        .try_reserve_exact(4)
+        .wrap_err("failed to reserve Soracloud canonical auth headers")?;
+    headers.push((HEADER_IROHA_ACCOUNT, account));
+    headers.push((HEADER_IROHA_SIGNATURE, signature));
+    headers.push((HEADER_IROHA_TIMESTAMP_MS, timestamp));
+    headers.push((HEADER_IROHA_NONCE, nonce));
+    Ok(headers)
 }
 fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
     let instructions = payload
@@ -11997,6 +11991,8 @@ where
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .build()
         .wrap_err("failed to build HTTP client for soracloud mutation")?;
     let mut request = client
@@ -22458,10 +22454,11 @@ mod tests {
             nonce: "fixture-witness".to_owned(),
             canonical_request_hash: canonical_network_request_hash(
                 &config.network_id,
-                "POST",
+                &reqwest::Method::POST,
                 &endpoint,
                 body,
-            ),
+            )
+            .expect("bounded canonical witness request hash"),
             signatures: Vec::new(),
         };
         let dir = temp_dir("witness_account_mismatch");

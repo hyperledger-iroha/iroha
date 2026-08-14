@@ -1,6 +1,6 @@
 //! Merkle tree implementation for light clients to efficiently verify transaction inclusion proofs.
 //! This is the canonical Merkle type used across the workspace (node and IVM).
-use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
+use crate::{Hash, HashOf};
 use iroha_schema::{IntoSchema, TypeId};
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -8,8 +8,8 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
+use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
 use thiserror::Error;
-use crate::{Hash, HashOf};
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
 /// Maximum number of leaves addressable by the canonical `u32` proof index.
 const MERKLE_PROOF_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;

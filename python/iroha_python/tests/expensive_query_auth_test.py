@@ -25,6 +25,9 @@ ACCOUNT_ID = AccountAddress.from_account(
     domain="query-auth",
     public_key=bytes([0x31]) * 32,
 ).to_i105(0x02F1)
+ACCOUNT_HEADER = AccountAddress.parse_encoded(
+    ACCOUNT_ID, expected_discriminant=0x02F1
+).canonical_hex()
 
 
 def _response(status: int = 200) -> requests.Response:
@@ -111,7 +114,7 @@ def test_all_existing_query_callers_sign_the_exact_one_shot_target() -> None:
     for call, message in zip(session.calls, captured, strict=True):
         assert call["method"] == "POST"
         assert call["allow_redirects"] is False
-        assert call["headers"]["X-Iroha-Account"] == ACCOUNT_ID
+        assert call["headers"]["X-Iroha-Account"] == ACCOUNT_HEADER
         assert message == canonical_network_request_signature_message(
             NETWORK_ID.literal,
             "POST",
@@ -151,18 +154,14 @@ def test_foreign_genesis_and_legacy_auth_shapes_fail_before_dispatch() -> None:
     assert missing_session.calls == []
 
     precomputed_session = _Session([])
-    precomputed = _client(
-        precomputed_session,
-        default_headers={"X-Iroha-Signature": "precomputed"},
-    )
-    with pytest.raises(ValueError, match="canonical authentication header"):
-        precomputed.query_accounts(limit=1)
+    with pytest.raises(ValueError, match="canonical authentication headers"):
+        _client(precomputed_session, default_headers={"X-Iroha-Signature": "precomputed"})
     assert precomputed_session.calls == []
 
 
 def test_query_dispatch_is_not_retried_after_a_503() -> None:
     session = _Session([503])
     client = _client(session)
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RuntimeError, match="unexpected status 503"):
         client.query_accounts(limit=1)
     assert len(session.calls) == 1

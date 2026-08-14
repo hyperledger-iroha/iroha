@@ -1246,7 +1246,7 @@ pub mod json {
     mod validated;
     pub use bounded::{
         BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
-        write_json_string_to, write_json_unbounded,
+        write_json_display_to, write_json_string_to, write_json_unbounded,
     };
     #[doc(hidden)]
     pub use canonical_base64::{

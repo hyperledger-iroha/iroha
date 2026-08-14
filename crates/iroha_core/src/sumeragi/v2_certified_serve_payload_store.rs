@@ -2986,7 +2986,7 @@ mod tests {
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("persist verified locally retained request");
         let outcome = CertifiedServePayloadNegativeOutcome::Rejected(19);
-        store
+        let _ = store
             .persist_negative(pending.id(), outcome)
             .expect("persist typed negative");
         let live_retirement = store
@@ -3106,7 +3106,7 @@ mod tests {
             CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
                 .expect("open second payload owner at the same directory");
         assert!(second_recovery.is_empty());
-        second_owner
+        let _ = second_owner
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("publish a valid payload behind the first owner's index");
         assert!(matches!(
@@ -3276,7 +3276,7 @@ mod tests {
             .expect("persist verified locally retained request");
         let responder = 1;
         let response = signed_certified_response(&request, manifest, body, responder, &keys);
-        payload_store
+        let _ = payload_store
             .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
             .expect("persist completed response");
         drop(payload_store);
@@ -3318,7 +3318,7 @@ mod tests {
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("persist verified locally retained request");
         let response = signed_certified_response(&request, manifest, body, 1, &keys);
-        payload_store
+        let _ = payload_store
             .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
             .expect("persist completed response");
         drop(payload_store);

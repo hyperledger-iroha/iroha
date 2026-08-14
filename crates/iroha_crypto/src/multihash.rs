@@ -1,13 +1,13 @@
 //! Module with multihash implementation
+use crate::{Algorithm, ParseError, hex_decode, varint};
+use derive_more::Display;
 use std::{
     format,
     string::{String, ToString as _},
     vec,
     vec::Vec,
 };
-use derive_more::Display;
 use zeroize::Zeroizing;
-use crate::{Algorithm, ParseError, hex_decode, varint};
 pub fn decode_public_key(bytes: &[u8]) -> Result<(Algorithm, Vec<u8>), ParseError> {
     let (digest_function, payload) = decode_multihash(bytes)?;
     let algorithm = digest_function_public::decode(digest_function)?;
@@ -255,8 +255,8 @@ fn decode_private_multihash_hex_bytes(s: &str) -> Result<Zeroizing<Vec<u8>>, Par
 /// See [official multihash table](https://github.com/multiformats/multicodec/blob/master/table.csv)
 type DigestFunction = u64;
 mod digest_function_public {
-    use std::string::String;
     use crate::{Algorithm, error::ParseError, multihash::DigestFunction};
+    use std::string::String;
     const ED_25519: DigestFunction = 0xed;
     const SECP_256_K1: DigestFunction = 0xe7;
     // Provisional multicodec for ML‑DSA (Dilithium3) public keys; align with upstream when assigned.
@@ -331,8 +331,8 @@ mod digest_function_public {
     }
 }
 mod digest_function_private {
-    use std::string::String;
     use crate::{Algorithm, error::ParseError, multihash::DigestFunction};
+    use std::string::String;
     const ED_25519: DigestFunction = 0x1300;
     const SECP_256_K1: DigestFunction = 0x1301;
     // Provisional multicodec for ML‑DSA (Dilithium3) private keys; align with upstream when assigned.

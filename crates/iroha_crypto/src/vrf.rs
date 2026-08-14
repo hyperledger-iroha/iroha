@@ -24,20 +24,20 @@
 //! - Consumers should always pass/return raw bytes (`Blob`) over the pointer‑ABI
 //!   and Norito‑encode higher-level envelopes as needed.
 #![allow(clippy::size_of_ref)]
-use core::convert::TryInto;
-#[cfg(test)]
-use std::vec::Vec;
-use blake2::Digest;
-use group::{Curve, prime::PrimeCurveAffine};
-#[allow(unused_imports)]
-use w3f_bls::SerializableToBytes as _;
-use zeroize::Zeroizing;
 use crate::{
     Blake2b256,
     signature::bls::{
         BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
     },
 };
+use blake2::Digest;
+use core::convert::TryInto;
+use group::{Curve, prime::PrimeCurveAffine};
+#[cfg(test)]
+use std::vec::Vec;
+#[allow(unused_imports)]
+use w3f_bls::SerializableToBytes as _;
+use zeroize::Zeroizing;
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
 const DST_G1: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";

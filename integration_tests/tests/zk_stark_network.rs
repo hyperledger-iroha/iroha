@@ -192,11 +192,11 @@ fn add_canonical_prove_headers(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )?;
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
-        .header(HEADER_ACCOUNT, client.account.to_string())
-        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_ACCOUNT, client.account.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce))
 }

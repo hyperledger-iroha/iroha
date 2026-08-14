@@ -1,4 +1,13 @@
+#[cfg(test)]
+use blstrs::G2Prepared;
+use blstrs::{G1Affine, G2Affine};
 use core::marker::PhantomData;
+use group::prime::PrimeCurveAffine;
+use parking_lot::Mutex;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryCryptoRng;
 #[cfg(test)]
 use std::sync::Arc;
 use std::{
@@ -6,15 +15,6 @@ use std::{
     sync::OnceLock,
     vec::Vec,
 };
-#[cfg(test)]
-use blstrs::G2Prepared;
-use blstrs::{G1Affine, G2Affine};
-use group::prime::PrimeCurveAffine;
-use parking_lot::Mutex;
-#[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-#[cfg(feature = "rand")]
-use rand_core::TryCryptoRng;
 use w3f_bls::{
     EngineBLS, PublicKey as W3fPublicKey, SerializableToBytes as _, Signature as W3fSignature,
 };
@@ -56,6 +56,22 @@ fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Er
     }
     Ok(())
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static PUBLIC_KEY_CACHE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_public_key_cache_calls() {
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn public_key_cache_calls() -> usize {
+    PUBLIC_KEY_CACHE_CALLS.with(core::cell::Cell::get)
+}
+
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
     // true: Normal (pk in G1, sig in G2); false: Small (pk in G2, sig in G1)
@@ -293,6 +309,29 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             _m: PhantomData,
         })
     }
+
+    /// Validate compressed public-key bytes for bounded decoding without
+    /// consulting or populating the process-wide public-key caches.
+    pub(crate) fn validate_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
+        if bls_public_key_material_is_all_zero(payload) {
+            return Err(ParseError(
+                "BLS public key material must not be all zero".to_string(),
+            ));
+        }
+        let valid = if C::NORMAL {
+            to_g1(payload).is_some()
+        } else {
+            to_g2(payload).is_some()
+        };
+        if valid {
+            Ok(())
+        } else if C::NORMAL {
+            Err(ParseError("invalid G1 public key".to_string()))
+        } else {
+            Err(ParseError("invalid G2 public key".to_string()))
+        }
+    }
+
     pub fn parse_private_key(payload: &[u8]) -> Result<SecretKey<C>, ParseError> {
         if payload.len() != 32 {
             return Err(ParseError("invalid BLS secret key length".to_string()));
@@ -483,6 +522,8 @@ fn g2_prepared_generator() -> &'static Arc<G2Prepared> {
     GENERATOR.get_or_init(|| Arc::new(G2Prepared::from(G2Affine::generator())))
 }
 fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
+    #[cfg(test)]
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if let Some(point) = g1_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
@@ -495,6 +536,8 @@ fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
     Some(point)
 }
 fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
+    #[cfg(test)]
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if let Some(point) = g2_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
@@ -688,6 +731,36 @@ mod tests {
         let cached = to_g2_public_key(&bytes).expect("cached public key");
         assert_eq!(parsed.to_compressed(), cached.to_compressed());
     }
+
+    #[test]
+    fn decode_public_key_validation_bypasses_caches() {
+        let (normal, _normal_secret) =
+            BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![0x31; 8]))
+                .expect("normal BLS keypair");
+        let (small, _small_secret) =
+            BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![0x32; 8]))
+                .expect("small BLS keypair");
+
+        reset_public_key_cache_calls();
+        BlsImpl::<CNormal>::validate_public_key_for_decode(normal.as_bytes())
+            .expect("normal decode validation");
+        BlsImpl::<CSmall>::validate_public_key_for_decode(small.as_bytes())
+            .expect("small decode validation");
+        assert_eq!(
+            public_key_cache_calls(),
+            0,
+            "decode validation must not consult the process-wide caches"
+        );
+
+        BlsImpl::<CNormal>::parse_public_key(normal.as_bytes()).expect("ordinary normal parse");
+        BlsImpl::<CSmall>::parse_public_key(small.as_bytes()).expect("ordinary small parse");
+        assert_eq!(
+            public_key_cache_calls(),
+            2,
+            "the observation counter must see both ordinary cached parsers"
+        );
+    }
+
     #[test]
     fn prepared_generator_is_cached() {
         let first = g2_prepared_generator();

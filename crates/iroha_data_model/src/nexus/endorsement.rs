@@ -1,8 +1,8 @@
 //! Domain endorsement payloads and records.
+use crate::{domain::DomainId, nexus::DataSpaceId, prelude::Metadata};
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{domain::DomainId, nexus::DataSpaceId, prelude::Metadata};
 /// Current domain endorsement version.
 pub const DOMAIN_ENDORSEMENT_VERSION_V1: u8 = 1;
 /// Scope covered by a domain endorsement (dataspace and optional block window).
@@ -137,9 +137,9 @@ pub struct DomainEndorsementRecord {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
     use crate::metadata::Metadata;
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }

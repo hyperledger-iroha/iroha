@@ -6,11 +6,8 @@
 //! the source-specific preflight and output limits installed below. Iterable
 //! admission is coupled to source-specific immutable-world adapters in
 //! `ordinary_iterable` before a query implementation can clone any row.
-use std::{
-    fmt,
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
+use super::{QueryCountMode, QueryExecutionBudget, QueryLimits, STREAMING_SORTED_PREFIX_LIMIT};
+use crate::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::{
     query::{
         QueryRequest, QueryResponse, SingularQueryBox, error::QueryExecutionFail as Error,
@@ -21,8 +18,11 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 use norito::core::{DecodeFlagsGuard, NoritoSerialize};
-use super::{QueryCountMode, QueryExecutionBudget, QueryLimits, STREAMING_SORTED_PREFIX_LIMIT};
-use crate::state::{StateReadOnly, WorldReadOnly};
+use std::{
+    fmt,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 /// Conservative resident charge for one name-backed identifier source row.
 ///
 /// `Name` is protocol-limited to 255 bytes. The additional allowance covers
@@ -57,7 +57,7 @@ pub enum OrdinaryQueryExecutionLimitError {
     /// Neither items nor source bytes consume deterministic work units.
     UnmeteredExecutionBudget,
     /// The deterministic execution budget cannot cover both immutable-source
-    /// passes for one full page plus its continuation probe.
+    /// passes for one full page plus its continuation probe and response.
     ExecutionBudgetTooSmall,
     /// The retained request-graph ceiling exceeds the schema-audited allocation
     /// ceiling used when replaying its canonical Start archive.
@@ -78,7 +78,7 @@ impl fmt::Display for OrdinaryQueryExecutionLimitError {
                 "ordinary query execution budget must charge items or source bytes"
             }
             Self::ExecutionBudgetTooSmall => {
-                "ordinary query execution budget cannot cover two source passes plus probe"
+                "ordinary query execution budget cannot cover two source passes, probe, and response"
             }
             Self::RequestGraphExceedsDecodeLimit => {
                 "ordinary query request graph exceeds its replay decode limit"
@@ -221,8 +221,11 @@ impl OrdinaryQueryExecutionLimits {
             .checked_mul(max_source_item_bytes)
             .and_then(|bytes| bytes.checked_mul(ORDINARY_SOURCE_FRAME_TRAVERSALS))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let complete_bytes = probe_source_bytes
+            .checked_add(max_response_bytes)
+            .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         execution_budget
-            .ensure(source_items, probe_source_bytes)
+            .ensure(source_items, complete_bytes)
             .map_err(|_| OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)?;
         let revalidation_graph_bytes =
             u64::try_from(revalidation_decode_limits.max_total_allocated_bytes())
@@ -641,10 +644,15 @@ fn ensure_world_state_start_shape(
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<(), Error> {
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
+    if query_limits.count_mode != QueryCountMode::Bounded {
+        return Err(Error::Conversion(
+            "ordinary peer adapter requires bounded query counting".to_owned(),
+        ));
+    }
     let peer_source = if let Some(query_box) = super::legacy_query_box(start) {
-        non_fast_peer_source_shape(query_box)
+        legacy_peer_source_shape(query_box)
     } else {
-        fast_peer_source_shape(start, query_limits)?
+        canonical_peer_source_shape(start, query_limits)?
     };
     if !peer_source {
         // TODO: Add query-specific borrowed adapters for the remaining 36
@@ -665,7 +673,7 @@ fn ensure_world_state_start_shape(
     }
     ensure_iterable_params(&start.params, mode, query_limits, limits)
 }
-fn non_fast_peer_source_shape(
+fn legacy_peer_source_shape(
     query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
 ) -> bool {
     let Some(erased) =
@@ -680,8 +688,7 @@ fn non_fast_peer_source_shape(
         && erased.predicate().is_pass()
         && erased.selector().iter().next().is_none()
 }
-#[cfg(feature = "fast_dsl")]
-fn fast_peer_source_shape(
+fn canonical_peer_source_shape(
     start: &iroha_data_model::query::QueryWithParams,
     query_limits: QueryLimits,
 ) -> Result<bool, Error> {
@@ -690,9 +697,7 @@ fn fast_peer_source_shape(
         dsl::{CompoundPredicate, SelectorTuple},
         peer::prelude::FindPeers,
     };
-    let Some((item, predicate, selector, payload)) = start.fast_dsl_parts() else {
-        return Ok(false);
-    };
+    let (item, predicate, selector, payload) = start.parts();
     if item != QueryItemKind::PeerId {
         return Ok(false);
     }
@@ -702,13 +707,6 @@ fn fast_peer_source_shape(
     let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> = decoder.decode(predicate)?;
     let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
-}
-#[cfg(not(feature = "fast_dsl"))]
-fn fast_peer_source_shape(
-    _start: &iroha_data_model::query::QueryWithParams,
-    _query_limits: QueryLimits,
-) -> Result<bool, Error> {
-    Ok(false)
 }
 fn ensure_iterable_params(
     params: &QueryParams,
@@ -1438,16 +1436,16 @@ pub(super) fn preflight_server_singular_source_materialization(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
+    use super::*;
     use iroha_data_model::query::{
         parameters::{FetchSize, Pagination},
         runtime::prelude::FindAbiVersion,
     };
     use nonzero_ext::nonzero;
-    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
     #[derive(Debug)]
     struct TestReservation {
         bytes: u64,
@@ -1532,9 +1530,6 @@ mod tests {
             SelectorTuple::default(),
             norito::codec::Encode::encode(&FindPeers),
         ));
-        #[cfg(feature = "fast_dsl")]
-        let query = QueryWithParams::new(&query, params);
-        #[cfg(not(feature = "fast_dsl"))]
         let query = QueryWithParams::new(&query, params);
         QueryRequest::Start(query)
     }
@@ -1555,7 +1550,7 @@ mod tests {
         );
     }
     #[test]
-    fn validated_geometry_requires_two_exact_source_passes() {
+    fn validated_geometry_requires_two_exact_source_passes_and_response() {
         let max_page_items = 4_u64;
         let max_source_item_bytes = 1_024_u64;
         let page_with_probe = max_page_items.checked_add(1).expect("F + 1");
@@ -1568,6 +1563,7 @@ mod tests {
             .expect("probe bytes");
         let exact_units = source_items
             .checked_add(probe_bytes)
+            .and_then(|units| units.checked_add(4 * 1_024))
             .expect("weighted units");
         let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
         let execution_headroom = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
@@ -1751,7 +1747,7 @@ mod tests {
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
                 1,
-                QueryExecutionBudget::from_weighted_limit(12, 0, 1),
+                QueryExecutionBudget::from_weighted_limit(13, 0, 1),
                 1,
                 required - 1,
                 1,
@@ -1864,7 +1860,9 @@ mod tests {
     #[test]
     fn peer_adapter_admission_is_exact_and_pre_source() {
         let ordinary = limits();
-        let query_limits = QueryLimits::new(16).with_ordinary_execution_limits(ordinary);
+        let query_limits = QueryLimits::new(16)
+            .with_count_mode(QueryCountMode::Bounded)
+            .with_ordinary_execution_limits(ordinary);
         ensure_request_admitted(
             &peer_start(QueryParams::default()),
             OrdinaryCursorMode::Ephemeral,
@@ -1879,6 +1877,15 @@ mod tests {
                 &peer_start(offset),
                 OrdinaryCursorMode::Ephemeral,
                 query_limits,
+                ordinary,
+            ),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            ensure_request_admitted(
+                &peer_start(QueryParams::default()),
+                OrdinaryCursorMode::Ephemeral,
+                QueryLimits::new(16).with_ordinary_execution_limits(ordinary),
                 ordinary,
             ),
             Err(Error::Conversion(_))

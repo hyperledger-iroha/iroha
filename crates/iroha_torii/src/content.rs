@@ -783,7 +783,8 @@ mod tests {
             &[],
             timestamp_ms,
             &nonce,
-        );
+        )
+        .expect("canonical content test request is within V1 limits");
         let signature = Signature::try_new(key_pair.private_key(), &message)
             .expect("checked content signed-header fixture signature");
         signature
@@ -792,11 +793,16 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             crate::HEADER_ACCOUNT,
-            account.to_string().parse().expect("account header"),
+            account
+                .to_canonical_hex()
+                .expect("canonical account header")
+                .parse()
+                .expect("account header"),
         );
         headers.insert(
             crate::HEADER_SIGNATURE,
             crate::signature_header_value(&signature)
+                .expect("encode valid signature header")
                 .parse()
                 .expect("signature header"),
         );

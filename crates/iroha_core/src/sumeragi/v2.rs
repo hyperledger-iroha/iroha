@@ -8,14 +8,14 @@
 //! acknowledged to the reducer.  Consequently a caller can never observe a
 //! signing, broadcast, view-change, or apply effect which was causally ordered
 //! after an unacknowledged safety write.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "first-release recovery seams are test-sealed before cutover"
-    )
-)]
 use super::v2_core as reducer;
+
+#[path = "v2_pending_kura_recovery.rs"]
+mod pending_kura_recovery;
+pub(in crate::sumeragi) use pending_kura_recovery::{
+    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
+};
+
 #[cfg(test)]
 use super::v2_lifecycle_coordinator::{
     AuthenticatedLifecycleRecoveryCut, DurableAuthenticatedRecoveredWalValidateLifecycleRepair,
@@ -689,8 +689,73 @@ enum RecoveredWalStartupAuthorityV1 {
 enum PreparedRecoveredWalStartupAuthorityV1 {
     None,
     PhaseVote(RecoveredWalVoteSign),
-    ControlSign(AuthenticatedRecoveredWalControlProjection),
+    ControlSign {
+        projection: AuthenticatedRecoveredWalControlProjection,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
+    },
     DecisionFetch(AuthenticatedRecoveredWalDecisionFetchProjection),
+}
+
+/// Opaque recovered ownership of one already-attempted local Proposal.
+///
+/// The WAL-authenticated control Sign is the sole mint. The token exposes only
+/// a fixed comparison against the reducer's current proposal directive, so the
+/// runner can suppress duplicate local assembly without receiving a replayed
+/// effect, tag, round, or subject.
+#[must_use = "recovered local Proposal ownership must initialize runner proposal state"]
+pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
+    tag: reducer::EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+}
+
+impl RecoveredLifecycleLocalProposalAttemptV1 {
+    fn from_control(control: &RecoveredWalControlSign) -> Option<Self> {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(proposal),
+        } = &control.effect
+        else {
+            return None;
+        };
+        Some(Self {
+            tag: *tag,
+            round: proposal.round,
+            subject: proposal.subject,
+        })
+    }
+
+    /// Compare only against reducer-owned current proposal constraints.
+    pub(in crate::sumeragi) fn exactly_matches_directive(
+        &self,
+        current: LocalProposalDirective,
+    ) -> bool {
+        self.tag == current.tag()
+            && self.round.height == self.tag.height()
+            && self.round.view == self.tag.view()
+            && current.decided_subject().is_none()
+            && current
+                .locked_body()
+                .is_none_or(|(locked_round, locked_subject)| {
+                    self.round.context_id == locked_round.context_id
+                        && self.round.height == locked_round.height
+                        && self.subject == locked_subject
+                })
+    }
+
+    /// Build a comparison-only recovery owner for focused boundary tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn for_test(
+        tag: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Self {
+        Self {
+            tag,
+            round,
+            subject,
+        }
+    }
 }
 /// Adapter and residual replay effects retained by the sole lifecycle owner.
 ///
@@ -877,6 +942,8 @@ enum ProductionLifecycleAdapterStartupStateV1 {
     Recovered {
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
+        pending_kura_apply: Option<RecoveredPendingKuraApplyReplayV1>,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
         leader_wire_launch_prepared: bool,
     },
     #[cfg(test)]
@@ -954,6 +1021,24 @@ impl ProductionLifecycleAdapterStartupV1 {
             state: ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
+                pending_kura_apply: None,
+                local_proposal_attempt: None,
+                leader_wire_launch_prepared: false,
+            },
+        }
+    }
+
+    fn recovered_with_local_proposal_attempt(
+        adapter: SumeragiV2Adapter,
+        effects: Vec<AdapterEffect>,
+        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
+    ) -> Self {
+        Self {
+            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply: None,
+                local_proposal_attempt,
                 leader_wire_launch_prepared: false,
             },
         }
@@ -994,6 +1079,8 @@ impl ProductionLifecycleAdapterStartupV1 {
         let ProductionLifecycleAdapterStartupStateV1::Recovered {
             adapter,
             effects,
+            pending_kura_apply: None,
+            local_proposal_attempt,
             leader_wire_launch_prepared: false,
         } = self.state
         else {
@@ -1113,7 +1200,11 @@ impl ProductionLifecycleAdapterStartupV1 {
         };
         Ok(
             PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
-                startup: Self::recovered(adapter, effects),
+                startup: Self::recovered_with_local_proposal_attempt(
+                    adapter,
+                    effects,
+                    local_proposal_attempt,
+                ),
                 broadcast,
                 next_sign,
                 expected_proposal_manifest_hash,
@@ -1137,6 +1228,8 @@ impl ProductionLifecycleAdapterStartupV1 {
         let ProductionLifecycleAdapterStartupStateV1::Recovered {
             mut adapter,
             effects,
+            pending_kura_apply: None,
+            local_proposal_attempt: None,
             leader_wire_launch_prepared: false,
         } = self.state
         else {
@@ -1177,6 +1270,8 @@ impl ProductionLifecycleAdapterStartupV1 {
         let ProductionLifecycleAdapterStartupStateV1::Recovered {
             mut adapter,
             effects,
+            pending_kura_apply: None,
+            local_proposal_attempt,
             leader_wire_launch_prepared: false,
         } = self.state
         else {
@@ -1302,7 +1397,11 @@ impl ProductionLifecycleAdapterStartupV1 {
             reducer::StepDisposition::Applied,
             core_effects.len(),
         );
-        Ok(Self::recovered(adapter, effects))
+        Ok(Self::recovered_with_local_proposal_attempt(
+            adapter,
+            effects,
+            local_proposal_attempt,
+        ))
     }
     /// Rejoin an already-fsynced Broadcast-plus-next-Sign pair to the cold adapter.
     ///
@@ -1322,6 +1421,8 @@ impl ProductionLifecycleAdapterStartupV1 {
         let ProductionLifecycleAdapterStartupStateV1::Recovered {
             adapter,
             effects,
+            pending_kura_apply: None,
+            local_proposal_attempt,
             leader_wire_launch_prepared: false,
         } = self.state
         else {
@@ -1464,7 +1565,11 @@ impl ProductionLifecycleAdapterStartupV1 {
             reducer::StepDisposition::Applied,
             core_effects.len(),
         );
-        Ok(Self::recovered(adapter, effects))
+        Ok(Self::recovered_with_local_proposal_attempt(
+            adapter,
+            effects,
+            local_proposal_attempt,
+        ))
     }
     /// Seal every adapter-owned input required by the adjacent gate open.
     ///
@@ -1480,6 +1585,7 @@ impl ProductionLifecycleAdapterStartupV1 {
                 adapter,
                 effects,
                 leader_wire_launch_prepared,
+                ..
             } if effects.is_empty()
                 && !*leader_wire_launch_prepared
                 && adapter.wal.matches_path(expected_wal_path) =>
@@ -1516,44 +1622,6 @@ impl ProductionLifecycleAdapterStartupV1 {
             #[cfg(test)]
             ProductionLifecycleAdapterStartupStateV1::Fixture => {
                 Err("fixture adapter cannot mint production leader-wire authority")
-            }
-        }
-    }
-    /// Consume the sealed adapter startup directly into the serialized runtime.
-    pub(in crate::sumeragi) fn into_serialized_runtime(
-        self,
-        started_at: Instant,
-        round_timeout: std::time::Duration,
-        queue_config: super::v2_runtime::RuntimeQueueConfig,
-        lifecycle_ordinals: super::v2_runtime::RuntimeLifecycleOrdinalSource,
-    ) -> Result<super::v2_runtime::SerializedV2Runtime, super::v2_runtime::RuntimeConfigError> {
-        match self.state {
-            ProductionLifecycleAdapterStartupStateV1::Recovered {
-                adapter,
-                effects,
-                leader_wire_launch_prepared: true,
-            } if effects.is_empty() => {
-                let (runtime, returned_effects) =
-                    super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
-                        adapter,
-                        effects,
-                        started_at,
-                        round_timeout,
-                        queue_config,
-                        lifecycle_ordinals,
-                    )?;
-                if returned_effects.is_empty() {
-                    Ok(runtime)
-                } else {
-                    Err(super::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership)
-                }
-            }
-            ProductionLifecycleAdapterStartupStateV1::Recovered { .. } => {
-                Err(super::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership)
-            }
-            #[cfg(test)]
-            ProductionLifecycleAdapterStartupStateV1::Fixture => {
-                Err(super::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership)
             }
         }
     }
@@ -2021,9 +2089,10 @@ impl AuthenticatedRecoveredAdapterStartup {
     /// Consume recovered storage into one exact lifecycle execution-input seal.
     ///
     /// The State must own the supplied Kura Arc and the recovered adapter's
-    /// network. The private runner permit supplies the local signer; block
-    /// cadence is derived from State rather than accepted as caller-controlled
-    /// semantic validation input.
+    /// network. The private runner permit supplies both the local signer and
+    /// the cadence authenticated by signed-genesis or snapshot recovery. Fresh
+    /// height-one startup must not derive cadence from the uncommitted State
+    /// placeholder.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(
         &self,
@@ -2049,8 +2118,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
             ));
         }
-        let block_cadence = state.sumeragi_block_cadence();
-        let local_signer = permit.into_local_signer();
+        let (local_signer, block_cadence) = permit.into_factory_dependencies();
         Ok(RecoveredLifecycleOwnerFactoryInputsV1 {
             adapter_owner: Arc::clone(&self.factory_owner),
             storage,
@@ -2221,6 +2289,8 @@ impl AuthenticatedRecoveredAdapterStartup {
                 PreparedRecoveredWalStartupAuthorityV1::PhaseVote(vote)
             }
             RecoveredWalStartupAuthorityV1::ControlSign(control) => {
+                let local_proposal_attempt =
+                    RecoveredLifecycleLocalProposalAttemptV1::from_control(&control);
                 let projected = crate::sumeragi::v2_runtime::project_recovered_wal_control_sign(
                     &verified, control,
                 )
@@ -2231,7 +2301,10 @@ impl AuthenticatedRecoveredAdapterStartup {
                         ),
                     )
                 })?;
-                PreparedRecoveredWalStartupAuthorityV1::ControlSign(projected)
+                PreparedRecoveredWalStartupAuthorityV1::ControlSign {
+                    projection: projected,
+                    local_proposal_attempt,
+                }
             }
             RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
                 let projected = crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(
@@ -2410,7 +2483,10 @@ impl AuthenticatedRecoveredAdapterStartup {
                 })?;
                 return Ok(owner);
             }
-            PreparedRecoveredWalStartupAuthorityV1::ControlSign(control) => {
+            PreparedRecoveredWalStartupAuthorityV1::ControlSign {
+                projection: control,
+                local_proposal_attempt,
+            } => {
                 let owner = ProductionLifecycleOwnerV1::open_recovered_control_startup(
                     verified,
                     control,
@@ -2420,7 +2496,11 @@ impl AuthenticatedRecoveredAdapterStartup {
                     reply_route_source_capacity,
                     payload_store,
                     serve_payloads,
-                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+                    ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(
+                        adapter,
+                        effects,
+                        local_proposal_attempt,
+                    ),
                 )
                 .map_err(|error| {
                     ProductionLifecycleOwnerStartupErrorV1::new(
@@ -4793,6 +4873,25 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignAdapterSuccessorShapeV1 {
     /// A signed local Proposal emitted Broadcast plus a new Prepare-intent WAL write.
     ProposalPrepareWal,
 }
+
+/// Closed structural family used to choose one recovered Sign settler.
+///
+/// This is a selection-only oracle over the publication-inert adapter preview.
+/// In particular, it does not claim that the follow-on Vote has rejoined its
+/// body-store, output, WAL, or registry authorities; the chosen settler must
+/// still authenticate those affine owners before publication.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignAdapterSettlementFamilyV1 {
+    /// The signed message emitted only its mandatory Broadcast.
+    Broadcast,
+    /// A local Proposal must first append its exact Prepare-intent WAL record.
+    ProposalPrepareWal,
+    /// A signed Prepare Vote emitted Broadcast followed by Commit Sign.
+    VoteBroadcastAndSign,
+    /// A WAL-ahead signed Proposal emitted Broadcast followed by Prepare Sign.
+    ProposalBroadcastAndSign,
+}
 /// Adapter-authenticated authority for projecting one recovered Broadcast child.
 ///
 /// Unlike the output projection, this value retains the adapter effect in its
@@ -5331,6 +5430,8 @@ impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
         let ProductionLifecycleAdapterStartupStateV1::Recovered {
             adapter,
             effects,
+            pending_kura_apply: None,
+            local_proposal_attempt: _,
             leader_wire_launch_prepared: false,
         } = &startup.state
         else {
@@ -5469,6 +5570,75 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
         } else {
             RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast
+        }
+    }
+
+    /// Classify the sole legal settlement family without binding body authority.
+    ///
+    /// The returned family is suitable only for selecting one mutually
+    /// exclusive lifecycle settler. The selected settler repeats the complete
+    /// body/WAL/registry authentication before it may publish either child.
+    pub(in crate::sumeragi) fn settlement_family(
+        &self,
+    ) -> Option<RecoveredLifecycleSignAdapterSettlementFamilyV1> {
+        match self.shape() {
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast => {
+                Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast)
+            }
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal => {
+                Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal)
+            }
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign => {
+                let AdapterEffect::Broadcast(message) = &self.broadcast else {
+                    return None;
+                };
+                let Some(AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::Vote(next_vote),
+                }) = &self.next_sign
+                else {
+                    return None;
+                };
+                let next_vote_tag_is_exact = match next_vote.phase {
+                    wire::GlobalPhase::Prepare => tag.view() == next_vote.round.view,
+                    wire::GlobalPhase::Commit => tag.view() >= next_vote.round.view,
+                };
+                if !next_vote.signature.is_empty()
+                    || tag.height() != next_vote.round.height
+                    || !next_vote_tag_is_exact
+                {
+                    return None;
+                }
+                match &message.payload {
+                    wire::ConsensusMessageV2Payload::Proposal(proposal)
+                        if !proposal.signature.is_empty()
+                            && next_vote.phase == wire::GlobalPhase::Prepare
+                            && next_vote.round == proposal.round
+                            && next_vote.proposal_round == proposal.round
+                            && next_vote.subject == proposal.subject
+                            && next_vote.signer == proposal.proposer =>
+                    {
+                        Some(
+                            RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalBroadcastAndSign,
+                        )
+                    }
+                    wire::ConsensusMessageV2Payload::Vote(vote)
+                        if !vote.signature.is_empty()
+                            && vote.phase == wire::GlobalPhase::Prepare
+                            && next_vote.phase == wire::GlobalPhase::Commit
+                            && next_vote.round == vote.round
+                            && next_vote.proposal_round == vote.proposal_round
+                            && next_vote.subject == vote.subject
+                            && next_vote.execution_commitment == vote.execution_commitment
+                            && next_vote.signer == vote.signer =>
+                    {
+                        Some(
+                            RecoveredLifecycleSignAdapterSettlementFamilyV1::VoteBroadcastAndSign,
+                        )
+                    }
+                    _ => None,
+                }
+            }
         }
     }
     /// Borrow only the exact signed Broadcast for focused adapter tests.
@@ -10579,6 +10749,9 @@ pub(crate) enum AdapterError {
     /// The recovered Decision did not own one exact certificate-backed Fetch.
     #[error("Sumeragi v2 recovered Decision Fetch does not match its WAL authority")]
     RecoveredDecisionFetchMismatch,
+    /// The interrupted canonical Kura tip did not own the sole recovered Decision Fetch.
+    #[error("Sumeragi v2 pending Kura tip does not match its recovered Decision Fetch")]
+    RecoveredPendingKuraApplyMismatch,
     /// A lifecycle-owned recovered Fetch body did not produce its exact Store successor.
     #[error("Sumeragi v2 recovered Decision Fetch Store successor violated its closed contract")]
     RecoveredDecisionFetchStoreMismatch,

@@ -332,7 +332,7 @@ fn authenticated_serve_request(
     })
     .expect("authenticate certified Serve fixture")
 }
-fn production_authenticated_serve_request(
+pub(in crate::sumeragi) fn production_authenticated_serve_request(
     context: &wire::HeightContext,
     keys: &[KeyPair],
     requester_key: &KeyPair,
@@ -545,7 +545,7 @@ fn gated_fair_ingress(
     ingress.open().expect("open gated fair ingress");
     (ingress, gate)
 }
-fn certified_serve_inbound(
+pub(in crate::sumeragi) fn certified_serve_inbound(
     request: &wire::CertifiedBodyRequest,
     authenticated_via: PeerId,
 ) -> InboundBlockMessage {

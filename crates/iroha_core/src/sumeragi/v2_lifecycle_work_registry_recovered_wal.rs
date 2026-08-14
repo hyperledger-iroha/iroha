@@ -3891,7 +3891,7 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         })
     }
 }
-impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
+impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
     /// Consume the exclusive registry borrow into a no-lifetime owner-open seal.
     pub(crate) fn into_production_owner_open(
         self,
@@ -3940,8 +3940,10 @@ impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
             payload_store_identity,
         })
     }
+}
+#[cfg(test)]
+impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
     /// Seal a focused opened-cut fixture with the exact stores it used.
-    #[cfg(test)]
     pub(crate) fn from_opened_for_test(
         opened: OpenedRecoveredWalSignLifecycleCut<'registry>,
         verified: VerifiedHeightContext,

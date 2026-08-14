@@ -1,7 +1,4 @@
 //! ADDR-2 compliance vector generator shared by the example binary and CLI tooling.
-use hex::encode_upper;
-use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use norito::json::{Map, Value};
 use crate::{
     account::{
         AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
@@ -9,6 +6,9 @@ use crate::{
     },
     domain::DomainId,
 };
+use hex::encode_upper;
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+use norito::json::{Map, Value};
 macro_rules! json_obj {
     ({ $( $key:literal : $value:expr ),* $(,)? }) => {{
         let mut map = Map::new();

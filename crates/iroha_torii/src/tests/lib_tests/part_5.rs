@@ -567,12 +567,34 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
         request.headers_mut().extend(headers.clone());
         request
     };
-    let accepted = router
-        .clone()
-        .oneshot(signed_request())
+    let mut admitted_request = signed_request();
+    let body_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_body_polls = Arc::clone(&body_polls);
+    *admitted_request.body_mut() = Body::from_stream(futures::stream::poll_fn(
+        move |_| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
+            observed_body_polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("admitted canonical body must not be polled a second time")
+        },
+    ));
+    admitted_request
+        .extensions_mut()
+        .insert(AdmittedAppRoutedReadBody {
+            bytes: Bytes::copy_from_slice(body),
+            destination_bytes: body.len(),
+        });
+    let reservation = try_acquire_new_query_fanout_memory(&app).expect("test fanout reservation");
+    let admission = AppRoutedReadHttpAdmission {
+        reservation: reservation.clone(),
+        decode_plan: torii_routed_read_request_decode_plan(&app).expect("test decode plan"),
+    };
+    let accepted = APP_ROUTED_READ_HTTP_ADMISSION
+        .scope(admission, router.clone().oneshot(admitted_request))
         .await
-        .expect("accepted attachment response");
+        .expect("admitted attachment response");
+    assert_eq!(body_polls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    drop(accepted);
+    drop(reservation);
     let replayed = router
         .oneshot(signed_request())
         .await

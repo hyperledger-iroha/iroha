@@ -27,7 +27,7 @@ struct ReadyValidateSignPredecessorLinearity;
 impl Drop for ReadyValidateSignPredecessorLinearity {
     fn drop(&mut self) {}
 }
-impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
+impl ReadyValidateSignPredecessorAuthority<'_> {
     /// Project only the exact Prepare/Commit vote successor retained by the
     /// adapter preflight. No predecessor parts or certificate can escape.
     pub(in crate::sumeragi) fn project_successor(
@@ -60,8 +60,10 @@ impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
             wire::GlobalPhase::Prepare => None,
         }
     }
+}
+#[cfg(test)]
+impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
     /// Construct the same opaque view for focused adapter tests.
-    #[cfg(test)]
     pub(in crate::sumeragi) const fn for_test(
         effect: &'a AdapterEffect,
         pending: &'a PendingRuntimeEffectBinding,

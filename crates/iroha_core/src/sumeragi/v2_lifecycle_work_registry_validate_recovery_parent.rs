@@ -263,6 +263,49 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             })
             .count()
     }
+    /// Add one exact standalone next-WAL-Vote Sign to an existing scheduler fixture.
+    ///
+    /// The candidate, WAL identity, pending binding, and body receipt never
+    /// leave the closed registry. Only its allocated ordinal is observable.
+    pub(super) fn add_recovered_next_vote_scheduler_fixture_for_test(
+        &mut self,
+        coordinator: &mut LifecycleCoordinator,
+        verified: &VerifiedHeightContext,
+        marker: u8,
+    ) -> Option<u128> {
+        let (projection, _) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, marker);
+        let (owner, ordinal) = projection.admit_into_scheduler_fixture(verified, coordinator)?;
+        let record = coordinator.records.get(&ordinal)?;
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::SignVote.capacity_class())?;
+        let address = ConcreteWorkAddress::new(owner, ordinal, slot)?;
+        let work = ConcreteLifecycleWork {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(
+                DurableRecoveredLifecycleNextWalVoteSignWork {
+                    projection,
+                    verified: verified.clone(),
+                    address,
+                    dispatch_key: None,
+                },
+            ),
+        };
+        if !work.validates_at(address)
+            || self
+                .registry_for_test_mut()
+                .entries
+                .insert(address, work)
+                .is_some()
+        {
+            return None;
+        }
+        let _ = self
+            .registry_for_test()
+            .attest_ready_recovered_lifecycle_sign(coordinator, ordinal)
+            .ok()?;
+        Some(ordinal)
+    }
     /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.
     ///
     /// Only logical ordinals leave this helper. Every effect, WAL identity,
@@ -427,7 +470,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         assert!(entries.insert(broadcast_address, broadcast_work).is_none());
         assert!(entries.insert(paired_address, paired_work).is_none());
         assert!(entries.insert(unrelated_address, unrelated_work).is_none());
-        registry
+        let _ = registry
             .registry_for_test()
             .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
                 coordinator,
@@ -435,7 +478,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                 paired_ordinal,
             )
             .expect("exact scheduler fixture pair attests");
-        registry
+        let _ = registry
             .registry_for_test()
             .attest_ready_recovered_lifecycle_sign(coordinator, unrelated_ordinal)
             .expect("unrelated scheduler fixture Sign attests independently");

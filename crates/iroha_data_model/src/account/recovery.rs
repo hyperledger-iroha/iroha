@@ -1,11 +1,11 @@
 //! Native account recovery policy and request types.
-use std::{collections::BTreeSet, num::NonZeroU64, vec::Vec};
+use super::{AccountController, AccountId, rekey::AccountAlias};
+use crate::isi::InstructionBox;
 use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use std::{collections::BTreeSet, num::NonZeroU64, vec::Vec};
 use thiserror::Error;
-use super::{AccountController, AccountId, rekey::AccountAlias};
-use crate::isi::InstructionBox;
 /// Guardian that can participate in social recovery for an account alias.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -249,10 +249,10 @@ pub enum AccountRecoveryPolicyError {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::{Level, isi::Log, nexus::DataSpaceId};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::num::NonZeroU64;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked account-recovery fixture keypair");

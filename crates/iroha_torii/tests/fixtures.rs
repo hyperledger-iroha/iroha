@@ -338,7 +338,8 @@ pub fn operator_signed_request(
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
     const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
     let canonical_request =
-        iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes);
+        iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes)
+            .expect("canonical operator fixture is within V1 limits");
     let network_id = iroha_torii::test_utils::signed_query_network_id();
     let mut msg = Vec::with_capacity(
         DOMAIN.len() + network_id.as_bytes().len() + canonical_request.len() + nonce.len() + 32,
@@ -414,17 +415,23 @@ pub fn app_signed_request(
         body_bytes,
         ts_ms,
         &nonce,
-    );
+    )
+    .expect("canonical app fixture is within V1 limits");
     let signature =
         Signature::try_new(key_pair.private_key(), &msg).expect("app canonical request signature");
     let headers = request.headers_mut();
     headers.insert(
         iroha_torii::HEADER_ACCOUNT,
-        account_id.to_string().parse().expect("account header"),
+        account_id
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     headers.insert(
         iroha_torii::HEADER_SIGNATURE,
         iroha_torii::signature_header_value(&signature)
+            .expect("encode valid app signature header")
             .parse()
             .expect("app signature header"),
     );

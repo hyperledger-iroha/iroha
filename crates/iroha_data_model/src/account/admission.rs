@@ -5,14 +5,14 @@
 //! for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs) to a
 //! never-before-seen `AccountId` can auto-create the corresponding account object when the
 //! global policy allows it.
-use std::collections::BTreeMap;
-use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     parameter::{CustomParameter, CustomParameterId},
     prelude::{AccountId, AssetDefinitionId, RoleId},
 };
+use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Legacy domain metadata key previously used for account admission policy payloads.
 ///
 /// Account admission is now configured globally via
@@ -150,11 +150,10 @@ impl AccountAdmissionPolicy {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode as _, Encode as _};
-    use norito::json;
     use super::*;
     use crate::domain::DomainId;
+    use iroha_primitives::numeric::Numeric;
+    use norito::json;
     #[derive(Encode)]
     struct ForgedImplicitAccountCreationFee {
         asset_definition_id: AssetDefinitionId,

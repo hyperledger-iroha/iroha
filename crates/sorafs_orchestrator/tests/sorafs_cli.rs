@@ -2228,7 +2228,7 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     )
     .expect("reputation snapshot")
 }
-fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
+fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 3] {
     let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-reputation-read-auth".to_vec(),
         Algorithm::Ed25519,
@@ -2247,6 +2247,7 @@ fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
             .expect("secure reputation read fixture key");
     }
     [
+        format!("--network-id={TEST_NETWORK_ID_LITERAL}"),
         format!("--auth-account={account}"),
         format!("--auth-private-key-file={}", key_path.display()),
     ]

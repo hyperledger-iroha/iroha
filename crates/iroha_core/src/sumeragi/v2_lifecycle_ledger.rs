@@ -1589,12 +1589,49 @@ pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 
 }
 
 impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Temporarily recover canonical bodies without separating retired H from H+1.
+    #[allow(dead_code, clippy::type_complexity, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        operation: impl FnOnce(
+            &super::super::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut super::super::v2_effects::V2EffectExecutor<
+                super::super::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut super::super::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<super::launch::ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.launched
+            .with_complete_tip_canonical_body_recovery_ingress(runner, activation, operation)
+    }
+
+    /// Bind recovered local-Proposal ownership before consuming the H/H+1 join.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn initialize_recovered_local_proposal(
+        &mut self,
+        runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+    ) -> Result<
+        (
+            super::super::v2::LocalProposalDirective,
+            super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
+        ),
+        super::launch::ProductionLifecyclePreActivationErrorV1,
+    > {
+        self.launched.initialize_recovered_local_proposal(runner)
+    }
+
     /// Consume the sealed H/H+1 join into one exact live-height activation.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn activate(
         self,
         now: std::time::Instant,
         runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        local_proposal: super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
     ) -> Result<
         super::launch::ActivatedProductionLifecycleV1,
         super::launch::ProductionLifecycleActivationErrorV1,
@@ -1603,7 +1640,7 @@ impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
             launched,
             retirement,
         } = self;
-        launched.activate_recovered_complete_tip(now, runner, retirement)
+        launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)
     }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END

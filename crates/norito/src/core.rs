@@ -7,7 +7,14 @@
 //! The format begins with a small metadata header followed by a byte buffer
 //! containing archived values. Every value has a corresponding [`Archived`] type
 //! which represents the layout in the buffer.
+#[cfg(feature = "schema-structural")]
+use crate::json;
+use crate::{ArchiveSlice, guarded_try_deserialize};
+pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::convert::TryFrom;
+#[cfg(feature = "derive")]
+pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
+use sha2::{Digest, Sha256};
 use std::{
     alloc::Layout,
     any::TypeId,
@@ -24,13 +31,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-#[cfg(feature = "derive")]
-pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
-use sha2::{Digest, Sha256};
-#[cfg(feature = "schema-structural")]
-use crate::json;
-use crate::{ArchiveSlice, guarded_try_deserialize};
 mod encoder;
 pub use encoder::Encoder;
 mod encode_writers;
@@ -2067,12 +2067,12 @@ fn validate_fixed_offset_table(bytes: &[u8], entries: usize) -> Result<usize, Er
 }
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 mod sequence_gpu {
+    use super::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
     use std::{
         ffi::{c_char, c_int, c_void},
         path::PathBuf,
         sync::{Mutex, OnceLock},
     };
-    use super::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct AbiSpan {
@@ -5389,6 +5389,9 @@ impl NoritoSerialize for String {
         len_prefixed_payload_len(self.len())
     }
 }
+
+include!("core/owned_string_allocation.rs");
+
 impl<'a> NoritoDeserialize<'a> for String {
     fn deserialize(archived: &'a Archived<String>) -> Self {
         Self::try_deserialize(archived)
@@ -5412,7 +5415,7 @@ impl<'a> NoritoDeserialize<'a> for String {
             record_payload_access(payload.as_ptr().add(off), len);
         }
         let bytes = &payload[off..end];
-        String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
+        try_copy_string_for_decode(bytes)
     }
 }
 impl NoritoSerialize for &str {
@@ -5468,8 +5471,7 @@ impl<'a> DecodeFromSlice<'a> for String {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
         let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
         let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
-        let s =
-            String::from_utf8(data.to_vec()).map_err(|_| Error::Message("invalid utf8".into()))?;
+        let s = try_copy_string_for_decode(data)?;
         record_slice_access(bytes, end);
         Ok((s, end))
     }
@@ -5959,18 +5961,18 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
     }
 }
 pub mod stream {
+    use super::{
+        Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
+        archived_payload_align, archived_payload_size, empty_archived_ptr, header_flags,
+    };
+    use crate::guarded_try_deserialize;
+    use crc64fast::Digest;
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     use std::io::BufReader;
     use std::{
         alloc::{Layout, alloc, dealloc},
         io::{self, Read},
     };
-    use crc64fast::Digest;
-    use super::{
-        Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
-        archived_payload_align, archived_payload_size, empty_archived_ptr, header_flags,
-    };
-    use crate::guarded_try_deserialize;
     pub(crate) fn inspect_sequence_len_from_reader<R>(
         mut reader: R,
         expected_schema: [u8; 16],

@@ -7,17 +7,17 @@
 //! This module provides a minimal CBOR encoder/decoder tailored to the `SRCv2`
 //! schema so we can avoid pulling an additional dependency while keeping the
 //! encoding canonical and deterministic.
+use crate::soranet::handshake::HandshakeSuite;
+use blake3::Hasher as Blake3;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use sha2::{Digest as _, Sha256};
+use soranet_pq::{MlDsaSuite, MlKemSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     convert::{TryFrom, TryInto},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::Duration,
 };
-use blake3::Hasher as Blake3;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use sha2::{Digest as _, Sha256};
-use soranet_pq::{MlDsaSuite, MlKemSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
-use crate::soranet::handshake::HandshakeSuite;
 /// Canonical Blake3 domain separator for `SRCv2` digests.
 const SRC_V2_DOMAIN: &[u8] = b"soranet.src.v2.digest";
 /// Canonical Blake3 domain separator for Ed25519 signing.
@@ -2393,10 +2393,10 @@ impl<'a> CborDecoder<'a> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os};
-    use super::*;
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

@@ -74,13 +74,15 @@ PY
 {
   "version": 1,
   "nexus_enabled": true,
-  "lane_count": 5,
+  "lane_count": 7,
   "lanes": [
     {"id": 0, "dataspace_id": 0, "alias": "core"},
-    {"id": 1, "dataspace_id": 1, "alias": "governance"},
-    {"id": 2, "dataspace_id": 2, "alias": "zk"},
-    {"id": 3, "dataspace_id": 6647857470246403404, "alias": "external-poc"},
-    {"id": 4, "dataspace_id": 8477022798449861195, "alias": "boi-mobile"}
+    {"id": 1, "dataspace_id": 0, "alias": "governance"},
+    {"id": 2, "dataspace_id": 0, "alias": "zk"},
+    {"id": 3, "dataspace_id": 10, "alias": "dpn"},
+    {"id": 4, "dataspace_id": 6647857470246403404, "alias": "external-poc"},
+    {"id": 5, "dataspace_id": 8477022798449861195, "alias": "boi-mobile"},
+    {"id": 6, "dataspace_id": 20, "alias": "cbsi"}
   ],
   "catalog_hash": "hash:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "incarnations": [],
@@ -324,8 +326,74 @@ import json
 import sys
 
 height = int(sys.argv[1])
-if sys.argv[2] == "fleet_lagging_status_blocks":
+scenario = sys.argv[2]
+if scenario == "fleet_lagging_status_blocks":
     height -= 1
+
+lane_specs = [
+    (0, "core", 0, "universal"),
+    (1, "governance", 0, "universal"),
+    (2, "zk", 0, "universal"),
+    (3, "dpn", 10, "dpn"),
+    (4, "external-poc", 6647857470246403404, "is"),
+    (5, "boi-mobile", 8477022798449861195, "is2"),
+    (6, "cbsi", 20, "cbsi"),
+]
+rosters = {
+    "universal": [f"universal-validator-{index}" for index in range(1, 5)],
+    "dpn": [f"dpn-validator-{index}" for index in range(1, 5)],
+    "is": [f"is-validator-{index}" for index in range(1, 5)],
+    "is2": [f"is2-validator-{index}" for index in range(1, 5)],
+    "cbsi": [f"cbsi-validator-{index}" for index in range(1, 5)],
+}
+if scenario == "fleet_repeated_dataspace_roster":
+    rosters["is2"] = rosters["is"].copy()
+if scenario == "fleet_repeated_universal_roster":
+    rosters["dpn"] = rosters["universal"].copy()
+
+teu_lane_commit = []
+dataspace_catalog = []
+for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
+    # Core and ZK inherit the universal cohort selected by governance. Every
+    # non-universal physical dataspace must project its own ready manifest.
+    has_manifest = lane_alias == "governance" or dataspace_alias != "universal"
+    if scenario == "fleet_missing_universal_roster" and dataspace_alias == "universal":
+        has_manifest = False
+    validators = rosters[dataspace_alias].copy() if has_manifest else []
+    quorum = 3 if has_manifest else None
+    manifest_path = f"/manifests/{lane_alias}.manifest.json" if has_manifest else None
+    if scenario == "fleet_missing_dataspace_roster" and dataspace_alias == "cbsi":
+        validators = []
+        quorum = None
+    if scenario == "fleet_invalid_dataspace_quorum" and dataspace_alias == "dpn":
+        quorum = 2
+    if scenario == "fleet_same_dataspace_roster_mismatch" and lane_alias == "zk":
+        has_manifest = True
+        validators = [f"other-universal-validator-{index}" for index in range(1, 5)]
+        quorum = 3
+        manifest_path = "/manifests/zk.manifest.json"
+    lane = {
+        "lane_id": lane_id,
+        "alias": lane_alias,
+        "dataspace_id": dataspace_id,
+        "dataspace_alias": dataspace_alias,
+        "manifest_required": has_manifest,
+        "manifest_ready": has_manifest,
+        "manifest_path": manifest_path,
+        "manifest_validators": validators,
+        "manifest_quorum": quorum,
+    }
+    teu_lane_commit.append(lane)
+    dataspace_catalog.append({
+        "lane_id": lane_id,
+        "lane_alias": lane_alias,
+        "dataspace_id": dataspace_id,
+        "alias": dataspace_alias,
+        "manifest_required": has_manifest,
+        "manifest_ready": has_manifest,
+        "manifest_path": manifest_path,
+    })
+
 print(json.dumps({
     "build": {
         "dpn_validator_release_commit": "d" * 40,
@@ -334,7 +402,9 @@ print(json.dumps({
     "peers": 4,
     "blocks": height,
     "queue_size": 0,
+    "teu_lane_commit": teu_lane_commit,
     "teu_dataspace_backlog": [{"backlog": 0}],
+    "dataspace_catalog": dataspace_catalog,
 }, separators=(",", ":")))
 PY
 )"
@@ -457,7 +527,17 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/readyz" ]]; then
   printf '%s\n' "$url" >>"${MOCK_STATE_DIR}/readyz_seen"
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/lifecycle" ]]; then
   body="$(cat "${MOCK_STATE_DIR:?}/nexus-lifecycle.json")"
-  if [[ "$scenario" == "dataspace_is2_missing" ]]; then
+  if [[ "$scenario" == "lane_count_regressed" ]]; then
+    body="${body/\"lane_count\": 7/\"lane_count\": 5}"
+  elif [[ "$scenario" == "governance_promoted_to_dataspace" ]]; then
+    body="${body/\"id\": 1, \"dataspace_id\": 0/\"id\": 1, \"dataspace_id\": 1}"
+  elif [[ "$scenario" == "zk_promoted_to_dataspace" ]]; then
+    body="${body/\"id\": 2, \"dataspace_id\": 0/\"id\": 2, \"dataspace_id\": 2}"
+  elif [[ "$scenario" == "dataspace_dpn_missing" ]]; then
+    body="${body/\"alias\": \"dpn\"/\"alias\": \"wrong-dpn\"}"
+  elif [[ "$scenario" == "dataspace_cbsi_missing" ]]; then
+    body="${body/\"alias\": \"cbsi\"/\"alias\": \"wrong-cbsi\"}"
+  elif [[ "$scenario" == "dataspace_is2_missing" ]]; then
     body="${body/\"alias\": \"boi-mobile\"/\"alias\": \"wrong-mobile\"}"
   elif [[ "$scenario" == "dataspace_is_id_mismatch" ]]; then
     body="${body/6647857470246403404/7}"
@@ -743,6 +823,58 @@ PY
   fi
 }
 
+run_invalid_topology_config_case() {
+  local forbidden_dataspace="$1"
+  local forbidden_id="$2"
+  local root output_file config_path
+
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  output_file="${root}/invalid-${forbidden_dataspace}-dataspace.log"
+  config_path="${root}/configs/soranexus/taira/config.toml"
+  python3 - "$config_path" "$forbidden_dataspace" "$forbidden_id" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+dataspace_id = int(sys.argv[3])
+text = path.read_text(encoding="utf-8")
+marker = "\n[nexus.governance]\n"
+if marker not in text:
+    raise SystemExit("mock Taira config omitted the governance marker")
+extra = (
+    "\n[[nexus.dataspace_catalog]]\n"
+    f'alias = "{alias}"\n'
+    f"id = {dataspace_id}\n"
+    f'description = "invalid promoted {alias} lane"\n'
+)
+path.write_text(text.replace(marker, extra + marker, 1), encoding="utf-8")
+PY
+
+  if PATH="${root}/mockbin:${PATH}" \
+      MOCK_SCENARIO="cargo_success" \
+      MOCK_STATE_DIR="${root}/state" \
+      "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+        --skip-local \
+        --public-root https://taira.sora.org \
+        --skip-write-canary \
+        --iroha-bin "${root}/mockbin/iroha" \
+        >"$output_file" 2>&1; then
+    echo "invalid ${forbidden_dataspace} dataspace config unexpectedly succeeded" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+  if ! grep -q \
+      "logical lane aliases must not be physical dataspaces: ${forbidden_dataspace}" \
+      "$output_file"; then
+    echo "invalid ${forbidden_dataspace} dataspace config did not emit the topology error" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+}
+
 run_case txn_expired 'write canary failed: transaction expired' '"commit_qc_height": 707'
 run_case permission_403 'write canary failed: signer or permission check returned 403' '"blocks": 707'
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
@@ -753,8 +885,13 @@ run_case public_health_unavailable '/health failed with HTTP 503'
 run_case public_readyz_unavailable '/readyz failed with HTTP 503'
 run_case fleet_health_unavailable 'validator validator-4: /health failed with HTTP 503'
 run_case fleet_readyz_unavailable 'validator validator-4: /readyz failed with HTTP 503'
-run_case dataspace_is2_missing 'BOI dataspace catalog mismatch'
-run_case dataspace_is_id_mismatch 'BOI dataspace catalog mismatch'
+run_case lane_count_regressed 'Taira lane/dataspace topology mismatch: lane_count must be exactly 7'
+run_case governance_promoted_to_dataspace 'Taira lane/dataspace topology mismatch'
+run_case zk_promoted_to_dataspace 'Taira lane/dataspace topology mismatch'
+run_case dataspace_dpn_missing 'Taira lane/dataspace topology mismatch'
+run_case dataspace_cbsi_missing 'Taira lane/dataspace topology mismatch'
+run_case dataspace_is2_missing 'Taira lane/dataspace topology mismatch'
+run_case dataspace_is_id_mismatch 'Taira lane/dataspace topology mismatch'
 run_case time_unhealthy '/v1/time/now is not release-ready: sample_count must be a positive integer'
 run_case time_warn_enforcement '/v1/time/now is not release-ready: fail-closed time enforcement is not active'
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
@@ -772,8 +909,14 @@ run_case canonical_status_wrong_error "canonical pipeline transaction-status rou
 run_case retired_status_alias_mounted 'retired transaction-status compatibility route must remain unmounted failed with HTTP 200'
 run_case retired_status_wrong_error "retired transaction-status compatibility route must remain unmounted returned error code 'not_found'"
 run_case fleet_commit_mismatch 'disagrees with validator-1 on committed_block_hash'
-run_case fleet_dataspace_mismatch 'BOI dataspace catalog mismatch'
+run_case fleet_dataspace_mismatch 'Taira lane/dataspace topology mismatch'
 run_case fleet_catalog_changes_between_samples 'disagrees with validator-1 on dataspace_catalog'
+run_case fleet_missing_dataspace_roster "physical dataspace 'cbsi' lacks a non-empty manifest validator roster"
+run_case fleet_missing_universal_roster "physical dataspace 'universal' lacks a non-empty ready manifest validator roster"
+run_case fleet_invalid_dataspace_quorum "lane 'dpn' manifest quorum 2 is invalid for 4 validators"
+run_case fleet_repeated_dataspace_roster "physical dataspaces 'is' and 'is2' reuse the same validator roster"
+run_case fleet_repeated_universal_roster "physical dataspaces 'universal' and 'dpn' reuse the same validator roster"
+run_case fleet_same_dataspace_roster_mismatch "lanes in physical dataspace 'universal' project different validator rosters or quorums"
 run_case fleet_stale_commit_progress 'validator fleet did not advance a common committed height'
 run_case fleet_lagging_status_blocks '/status.blocks 706 does not match the durable committed height 707'
 run_case fleet_committed_hash_trailing_bytes 'durable committed subject omitted a canonical block hash'
@@ -783,6 +926,8 @@ run_invalid_canary_identity_case \
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+run_invalid_topology_config_case governance 1
+run_invalid_topology_config_case zk 2
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

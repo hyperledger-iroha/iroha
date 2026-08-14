@@ -83,8 +83,8 @@ test("all expensive application query callers sign the exact one-shot target", a
     assert.equal(init.method, "POST");
     assert.equal(init.redirect, "error");
     assert.equal(
-      Buffer.from(header(init.headers, "X-Iroha-Account"), "latin1").toString("utf8"),
-      ACCOUNT_ID,
+      header(init.headers, "X-Iroha-Account"),
+      AccountAddress.parseEncoded(ACCOUNT_ID).address.canonicalHex(),
     );
     const message = canonicalRequestSignatureMessage({
       networkId: NETWORK_ID,

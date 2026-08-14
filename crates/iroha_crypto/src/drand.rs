@@ -117,8 +117,8 @@ fn decode_signature(bytes: &[u8]) -> Result<G1Affine, DrandVerificationError> {
 }
 #[cfg(test)]
 mod tests {
-    use hex_literal::hex;
     use super::{DrandVerificationError, verify_unchained_g1_rfc9380};
+    use hex_literal::hex;
     // Official Quicknet public key and round 1000 beacon. The vector is fixed
     // so verification tests never depend on network access or wall-clock time.
     const QUICKNET_PUBLIC_KEY: [u8; 96] = hex!(

@@ -214,10 +214,11 @@ fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
     )
     .unwrap();
     let generator = Point::canonical_generator().unwrap();
-    assert_eq!(commitment, generator.mul_scalar(Scalar::from_u64(15)));
+    assert!(commitment.equals(&generator.mul_scalar(Scalar::from_u64(15))));
+    let encoded = SecretT256PointEncodingV1::new(commitment.expose_ref()).unwrap();
     assert_eq!(
-        commitment.to_non_identity_wire_bytes().unwrap(),
-        generator
+        encoded.as_ref(),
+        &generator
             .mul_scalar(Scalar::from_u64(15))
             .to_non_identity_wire_bytes()
             .unwrap()
@@ -360,6 +361,11 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
         "ZkAmsT256BulletproofSuiteV1::generators()",
         ".reduce(SOURCE_OPENING_SCALARS_PER_GROUP_V1)",
         "SecretMultiexpBuilder::<S>::new(exact_values + 1)",
+        "Result<SecretPoint<Point>, ZkAmsMkheErrorV1>",
+        "SecretT256PointEncodingV1::new(commitment.expose_ref())",
+        "adopt_source_commitment_v1(",
+        "commitment.expose_ref(),",
+        "live.commitments.push(*commitment.expose_ref())",
         "push(value, generator)",
         "values.iter().zip(generators.g_bold)",
         "push(blinding.as_ref(), &generators.h)",
@@ -384,7 +390,26 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
             "missing source-opening guard: {required}"
         );
     }
+    let publication = PRODUCTION_SOURCE_V1
+        .split_once("let encoded = SecretT256PointEncodingV1::new(commitment.expose_ref())")
+        .expect("source commitment encoding")
+        .1
+        .split_once("live.group_scalars.clear_and_truncate(0);")
+        .expect("source commitment publication boundary")
+        .0;
+    let hash = publication
+        .find("live.commitment_hash.update(encoded.as_ref());")
+        .expect("borrowed source commitment hash");
+    let adopt = publication
+        .find("adopt_source_commitment_v1(")
+        .expect("borrowed source commitment adoption");
+    let public_copy = publication
+        .find("live.commitments.push(*commitment.expose_ref());")
+        .expect("public source commitment copy");
+    assert!(hash < adopt && adopt < public_copy);
     assert!(!PRODUCTION_SOURCE_V1.contains("let mut blinding = *blinding;"));
+    assert!(!PRODUCTION_SOURCE_V1.contains("Result<Point, ZkAmsMkheErrorV1>"));
+    assert!(!PRODUCTION_SOURCE_V1.contains("commitment.to_non_identity_wire_bytes()"));
     for required in [
         "let mut replay = self\n            .replay\n            .take()",
         "read_canonical_plaintext_block_v1(record, block)",

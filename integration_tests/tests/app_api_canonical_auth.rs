@@ -40,6 +40,14 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let network_id = network.network_id();
     let http = integration_tests::http::client();
     let account_literal = ALICE_ID.to_string();
+    let account_header = ALICE_ID.to_canonical_hex()?;
+    assert!(account_header.is_ascii());
+    assert!(account_header.starts_with("0x"));
+    assert!(
+        account_header[2..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
     let timestamp_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
@@ -67,17 +75,17 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         &[],
         timestamp_ms,
         assets_nonce,
-    );
+    )?;
     let assets_sig = Signature::try_new(ALICE_KEYPAIR.private_key(), &assets_msg)
         .expect("GET app-api signature");
     let mut assets_headers = HeaderMap::new();
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_ACCOUNT.as_bytes())?,
-        HeaderValue::from_str(&account_literal)?,
+        HeaderValue::from_str(&account_header)?,
     );
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_SIGNATURE.as_bytes())?,
-        HeaderValue::from_str(&signature_header_value(&assets_sig))?,
+        HeaderValue::from_str(&signature_header_value(&assets_sig)?)?,
     );
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_TIMESTAMP_MS.as_bytes())?,
@@ -135,18 +143,18 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         &body,
         timestamp_ms,
         tx_nonce,
-    );
+    )?;
     let tx_sig =
         Signature::try_new(ALICE_KEYPAIR.private_key(), &tx_msg).expect("POST app-api signature");
     let mut tx_headers = HeaderMap::new();
     tx_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_ACCOUNT.as_bytes())?,
-        HeaderValue::from_str(&account_literal)?,
+        HeaderValue::from_str(&account_header)?,
     );
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_SIGNATURE.as_bytes())?,
-        HeaderValue::from_str(&signature_header_value(&tx_sig))?,
+        HeaderValue::from_str(&signature_header_value(&tx_sig)?)?,
     );
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_TIMESTAMP_MS.as_bytes())?,

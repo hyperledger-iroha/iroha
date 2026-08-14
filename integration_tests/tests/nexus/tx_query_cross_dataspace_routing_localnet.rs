@@ -719,14 +719,15 @@ async fn torii_json_get_as_account(
         &[],
         timestamp_ms,
         &nonce,
-    );
+    )
+    .wrap_err("construct canonical app-api request")?;
     let signature = Signature::try_new(client.key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
-        .header(HEADER_ACCOUNT, account.to_string())
-        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_ACCOUNT, account.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce)
         .send()

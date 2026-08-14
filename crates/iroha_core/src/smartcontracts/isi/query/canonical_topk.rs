@@ -1,5 +1,6 @@
 //! Bounded canonical top-K materialization for server-owned query fanout.
-use std::{any::TypeId, collections::BTreeSet, io::Cursor};
+use super::{QueryExecutionBudget, QueryExecutionStats, QueryLimits};
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use iroha_data_model::{
     prelude::{Pagination, SelectorTuple},
     query::{
@@ -10,8 +11,7 @@ use iroha_data_model::{
     },
 };
 use norito::core::NoritoSerialize;
-use super::{QueryExecutionBudget, QueryExecutionStats, QueryLimits};
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+use std::{any::TypeId, collections::BTreeSet, io::Cursor};
 /// Conservative deterministic charge for the retained `Vec` handle, one
 /// `BTreeSet` slot, allocator bookkeeping, and tree-node slack of one item.
 ///
@@ -900,6 +900,9 @@ where
     }
     Ok(())
 }
+// TODO: Reconnect this generic entry point after every canonical producer has
+// a source-owned adapter; current production dispatch fails closed earlier.
+#[allow(dead_code)]
 pub(super) fn execute_canonical_query<T, Q>(
     query: Q,
     predicate: CompoundPredicate<T>,
@@ -992,14 +995,14 @@ fn canonical_keep(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
     use iroha_data_model::{
         domain::Domain,
         query::{QueryOutputBatchBox, parameters::Pagination},
         role::RoleId,
     };
     use nonzero_ext::nonzero;
-    use super::*;
+    use std::collections::BTreeSet;
     const GENEROUS_ITEM_BYTES: u64 = 1024 * 1024;
     const GENEROUS_SOURCE_BYTES: u64 = 1024 * 1024;
     const GENEROUS_RETAINED_BYTES: u64 = 8 * 1024 * 1024;

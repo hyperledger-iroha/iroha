@@ -1,7 +1,7 @@
 //! Bounded ownership corridor for server-owned singular-query execution.
-use std::{cell::Cell, marker::PhantomData, ops::Deref};
-use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize, NoritoSerialize};
 use super::Error;
+use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize, NoritoSerialize};
+use std::{cell::Cell, marker::PhantomData, ops::Deref};
 /// Dynamic source/output ceilings for one singular query executed by a
 /// server-owned memory lane.
 ///
@@ -936,8 +936,8 @@ fn decode_limits(
 }
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use super::*;
+    use std::cell::Cell;
     thread_local! {
         static OWNED_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
         static ENCODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };

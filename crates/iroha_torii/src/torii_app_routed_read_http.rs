@@ -18,12 +18,18 @@ fn current_app_routed_read_decode_plan() -> Option<ToriiRoutedReadRequestDecodeP
         .try_with(|admission| admission.decode_plan)
         .ok()
 }
+fn app_routed_read_http_admission_is_active() -> bool {
+    APP_ROUTED_READ_HTTP_ADMISSION.try_with(|_| ()).is_ok()
+}
 #[derive(Clone, Debug)]
 struct AdmittedAppRoutedReadBody {
     bytes: Bytes,
     destination_bytes: usize,
 }
 fn admitted_app_routed_read_body(request: &Request<Body>) -> Option<Bytes> {
+    if !app_routed_read_http_admission_is_active() {
+        return None;
+    }
     request
         .extensions()
         .get::<AdmittedAppRoutedReadBody>()
@@ -156,13 +162,11 @@ async fn enforce_app_routed_read_http_admission(
         Ok(plan) => plan,
         Err(response) => return response,
     };
-    // Hyper has already retained the complete request target. Charge that
-    // representation, including fixed route literals and dynamic percent-
-    // encoded path segments, once; `path_and_query` already includes the
-    // query delimiter and bytes, so adding `uri.query()` would double-count.
-    // Axum's path percent decoder can only shrink this representation. Every
-    // dynamic `Path<String>` allocation is therefore no larger than this one
-    // admitted component phase, before bounded typed/canonical parsing starts.
+    // Hyper has already retained the complete request target. Charge its URI
+    // representation once, including an absolute-form scheme/authority, fixed
+    // route literals, dynamic percent-encoded path segments, and query bytes.
+    // Axum's path percent decoder can only shrink this representation before
+    // bounded typed/canonical parsing starts.
     let target_bytes = app_routed_read_raw_target_bytes(request.uri());
     if let Err(response) = decode_plan.admit_raw_input(target_bytes) {
         return map_app_routed_read_request_response(response);
@@ -227,8 +231,24 @@ async fn enforce_app_routed_read_http_admission(
     hold_app_routed_read_reservation_if_needed(response, reservation)
 }
 fn app_routed_read_raw_target_bytes(uri: &axum::http::Uri) -> usize {
-    uri.path_and_query()
-        .map_or_else(|| uri.path().len(), |target| target.as_str().len())
+    let path_and_query = uri
+        .path_and_query()
+        .map_or_else(|| uri.path().len(), |target| target.as_str().len());
+    let mut total = Some(path_and_query);
+    if let Some(scheme) = uri.scheme_str() {
+        total = total
+            .and_then(|bytes| bytes.checked_add(scheme.len()))
+            .and_then(|bytes| bytes.checked_add(1)); // `:`
+    }
+    if let Some(authority) = uri.authority() {
+        let prefix = if uri.scheme().is_some() { 2 } else { 0 }; // `//`
+        total = total
+            .and_then(|bytes| bytes.checked_add(prefix))
+            .and_then(|bytes| bytes.checked_add(authority.as_str().len()));
+    }
+    // A parsed in-memory URI cannot realistically overflow this sum. Mapping
+    // overflow above every valid admission limit keeps the boundary fail-closed.
+    total.unwrap_or(usize::MAX)
 }
 fn hold_app_routed_read_reservation_if_needed(
     response: Response,
@@ -315,11 +335,10 @@ async fn collect_app_routed_read_body(
     limit: usize,
     declared_bytes: Option<usize>,
 ) -> Result<AdmittedAppRoutedReadBody, Response> {
-    // A missing Content-Length owns the entire P-sized destination even when
-    // the eventual `Bytes::len()` is smaller. `ExactAppRoutedReadBody` moves
-    // that full allocation into both the request extension and replacement
-    // body; the outer fanout reservation remains live until the final response
-    // body is dropped, so allocator capacity never escapes admission.
+    // A missing Content-Length owns the entire P-sized destination while the
+    // stream is collected. A non-empty exact owner moves into the request
+    // extension and replacement body; a zero-length owner is dropped only
+    // after EOF and replaced by the canonical static empty `Bytes` value.
     let destination_bytes = declared_bytes.unwrap_or(limit);
     let storage = torii_allocate_exact_bytes(destination_bytes).map_err(|error| match error {
         norito::json::BoundedJsonError::AllocationFailed => torii_proxy_error_response(
@@ -378,8 +397,13 @@ async fn collect_app_routed_read_body(
             ),
         ));
     }
+    let bytes = if owner.len == 0 {
+        Bytes::new()
+    } else {
+        Bytes::from_owner(owner)
+    };
     Ok(AdmittedAppRoutedReadBody {
-        bytes: Bytes::from_owner(owner),
+        bytes,
         destination_bytes,
     })
 }

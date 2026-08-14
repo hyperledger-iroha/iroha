@@ -91,7 +91,10 @@ mod tests {
         terms
             .push(&opening.mask, &generators.h)
             .expect("test commitment mask fits its fixed capacity");
-        terms.evaluate().expect("complete test commitment")
+        *terms
+            .evaluate()
+            .expect("complete test commitment")
+            .expose_ref()
     }
     fn duplicate_test_openings(
         openings: &[VectorCommitmentOpening<Field25519>],
@@ -153,7 +156,9 @@ mod tests {
         )
         .expect("witness");
         let mut transcript = ProverTranscript::new(context);
-        transcript.write_commitments::<SeleneSuite>(commitments.clone(), Vec::new());
+        transcript
+            .write_commitments::<SeleneSuite>(commitments.clone(), Vec::new())
+            .expect("test commitments publish");
         let statement = ArithmeticCircuitStatement::new(
             generators,
             circuit_constraints(),
@@ -195,7 +200,9 @@ mod tests {
         )
         .expect("shape-valid witness");
         let mut bad_gate_transcript = ProverTranscript::new(context);
-        bad_gate_transcript.write_commitments::<SeleneSuite>(commitments.clone(), Vec::new());
+        bad_gate_transcript
+            .write_commitments::<SeleneSuite>(commitments.clone(), Vec::new())
+            .expect("bad-gate test commitments publish");
         assert!(
             ArithmeticCircuitStatement::new(
                 generators,
@@ -220,7 +227,9 @@ mod tests {
         )
         .expect("shape-valid witness");
         let mut bad_opening_transcript = ProverTranscript::new(context);
-        bad_opening_transcript.write_commitments::<SeleneSuite>(commitments.clone(), Vec::new());
+        bad_opening_transcript
+            .write_commitments::<SeleneSuite>(commitments.clone(), Vec::new())
+            .expect("bad-opening test commitments publish");
         assert!(
             ArithmeticCircuitStatement::new(
                 generators,
@@ -365,14 +374,15 @@ mod tests {
     fn generalized_bulletproof_randomness_rejects_noncanonical_rng_at_fixed_bound() {
         let mut rng = NonCanonicalRng::default();
         assert_eq!(
-            random_scalar::<Field25519, _>(&mut FcmpProofRandomSource::new(&mut rng)),
-            Err(GeneralizedBulletproofErrorV1::ProverRandomnessExhausted)
+            random_scalar::<Field25519, _>(&mut FcmpProofRandomSource::new(&mut rng)).err(),
+            Some(GeneralizedBulletproofErrorV1::ProverRandomnessExhausted)
         );
         assert_eq!(rng.calls, MAX_PROVER_SCALAR_ATTEMPTS_V1);
         assert_eq!(MAX_PROVER_SCALAR_ATTEMPTS_V1, 128);
         assert_eq!(
-            random_scalar::<Field25519, _>(&mut FcmpProofRandomSource::new(&mut FailingRngV1)),
-            Err(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
+            random_scalar::<Field25519, _>(&mut FcmpProofRandomSource::new(&mut FailingRngV1))
+                .err(),
+            Some(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
         );
     }
 }

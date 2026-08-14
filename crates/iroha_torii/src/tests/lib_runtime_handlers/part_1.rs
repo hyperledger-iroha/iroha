@@ -1377,17 +1377,23 @@ fn signed_app_headers_for_network(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )
+    .expect("canonical test request is within V1 limits");
     let signature =
         checked_torii_test_signature(key_pair, &message, "sign Torii signed-app-header fixture");
     let mut headers = HeaderMap::new();
     headers.insert(
         crate::HEADER_ACCOUNT,
-        account.to_string().parse().expect("account header"),
+        account
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     headers.insert(
         crate::HEADER_SIGNATURE,
         crate::signature_header_value(&signature)
+            .expect("encode valid signature header")
             .parse()
             .expect("signature header"),
     );

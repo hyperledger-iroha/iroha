@@ -16,16 +16,16 @@ use core::{
     slice::from_raw_parts,
     str::from_utf8_unchecked,
 };
-use std::{
-    borrow::ToOwned as _,
-    boxed::Box,
-    string::{String, ToString as _},
-};
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
     NoritoDeserialize, NoritoSerialize, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
+};
+use std::{
+    borrow::ToOwned as _,
+    boxed::Box,
+    string::{String, ToString as _},
 };
 const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
 /// Immutable inlinable string.
@@ -75,6 +75,54 @@ impl ConstString {
         Self {
             inlined: InlinedString::new(),
         }
+    }
+
+    /// Retain one borrowed string under the active decode-allocation budget.
+    ///
+    /// Short values remain inline and allocate nothing. Longer values reserve
+    /// their exact byte length before using the fallible raw allocator, so
+    /// parser clients do not hide a source-sized `String` clone behind an
+    /// ordinary infallible conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-limit or allocation error when the exact retained
+    /// destination cannot be admitted.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub fn try_from_str_for_decode(value: &str) -> Result<Self, ncore::Error> {
+        if let Ok(inlined) = InlinedString::try_from(value) {
+            return Ok(Self { inlined });
+        }
+
+        let len = value.len();
+        ncore::reserve_decode_allocation(len)?;
+        let layout = std::alloc::Layout::array::<u8>(len)
+            .map_err(|_| ncore::Error::AllocationFailed { bytes: u64::MAX })?;
+        // SAFETY: `layout` is non-zero because every value that reaches this
+        // branch is longer than the inline capacity. Null is rejected before
+        // any write or ownership conversion.
+        let allocation = unsafe { std::alloc::alloc(layout) };
+        let allocation = NonNull::new(allocation).ok_or(ncore::Error::AllocationFailed {
+            bytes: u64::try_from(len).unwrap_or(u64::MAX),
+        })?;
+        // SAFETY: the allocation has exactly `len` writable bytes and the
+        // source slice has the same length. All bytes are initialized before
+        // converting the allocation into its unique boxed owner.
+        unsafe {
+            core::ptr::copy_nonoverlapping(value.as_ptr(), allocation.as_ptr(), len);
+        }
+        // SAFETY: `allocation` came from the global allocator with the exact
+        // `[u8]` layout above and is now fully initialized and uniquely owned.
+        let bytes = unsafe {
+            Box::from_raw(core::ptr::slice_from_raw_parts_mut(
+                allocation.as_ptr(),
+                len,
+            ))
+        };
+        Ok(Self {
+            boxed: ManuallyDrop::new(BoxedString::from_boxed_slice(bytes)),
+        })
     }
     /// Return `true` if [`Self`] is inlined.
     #[inline]
@@ -442,8 +490,8 @@ impl TryFrom<String> for InlinedString {
 mod tests {
     use super::*;
     mod layout {
-        use core::mem::{align_of, size_of};
         use super::*;
+        use core::mem::{align_of, size_of};
         // Verify that `ConstString` occupies the same space as a boxed string.
         #[test]
         fn const_string_layout() {
@@ -496,6 +544,37 @@ mod tests {
                 assert_eq!(const_string, string);
             });
         }
+
+        #[test]
+        fn decode_constructor_inlines_or_charges_the_exact_retained_bytes() {
+            fn limits(bytes: usize) -> ncore::DecodeLimits {
+                ncore::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+            }
+
+            let inline = "inline";
+            let (decoded, usage) = ncore::with_decode_limits_measured(limits(0), || {
+                ConstString::try_from_str_for_decode(inline)
+            });
+            assert_eq!(decoded.expect("inline string"), inline);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            let boxed = "x".repeat(MAX_INLINED_STRING_LEN + 1);
+            let (decoded, usage) = ncore::with_decode_limits_measured(limits(boxed.len()), || {
+                ConstString::try_from_str_for_decode(&boxed)
+            });
+            assert_eq!(decoded.expect("exact boxed string"), boxed);
+            assert_eq!(usage.total_allocated_bytes(), boxed.len());
+
+            let (rejected, usage) =
+                ncore::with_decode_limits_measured(limits(boxed.len() - 1), || {
+                    ConstString::try_from_str_for_decode(&boxed)
+                });
+            assert!(matches!(
+                rejected,
+                Err(ncore::Error::TotalAllocationExceeded { .. })
+            ));
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
         // Cloning should produce an identical `ConstString`.
         #[test]
         #[allow(clippy::redundant_clone)]
@@ -508,9 +587,9 @@ mod tests {
         }
     }
     mod integration {
-        use std::collections::hash_map::DefaultHasher;
-        use norito::codec::{Decode, Encode};
         use super::*;
+        use norito::codec::{Decode, Encode};
+        use std::collections::hash_map::DefaultHasher;
         // Hash output should match that of the original string.
         #[test]
         fn const_string_hash() {

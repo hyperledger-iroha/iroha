@@ -16453,6 +16453,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
     }
+    /// Whether the one-shot live-height clock boundary has been crossed.
+    pub(in crate::sumeragi) const fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        self.clocks_armed
+    }
+
     /// Inclusive root-ordinal cut for the active post-timeout recovery
     /// episode. Completions at or below this cut may receive one bounded turn
     /// while a retained transport response owns ordinary service.

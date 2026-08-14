@@ -4762,7 +4762,12 @@ impl NetworkRelayShared {
 }
 #[cfg(test)]
 mod network_relay_tests {
-    use std::{num::NonZeroU64, time::Duration};
+    use super::{
+        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
+        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
+        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
+        sumeragi_relay_class,
+    };
     use iroha_core::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
         lane_consensus::{
@@ -4797,12 +4802,7 @@ mod network_relay_tests {
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
     };
-    use super::{
-        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
-        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
-        sumeragi_relay_class,
-    };
+    use std::{num::NonZeroU64, time::Duration};
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0_u8; Hash::LENGTH];
         bytes[0] = byte;
@@ -6689,9 +6689,9 @@ fn rebind_frozen_lane_manifests_after_startup_replay(
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
-    use std::num::NonZeroUsize;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
+    use std::num::NonZeroUsize;
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0u8; Hash::LENGTH];
         bytes[0] = byte;
@@ -6953,9 +6953,9 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
-        use std::num::{NonZeroU32, NonZeroU64};
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+        use std::num::{NonZeroU32, NonZeroU64};
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane namespace"),
             vec![
@@ -7010,8 +7010,8 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn runtime_surfaces_use_post_replay_lane_catalog() {
-        use std::num::NonZeroU32;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+        use std::num::NonZeroU32;
         let configured = iroha_config::parameters::actual::Nexus {
             enabled: true,
             ..Default::default()
@@ -7081,9 +7081,9 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn startup_replay_manifest_freeze_fails_closed_for_missing_governance_source() {
-        use std::num::NonZeroU32;
         use iroha_core::governance::manifest::GovernanceGuardReason;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
+        use std::num::NonZeroU32;
         let governed_lane = LaneConfig {
             governance: Some("parliament".to_owned()),
             ..LaneConfig::default()
@@ -12220,7 +12220,7 @@ metadata = {}
         .expect("single-lane override config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "3a7d7f8a8a20880b05d9473ee7d08492afead4a3160949ef9da9aa0e152628c7";
+        "43ec250ee2781bee657f89885a07a3d907da6e1d994ccb1e3ce21dfbae53f375";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -12397,6 +12397,15 @@ metadata = {}
             .map(|lane| lane.alias.as_str())
             .collect();
         assert_eq!(lane_aliases, ["core", "governance", "zk"]);
+        assert!(
+            config
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.dataspace_id == DataSpaceId::UNIVERSAL),
+            "the Sora profile's logical lanes must share the universal physical dataspace"
+        );
         let dataspace_aliases: Vec<_> = config
             .nexus
             .dataspace_catalog
@@ -12404,7 +12413,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
     }
@@ -12433,7 +12442,7 @@ metadata = {}
         );
         let config = load_unprovisioned_profile_for_inspection(&path);
         assert!(config.nexus.enabled);
-        assert_eq!(config.nexus.dataspace_catalog.entries().len(), 3);
+        assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
         let lane_aliases: Vec<_> = config
@@ -12451,7 +12460,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
     }
     #[test]
     fn nexus_profile_hash_matches_template() {
@@ -12506,7 +12515,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
     }
     #[test]
     fn sora_flag_preserves_explicitly_disabled_sorafs_storage() {
@@ -13038,8 +13047,8 @@ fn validate_try_bind_address(_emitter: &mut Emitter<ConfigError>, value: &WithOr
 }
 /// Configures globals of [`error_stack::Report`]
 fn configure_reports(args: &Args) {
-    use std::panic::Location;
     use error_stack::{Report, fmt::ColorMode};
+    use std::panic::Location;
     Report::set_color_mode(if args.terminal_colors {
         ColorMode::Color
     } else {
@@ -18207,11 +18216,11 @@ mod tests {
         }
     }
     mod manifest_crypto_checks {
-        use std::sync::Arc;
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore};
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
+        use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
                 .build_raw()
@@ -18538,10 +18547,10 @@ mod tests {
         }
         #[test]
         fn genesis_validation_accepts_bls_controllers_when_crypto_config_applied() {
-            use std::sync::Arc;
             use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::{account::curve::CurveId, prelude::*};
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+            use std::sync::Arc;
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
@@ -19217,13 +19226,13 @@ mod tests {
         }
     }
     mod config_integration {
+        #[allow(unused_imports)]
+        use super::*;
         use assertables::assert_contains;
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
-        #[allow(unused_imports)]
-        use super::*;
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
             let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let pubkey = keypair.public_key().clone();

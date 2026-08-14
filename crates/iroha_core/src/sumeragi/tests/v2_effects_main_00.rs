@@ -11,8 +11,9 @@ use crate::sumeragi::{
     v2_core::Generation,
     v2_lifecycle_coordinator::{
         CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
-        ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
-        ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+        ProductionIngressCapacityRetry, ProductionIngressCapacityStatus,
+        ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
+        ProductionRecoveredDecisionFetchPersistenceErrorV1,
         ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
     },
     v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},

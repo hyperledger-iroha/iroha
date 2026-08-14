@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multi-lane routing and storage provisioning regression.
-use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use eyre::Result;
 use iroha_config::{
     base::WithOrigin,
@@ -39,6 +38,7 @@ use iroha_data_model::{
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use tempfile::tempdir;
 fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
     let lane_catalog = LaneCatalog::new(
@@ -59,7 +59,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(1),
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "governance".to_owned(),
                 description: Some("Governance & parliament traffic".to_owned()),
                 visibility: LaneVisibility::Restricted,
@@ -72,7 +72,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(2),
-                dataspace_id: DataSpaceId::new(2),
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "zk".to_owned(),
                 description: Some("Zero-knowledge attachments".to_owned()),
                 visibility: LaneVisibility::Restricted,
@@ -86,26 +86,14 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         ],
     )
     .expect("lane catalog");
-    let dataspace_catalog = DataSpaceCatalog::new(vec![
-        DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_owned(),
-            description: Some("Single-lane data space".to_owned()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(1),
-            alias: "governance".to_owned(),
-            description: Some("Governance proposals & manifests".to_owned()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(2),
-            alias: "zk".to_owned(),
-            description: Some("Zero-knowledge proofs and attachments".to_owned()),
-            fault_tolerance: 1,
-        },
-    ])
+    let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id: DataSpaceId::UNIVERSAL,
+        alias: "universal".to_owned(),
+        description: Some(
+            "Shared public data space for core, governance, and zero-knowledge lanes".to_owned(),
+        ),
+        fault_tolerance: 1,
+    }])
     .expect("dataspace catalog");
     let policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
@@ -113,7 +101,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
-                dataspace: Some(DataSpaceId::new(1)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("register::domain".to_owned()),
@@ -122,7 +110,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneRoutingRule {
                 lane: LaneId::new(2),
-                dataspace: Some(DataSpaceId::new(2)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("mint".to_owned()),
@@ -349,10 +337,11 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     );
     let decision = router.route(&governance_tx);
     assert_eq!(decision.lane_id, LaneId::new(1));
-    assert_eq!(decision.dataspace_id, DataSpaceId::new(1));
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
+
     let decision = router.route(&zk_tx);
     assert_eq!(decision.lane_id, LaneId::new(2));
-    assert_eq!(decision.dataspace_id, DataSpaceId::new(2));
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
     let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
@@ -386,7 +375,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     );
     let governance = router.route_with_view(&governance_tx, &state.view());
     assert_eq!(governance.lane_id, LaneId::new(1));
-    assert_eq!(governance.dataspace_id, DataSpaceId::new(1));
+    assert_eq!(governance.dataspace_id, DataSpaceId::UNIVERSAL);
     let zk_tx = build_tx(
         network_id,
         &authority,
@@ -404,7 +393,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     );
     let zk = router.route_with_view(&zk_tx, &state.view());
     assert_eq!(zk.lane_id, LaneId::new(2));
-    assert_eq!(zk.dataspace_id, DataSpaceId::new(2));
+    assert_eq!(zk.dataspace_id, DataSpaceId::UNIVERSAL);
     let mut lanes_seen = std::collections::BTreeSet::new();
     for idx in 0..512 {
         let role_id = iroha_data_model::role::RoleId {

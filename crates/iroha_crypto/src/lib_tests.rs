@@ -1,9 +1,9 @@
 // Crypto crate regressions are included at crate scope to preserve private-item access.
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::codec::{Decode, Encode};
     use zeroize::Zeroizing;
-    use super::*;
     static SESSION_KEY_ZEROIZATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     fn session_key_zeroization_test_guard() -> std::sync::MutexGuard<'static, ()> {
         SESSION_KEY_ZEROIZATION_TEST_LOCK
@@ -282,6 +282,22 @@ mod tests {
         signature
             .verify(wrong_key.public_key(), message)
             .expect_err("signature must reject wrong secp256k1 key");
+    }
+
+    #[test]
+    fn admission_verifier_preserves_ed25519_and_secp256k1_verdicts() {
+        for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
+            let key_pair = checked_seed_keypair(&[algorithm as u8 + 0x31; 32], algorithm);
+            let wrong_key = checked_seed_keypair(&[algorithm as u8 + 0x51; 32], algorithm);
+            let message = b"cache-free admission signature";
+            let proof = checked_signature(key_pair.private_key(), message);
+            verify_signature_for_admission(&proof, key_pair.public_key(), message)
+                .expect("admission signature verifies");
+            verify_signature_for_admission(&proof, wrong_key.public_key(), message)
+                .expect_err("admission verifier rejects the wrong key");
+            verify_signature_for_admission(&proof, key_pair.public_key(), b"tampered")
+                .expect_err("admission verifier rejects a changed message");
+        }
     }
     #[test]
     fn try_random_with_algorithm_ml_dsa_signs_and_verifies() {
@@ -574,8 +590,8 @@ mod tests {
     }
     #[test]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
-        use pqcrypto_traits::sign::SecretKey as _;
         use crate::mldsa_seed::mldsa65 as seeded;
+        use pqcrypto_traits::sign::SecretKey as _;
         let (public, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
         let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
@@ -1049,6 +1065,46 @@ mod tests {
             assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
         }
     }
+
+    #[test]
+    fn borrowed_public_key_decode_validators_have_no_heap_units() {
+        for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa] {
+            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 0);
+        }
+        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 0);
+        }
+    }
+
+    #[cfg(any(
+        all(feature = "bls", not(feature = "bls-backend-blstrs")),
+        feature = "gost",
+        feature = "sm"
+    ))]
+    #[test]
+    fn allocating_public_key_decode_fallbacks_keep_explicit_heap_units() {
+        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 2);
+        }
+        #[cfg(feature = "gost")]
+        for algorithm in [
+            Algorithm::Gost3410_2012_256ParamSetA,
+            Algorithm::Gost3410_2012_256ParamSetB,
+            Algorithm::Gost3410_2012_256ParamSetC,
+            Algorithm::Gost3410_2012_512ParamSetA,
+            Algorithm::Gost3410_2012_512ParamSetB,
+        ] {
+            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 12);
+        }
+        #[cfg(feature = "sm")]
+        assert_eq!(
+            public_key_validation_heap_units_for_decode(Algorithm::Sm2),
+            2
+        );
+    }
+
     #[cfg(feature = "sm")]
     #[test]
     fn maximum_accepted_sm2_public_key_payload_matches_protocol_ceiling() {
@@ -1202,7 +1258,7 @@ mod tests {
     }
     #[test]
     #[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
-    fn mldsa_public_key_sizing_does_not_revalidate_key_material() {
+    fn mldsa_decode_and_structural_encoders_avoid_full_key_reparse() {
         let public_key = checked_seed_keypair(&[0x5A; 32], Algorithm::MlDsa)
             .public_key()
             .clone();
@@ -1214,6 +1270,11 @@ mod tests {
             &compact.algorithm_and_payload,
         );
         reset_public_key_validation_call_count();
+        let (algorithm, payload) = public_key
+            .try_to_bytes()
+            .expect("generated ML-DSA compact state");
+        PublicKeyFull::validate_bytes_for_decode(algorithm, payload)
+            .expect("borrowed ML-DSA decode validation");
         assert_eq!(
             norito::core::NoritoSerialize::encoded_len_hint(compact),
             expected_hint
@@ -1235,16 +1296,40 @@ mod tests {
             0,
             "Norito sizing must not parse ML-DSA key material"
         );
-        compact
-            .validated_full()
-            .expect("generated compact ML-DSA key validates");
-        public_key
-            .validated_full()
-            .expect("generated ML-DSA key validates");
+
+        let mut compact_norito = Vec::new();
+        norito::core::serialize_to_buffer(compact, &mut compact_norito)
+            .expect("structural compact Norito encoding");
+        let mut public_norito = Vec::new();
+        norito::core::serialize_to_buffer(&public_key, &mut public_norito)
+            .expect("structural public-key Norito encoding");
+        assert_eq!(compact_norito, public_norito);
+        let (decoded, used) =
+            <PublicKey as norito::core::DecodeFromSlice>::decode_from_slice(&public_norito)
+                .expect("borrowed ML-DSA Norito decode validation");
+        assert_eq!(used, public_norito.len());
+        assert_eq!(decoded, public_key);
+        let canonical = public_key
+            .try_to_multihash_string()
+            .expect("structural multihash formatting");
+        assert_eq!(public_key.to_string(), canonical);
+        assert_eq!(
+            public_key
+                .try_to_prefixed_string()
+                .expect("structural prefixed formatting"),
+            format!("ml-dsa:{canonical}")
+        );
+        assert_bounded_public_key_json(&canonical, &public_key);
         assert_eq!(
             public_key_validation_call_count(),
-            2,
-            "test counter must observe both validation entry points"
+            0,
+            "Norito, checked JSON, and formatting must not reparse ML-DSA key material"
+        );
+        PublicKeyFull::from_bytes(algorithm, payload).expect("explicit full-key parsing succeeds");
+        assert_eq!(
+            public_key_validation_call_count(),
+            1,
+            "test counter must observe explicit full-key parsing"
         );
     }
     #[test]
@@ -1274,13 +1359,78 @@ mod tests {
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]
-    fn public_key_compact_serialize_rejects_malformed_payload_without_panic() {
+    fn public_key_compact_serialize_rejects_malformed_envelope() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
-        let err = norito::core::to_bytes(&compact)
-            .expect_err("malformed compact public key must not serialize to Norito");
-        assert!(matches!(err, norito::core::Error::Message(_)));
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_some());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_some());
+        let mut encoded = Vec::new();
+        norito::core::serialize_to_buffer(&compact, &mut encoded)
+            .expect_err("malformed compact state must fail serialization");
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_none());
+    }
+
+    #[test]
+    fn public_key_structural_envelope_covers_every_compiled_algorithm() {
+        fn accepted(algorithm: Algorithm, payload: Vec<u8>) {
+            validate_public_key_structural_envelope(algorithm, &payload)
+                .unwrap_or_else(|error| panic!("valid {algorithm:?} envelope failed: {error}"));
+            let mut short = payload.clone();
+            short.pop();
+            assert!(
+                validate_public_key_structural_envelope(algorithm, &short).is_err(),
+                "short {algorithm:?} envelope was accepted"
+            );
+            let mut long = payload;
+            long.push(1);
+            assert!(
+                validate_public_key_structural_envelope(algorithm, &long).is_err(),
+                "long {algorithm:?} envelope was accepted"
+            );
+        }
+
+        accepted(Algorithm::Ed25519, vec![1; 32]);
+        let mut secp = vec![1; 33];
+        secp[0] = 0x02;
+        accepted(Algorithm::Secp256k1, secp.clone());
+        secp[0] = 0x04;
+        assert!(validate_public_key_structural_envelope(Algorithm::Secp256k1, &secp).is_err());
+        accepted(Algorithm::MlDsa, vec![1; ML_DSA_65_PUBLIC_KEY_BYTES]);
+        #[cfg(feature = "bls")]
+        {
+            accepted(Algorithm::BlsNormal, vec![1; 48]);
+            accepted(Algorithm::BlsSmall, vec![1; 96]);
+        }
+        #[cfg(feature = "gost")]
+        {
+            accepted(Algorithm::Gost3410_2012_256ParamSetA, vec![1; 64]);
+            accepted(Algorithm::Gost3410_2012_256ParamSetB, vec![1; 64]);
+            accepted(Algorithm::Gost3410_2012_256ParamSetC, vec![1; 64]);
+            accepted(Algorithm::Gost3410_2012_512ParamSetA, vec![1; 128]);
+            accepted(Algorithm::Gost3410_2012_512ParamSetB, vec![1; 128]);
+        }
+        #[cfg(feature = "sm")]
+        {
+            let mut sm2 = vec![0, 3];
+            sm2.extend_from_slice(b"abc");
+            sm2.push(0x04);
+            sm2.extend_from_slice(&[1; 64]);
+            accepted(Algorithm::Sm2, sm2.clone());
+
+            let mut wrong_length = sm2.clone();
+            wrong_length[..2].copy_from_slice(&4_u16.to_be_bytes());
+            assert!(
+                validate_public_key_structural_envelope(Algorithm::Sm2, &wrong_length).is_err()
+            );
+            let mut invalid_utf8 = sm2.clone();
+            invalid_utf8[2] = 0xff;
+            assert!(
+                validate_public_key_structural_envelope(Algorithm::Sm2, &invalid_utf8).is_err()
+            );
+            let mut wrong_sec1_tag = sm2;
+            wrong_sec1_tag[5] = 0x02;
+            assert!(
+                validate_public_key_structural_envelope(Algorithm::Sm2, &wrong_sec1_tag).is_err()
+            );
+        }
     }
     #[test]
     fn public_key_compact_to_full_rejects_malformed_state_without_panic() {
@@ -1391,13 +1541,13 @@ mod tests {
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]
-    fn public_key_norito_serialize_rejects_malformed_payload_without_panic() {
+    fn public_key_norito_serialize_rejects_malformed_envelope() {
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-        let err = norito::core::to_bytes(&malformed)
-            .expect_err("malformed public key must not serialize to Norito");
-        assert!(matches!(err, norito::core::Error::Message(_)));
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_some());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_some());
+        let mut encoded = Vec::new();
+        norito::core::serialize_to_buffer(&malformed, &mut encoded)
+            .expect_err("malformed public-key state must fail serialization");
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_none());
     }
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
@@ -1454,14 +1604,28 @@ mod tests {
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]
-    fn public_key_fallible_string_encoders_reject_malformed_payload_without_panic() {
-        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-        malformed
+    fn public_key_fallible_string_encoders_reject_malformed_envelopes_without_panic() {
+        let missing_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(Vec::new()),
+        });
+        missing_tag
             .try_to_multihash_string()
-            .expect_err("malformed public key must not format as multihash");
-        malformed
+            .expect_err("missing algorithm tag must not format as multihash");
+        missing_tag
             .try_to_prefixed_string()
-            .expect_err("malformed public key must not format as prefixed multihash");
+            .expect_err("missing algorithm tag must not format as prefixed multihash");
+
+        let oversized_payload = vec![0_u8; MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1];
+        let oversized = PublicKey(PublicKeyCompact::new(
+            Algorithm::Ed25519,
+            &oversized_payload,
+        ));
+        oversized
+            .try_to_multihash_string()
+            .expect_err("above-protocol payload must not format as multihash");
+        oversized
+            .try_to_prefixed_string()
+            .expect_err("above-protocol payload must not format as prefixed multihash");
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]
@@ -1484,6 +1648,11 @@ mod tests {
         assert_eq!(json, r#""invalid-public-key:""#);
         norito::json::from_json::<PublicKey>(&json)
             .expect_err("malformed marker must not deserialize as a public key");
+        let payload_json = norito::json::to_json(&malformed_payload)
+            .expect("malformed payload renders a deterministic marker");
+        assert_eq!(payload_json, r#""invalid-public-key:00""#);
+        norito::json::from_json::<PublicKey>(&payload_json)
+            .expect_err("structurally formatted invalid payload must still fail admission");
     }
     #[test]
     fn keypair_new_rejects_malformed_public_key_without_panic() {
@@ -1752,6 +1921,35 @@ mod tests {
             "e701210312273E8810581E58948D3FB8F9E8AD53AAA21492EBB8703915BBB565A21B7FCC";
         let secp: PublicKey = secp_literal.parse().expect("Secp256k1 fixture");
         assert_bounded_public_key_json(secp_literal, &secp);
+    }
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_value_and_map_key_decoders_do_not_stage_json_text() {
+        use norito::json::JsonDeserialize as _;
+
+        let literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let value = norito::json::Value::String(literal.to_owned());
+        let payload_bytes = 32;
+        let limits = || {
+            norito::core::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                payload_bytes + 1,
+                usize::MAX,
+            )
+        };
+        let (from_value, usage) = norito::core::with_decode_limits_measured(limits(), || {
+            PublicKey::json_from_value(&value)
+        });
+        assert_eq!(from_value.expect("PublicKey value").to_string(), literal);
+        assert_eq!(usage.total_allocated_bytes(), payload_bytes + 1);
+
+        let (from_key, usage) = norito::core::with_decode_limits_measured(limits(), || {
+            PublicKey::json_from_map_key(literal)
+        });
+        assert_eq!(from_key.expect("PublicKey map key").to_string(), literal);
+        assert_eq!(usage.total_allocated_bytes(), payload_bytes + 1);
     }
     #[test]
     #[cfg(not(feature = "ffi_import"))]

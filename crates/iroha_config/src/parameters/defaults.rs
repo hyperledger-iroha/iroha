@@ -2134,7 +2134,7 @@ pub mod torii {
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
     pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
-    pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 8_514_114;
+    pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 9_562_690;
     /// Variable-size units retained by the conservative V1 pre-body envelope.
     pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
     /// Divisor reserving one quarter of aggregate query memory for ingress.

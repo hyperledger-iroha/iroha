@@ -5,16 +5,16 @@
 //! relay enforces. Difficulty adjustments and TTL validation follow the same
 //! rules as the `PoW` implementation, while the work predicate is backed by
 //! Argon2id to raise the cost of GPU/ASIC optimisations.
+use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
+use argon2::{Algorithm, Argon2, Params, Version};
+use blake3::Hasher;
+use rand_core::TryCryptoRng;
 use std::{
     fmt,
     num::NonZeroU32,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use argon2::{Algorithm, Argon2, Params, Version};
-use blake3::Hasher;
-use rand_core::TryCryptoRng;
 use thiserror::Error;
-use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 const OUTPUT_LEN: usize = 32;
 const SOLUTION_SALT_LEN: usize = SOLUTION_DOMAIN.len() + OUTPUT_LEN;
 const TTL_GRACE: Duration = Duration::from_secs(1);
@@ -616,10 +616,10 @@ impl fmt::Display for DigestError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
-    use super::*;
     const DESCRIPTOR: [u8; 32] = [0x11; 32];
     const RELAY: [u8; 32] = [0x22; 32];
     const TRANSCRIPT: [u8; 32] = [0x33; 32];

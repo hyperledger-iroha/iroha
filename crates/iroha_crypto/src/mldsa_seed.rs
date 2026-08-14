@@ -5,6 +5,7 @@
 //! only canonical FIPS 204 byte encodings cross the crate boundary.
 /// ML-DSA-65 key derivation and public-key recovery.
 pub mod mldsa65 {
+    use crate::{Algorithm, Error, PrivateKey, PublicKey};
     use hkdf::Hkdf;
     use pqcrypto_traits::sign::SecretKey as _;
     #[cfg(feature = "rand")]
@@ -17,7 +18,6 @@ pub mod mldsa65 {
         mldsa_public_key_from_secret_key,
     };
     use zeroize::Zeroizing;
-    use crate::{Algorithm, Error, PrivateKey, PublicKey};
     const FIPS_SEED_BYTES: usize = 32;
     const HKDF_SALT: &[u8] = b"iroha:ml-dsa:keygen:v1";
     const HKDF_INFO: &[u8] = b"iroha:ml-dsa:fips204:keypair";
@@ -86,16 +86,14 @@ pub mod mldsa65 {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
         #[cfg(feature = "rand")]
         use core::fmt;
         use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
-        use pqcrypto_traits::sign::{
-            DetachedSignature as _, PublicKey as _, SecretKey as _, VerificationError,
-        };
+        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, VerificationError};
         use rand_core::RngCore as _;
         #[cfg(feature = "rand")]
         use rand_core::{TryCryptoRng, TryRngCore};
-        use super::*;
         const RELEASE_KAT_FIPS_SEED: [u8; 32] =
             hex_literal::hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         const RELEASE_KAT_SIGNING_SEED: [u8; 32] =

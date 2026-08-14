@@ -1,6 +1,6 @@
 //! Serialization destinations used by the Norito core codec.
-use std::io::{self, Write};
 use super::ByteSink;
+use std::io::{self, Write};
 /// Non-generic destination used by [`super::NoritoSerialize`] implementations.
 ///
 /// Erasing the concrete [`Write`] type at the outer serialization boundary

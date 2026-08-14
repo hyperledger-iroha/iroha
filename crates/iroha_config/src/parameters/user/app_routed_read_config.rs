@@ -1,7 +1,7 @@
 //! App routed-read request-admission configuration helpers.
-use std::time::Duration;
-use iroha_config_base::util::{DurationMs, Emitter};
 use super::{ParseError, Torii, defaults, emit_torii_config_error};
+use iroha_config_base::util::{DurationMs, Emitter};
+use std::time::Duration;
 pub(super) const fn default_body_timeout() -> DurationMs {
     DurationMs(Duration::from_millis(
         defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,

@@ -1,10 +1,4 @@
 //! Verified height authority for lifecycle scheduler episodes and rollover.
-use std::collections::BTreeSet;
-#[cfg(test)]
-use std::path::PathBuf;
-use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::Hash;
-use norito::codec::Encode;
 use super::schema;
 #[cfg(test)]
 use crate::sumeragi::v2_certified_serve_payload_store::DurableCertifiedServeNegativeReceipt;
@@ -12,10 +6,16 @@ use crate::sumeragi::{
     v2::VerifiedHeightContext, v2_core::MAX_EFFECTS_PER_STEP,
     v2_worker::certified_serve_family_capacity,
 };
+use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_crypto::Hash;
+use norito::codec::Encode;
 use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
     MAX_LIFECYCLE_RECORDS_PER_HEIGHT, PhysicalSlotId, SchedulerEpisodeUniverse,
 };
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::path::PathBuf;
 const ROSTER_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:roster-identity:v1";
 /// Opaque, verified source of every scheduler-episode universe for one height.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,5 +1,5 @@
-use std::io::{self, Write};
 use crate::json::{self, JsonSerialize, Value};
+use std::io::{self, Write};
 const INDENT: usize = 2;
 /// Errors that can occur during YAML serialization.
 #[derive(Debug, thiserror::Error)]

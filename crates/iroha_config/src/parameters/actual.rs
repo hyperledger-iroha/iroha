@@ -931,7 +931,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(1),
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "governance".to_string(),
             description: Some("Governance & parliament traffic".to_string()),
             visibility: LaneVisibility::Restricted,
@@ -944,7 +944,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(2),
-            dataspace_id: DataSpaceId::new(2),
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "zk".to_string(),
             description: Some("Zero-knowledge attachments".to_string()),
             visibility: LaneVisibility::Restricted,
@@ -959,26 +959,14 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     LaneCatalog::new(lane_count, lanes).expect("static Sora lane catalog is valid")
 }
 pub(crate) fn sora_dataspace_catalog() -> DataSpaceCatalog {
-    let entries = vec![
-        DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
-            description: Some("Single-lane data space".to_string()),
-            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(1),
-            alias: "governance".to_string(),
-            description: Some("Governance proposals & manifests".to_string()),
-            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(2),
-            alias: "zk".to_string(),
-            description: Some("Zero-knowledge proofs and attachments".to_string()),
-            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
-        },
-    ];
+    let entries = vec![DataSpaceMetadata {
+        id: DataSpaceId::UNIVERSAL,
+        alias: defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
+        description: Some(
+            "Shared public data space for core, governance, and zero-knowledge lanes".to_string(),
+        ),
+        fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
+    }];
     DataSpaceCatalog::new(entries).expect("static Sora dataspace catalog is valid")
 }
 pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
@@ -988,23 +976,25 @@ pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
-                dataspace: Some(DataSpaceId::new(1)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("governance".to_string()),
                     description: Some(
-                        "Route governance instructions to the governance lane".to_string(),
+                        "Route governance instructions to the governance lane in the universal data space"
+                            .to_string(),
                     ),
                 },
             },
             LaneRoutingRule {
                 lane: LaneId::new(2),
-                dataspace: Some(DataSpaceId::new(2)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("smartcontract::deploy".to_string()),
                     description: Some(
-                        "Route contract deployments to the zk lane for proof tracking".to_string(),
+                        "Route contract deployments to the zk lane in the universal data space"
+                            .to_string(),
                     ),
                 },
             },
@@ -3321,7 +3311,7 @@ pub struct Nexus {
     pub configured_lane_catalog: LaneCatalog,
     /// Derived storage/configuration geometry for lanes.
     pub lane_config: LaneConfig,
-    /// Validated data-space catalog.
+    /// Validated catalog of physical execution, storage, and validator boundaries.
     pub dataspace_catalog: DataSpaceCatalog,
     /// Default fee sponsor program for each data space.
     pub dataspace_fee_sponsor_program_ids: BTreeMap<DataSpaceId, FeeSponsorProgramId>,

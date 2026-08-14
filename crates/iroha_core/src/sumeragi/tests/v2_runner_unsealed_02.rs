@@ -450,6 +450,25 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         )
     };
     let unlocked = directive(None, None);
+    let recovered =
+        super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, round, subject);
+    assert!(recovered.exactly_matches_directive(unlocked));
+    assert_eq!(
+        LocalProposalState::from_recovered_lifecycle_attempt(true, unlocked).attempted,
+        Some(LocalProposalOwner::from(unlocked))
+    );
+    assert!(
+        LocalProposalState::from_recovered_lifecycle_attempt(false, unlocked)
+            .attempted
+            .is_none()
+    );
+    let mut setup = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    assert!(setup.bind_recovered_local_proposal(unlocked));
+    assert!(
+        !setup.bind_recovered_local_proposal(unlocked),
+        "a second bind must reject the already-owned runner state"
+    );
+    assert!(setup.already_attempted(unlocked));
     assert_eq!(
         LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
         Some(LocalProposalOwner::from(unlocked))
@@ -461,6 +480,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         "the exact replayed subject owns current locked-body work"
     );
     let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+    assert!(!recovered.exactly_matches_directive(foreign_lock));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
             .attempted
@@ -478,6 +498,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         "the replayed proposal round must match its reducer tag"
     );
     let decided = directive(Some(subject), Some(subject));
+    assert!(!recovered.exactly_matches_directive(decided));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), decided)
             .attempted
@@ -615,6 +636,61 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
         Err(FairV2IngressPushError::Closed(_))
     ));
 }
+#[test]
+fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
+    let _status_guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let configured_ingress = || {
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure preactivation recovery ingress");
+        ingress
+    };
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let ingress = configured_ingress();
+    let mut activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&ready),
+        Arc::clone(&ingress),
+    );
+    let aperture = activation
+        .open_canonical_recovery_ingress(&ingress)
+        .expect("borrow exact ordinary activation ingress");
+    assert!(ready.load(Ordering::Acquire));
+    assert!(ingress.state.lock().open);
+    assert!(std::ptr::eq(aperture.ingress(), ingress.as_ref()));
+    assert!(aperture.close_and_verify());
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let complete_tip_ready = Arc::new(AtomicBool::new(false));
+    let complete_tip_ingress = configured_ingress();
+    let mut complete_tip = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+        Arc::clone(&complete_tip_ready),
+        Arc::clone(&complete_tip_ingress),
+    );
+    {
+        let aperture = complete_tip
+            .open_canonical_recovery_ingress(&complete_tip_ingress)
+            .expect("borrow exact CompleteTip activation ingress");
+        assert!(complete_tip_ready.load(Ordering::Acquire));
+        assert!(aperture.ingress().state.lock().open);
+    }
+    assert!(!complete_tip_ready.load(Ordering::Acquire));
+    assert!(!complete_tip_ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let foreign = configured_ingress();
+    assert!(matches!(
+        activation.open_canonical_recovery_ingress(&foreign),
+        Err(V2RunnerError::LifecycleActivationIngressMismatch)
+    ));
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+}
+
 #[test]
 fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff() {
     // This narrow rollover contract starts from a synthesized, internally

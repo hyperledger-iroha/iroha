@@ -1,10 +1,11 @@
 //! Count-first, allocation-bounded JSON serialization.
+use super::{JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
 use std::{
     alloc::{Layout, alloc},
     collections::{BTreeMap, BTreeSet},
+    fmt,
     mem::MaybeUninit,
 };
-use super::{JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
 /// Fixed, data-independent failures from bounded JSON serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BoundedJsonError {
@@ -346,6 +347,14 @@ pub fn write_json_string_to<S: JsonWriteSink + ?Sized>(
 ) -> Result<(), BoundedJsonError> {
     output.reserve(value.len().saturating_add(2))?;
     output.push('"')?;
+    write_json_string_content_to(value, output)?;
+    output.push('"')
+}
+
+fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
+    value: &str,
+    output: &mut S,
+) -> Result<(), BoundedJsonError> {
     for ch in value.chars() {
         match ch {
             '"' => output.push_str("\\\"")?,
@@ -365,6 +374,47 @@ pub fn write_json_string_to<S: JsonWriteSink + ?Sized>(
             ordinary => output.push(ordinary)?,
         }
     }
+    Ok(())
+}
+
+/// Stream one [`fmt::Display`] value as a JSON string without staging its text.
+///
+/// The formatter's chunks are escaped with the same rules as
+/// [`write_json_string_to`]. A checked-sink failure stops formatting
+/// immediately and is returned unchanged, so an output limit cannot be hidden
+/// behind a later formatting error.
+#[doc(hidden)]
+pub fn write_json_display_to<T: fmt::Display + ?Sized, S: JsonWriteSink + ?Sized>(
+    value: &T,
+    output: &mut S,
+) -> Result<(), BoundedJsonError> {
+    struct EscapedDisplaySink<'a, S: ?Sized> {
+        output: &'a mut S,
+        error: Option<BoundedJsonError>,
+    }
+
+    impl<S: JsonWriteSink + ?Sized> fmt::Write for EscapedDisplaySink<'_, S> {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            match write_json_string_content_to(value, self.output) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    self.error = Some(error);
+                    Err(fmt::Error)
+                }
+            }
+        }
+    }
+
+    output.push('"')?;
+    let mut escaped = EscapedDisplaySink {
+        output,
+        error: None,
+    };
+    let formatted = fmt::write(&mut escaped, format_args!("{value}"));
+    if let Some(error) = escaped.error {
+        return Err(error);
+    }
+    formatted.map_err(|_| BoundedJsonError::Unsupported)?;
     output.push('"')
 }
 fn write_u128_to<S: JsonWriteSink + ?Sized>(
@@ -796,12 +846,12 @@ pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         cell::Cell,
         collections::BTreeMap,
         sync::atomic::{AtomicUsize, Ordering},
     };
-    use super::*;
     #[derive(crate::derive::JsonSerialize)]
     struct Payload {
         label: String,

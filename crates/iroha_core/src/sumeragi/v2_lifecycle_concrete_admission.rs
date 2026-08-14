@@ -985,16 +985,16 @@ fn concrete_work_location(
 }
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-    use tempfile::TempDir;
     use super::super::{OwnerId, PhysicalSlotId};
     use super::*;
     use crate::sumeragi::{
         v2_core::{EventTag, Generation},
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use std::cell::Cell;
+    use tempfile::TempDir;
     struct Fixture {
         verified: VerifiedHeightContext,
         context: wire::HeightContext,

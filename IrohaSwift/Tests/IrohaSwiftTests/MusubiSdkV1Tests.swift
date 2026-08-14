@@ -2350,7 +2350,7 @@ final class MusubiSdkV1Tests: XCTestCase {
     private func assertCanonicalSignature(_ request: URLRequest) throws -> String {
         XCTAssertEqual(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-            musubiAccountId
+            try AccountAddress.parseEncoded(musubiAccountId).canonicalHex()
         )
         let timestampText = try XCTUnwrap(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs)
@@ -2373,10 +2373,10 @@ final class MusubiSdkV1Tests: XCTestCase {
             url: URL,
             body: Data,
             nonce candidateNonce: String = nonce
-        ) -> Bool {
+        ) throws -> Bool {
             publicKey.isValidSignature(
                 signature,
-                for: ToriiCanonicalRequest.signatureMessage(
+                for: try ToriiCanonicalRequest.signatureMessage(
                     networkId: networkId,
                     method: "POST",
                     url: url,
@@ -2386,24 +2386,24 @@ final class MusubiSdkV1Tests: XCTestCase {
                 )
             )
         }
-        XCTAssertTrue(verifies(networkId: TestNetworkIds.canonical, url: url, body: body))
-        XCTAssertFalse(verifies(networkId: TestNetworkIds.other, url: url, body: body))
+        XCTAssertTrue(try verifies(networkId: TestNetworkIds.canonical, url: url, body: body))
+        XCTAssertFalse(try verifies(networkId: TestNetworkIds.other, url: url, body: body))
         XCTAssertFalse(
-            verifies(
+            try verifies(
                 networkId: TestNetworkIds.canonical,
                 url: try XCTUnwrap(URL(string: "https://example.test/v1/musubi/wrong")),
                 body: body
             )
         )
         XCTAssertFalse(
-            verifies(
+            try verifies(
                 networkId: TestNetworkIds.canonical,
                 url: url,
                 body: body + Data([0])
             )
         )
         XCTAssertFalse(
-            verifies(
+            try verifies(
                 networkId: TestNetworkIds.canonical,
                 url: url,
                 body: body,

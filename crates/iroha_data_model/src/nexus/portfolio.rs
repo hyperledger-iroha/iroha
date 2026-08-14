@@ -1,12 +1,12 @@
 //! Portfolio snapshot structures for UAID aggregation.
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::{AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionId, AssetId},
     nexus::{DataSpaceId, UniversalAccountId},
 };
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Aggregated holdings for a universal account identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(

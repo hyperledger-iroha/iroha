@@ -1,5 +1,5 @@
-use std::{format, string::String, vec::Vec};
 use derive_more::Display;
+use std::{format, string::String, vec::Vec};
 /// Variable length unsigned int. [ref](https://github.com/multiformats/unsigned-varint)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VarUint {
@@ -130,8 +130,8 @@ impl VarUint {
 }
 #[cfg(test)]
 mod tests {
-    use std::vec;
     use super::*;
+    use std::vec;
     #[test]
     fn test_basic_into() {
         let n = 0x4000_u64;

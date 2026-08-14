@@ -20,6 +20,7 @@ use axum::{
 use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use http_body_util::BodyExt as _;
+use iroha_data_model::account::AccountAddress;
 use iroha_torii_shared::route_catalog::{
     self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
@@ -3093,6 +3094,22 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_bridge_finality_bundle => "/v1/bridge/finality/bundle/{height}";
     }
 }
+/// Render an exact MCP account input into the strict ASCII auth-header form.
+fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, String> {
+    if account.is_empty() || account.trim() != account {
+        return Err("`canonical_auth.account` must be exact and non-empty".to_owned());
+    }
+    match AccountAddress::parse_encoded(account, None) {
+        Ok(address) => address
+            .canonical_hex()
+            .map_err(|err| format!("failed to encode `canonical_auth.account`: {err}")),
+        Err(_) if account.bytes().all(|byte| byte.is_ascii_graphic()) => Ok(account.to_owned()),
+        Err(_) => Err(
+            "`canonical_auth.account` must be a canonical I105 account or printable ASCII account alias"
+                .to_owned(),
+        ),
+    }
+}
 fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
         .get("canonical_auth")
@@ -3135,6 +3152,7 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
             let account = account.ok_or_else(|| {
                 "signature authentication requires `canonical_auth.account`".to_owned()
             })?;
+            let account = vpn_canonical_auth_account_header_value(&account)?;
             headers.insert(crate::HEADER_ACCOUNT.into(), Value::String(account));
             headers.insert(crate::HEADER_SIGNATURE.into(), Value::String(signature));
             headers.insert(
@@ -3145,6 +3163,7 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
         }
         (None, None, None, Some(witness)) => {
             if let Some(account) = account {
+                let account = vpn_canonical_auth_account_header_value(&account)?;
                 headers.insert(crate::HEADER_ACCOUNT.into(), Value::String(account));
             }
             headers.insert(crate::HEADER_WITNESS.into(), Value::String(witness));
@@ -7282,7 +7301,7 @@ fn vpn_canonical_auth_schema() -> Value {
         "properties": {
             "account": {
                 "type": "string",
-                "description": "Canonical AccountId. Required for a signature tuple and optional when the witness identifies the subject account."
+                "description": "Exact canonical I105 AccountId or active printable-ASCII account alias. I105 is forwarded in X-Iroha-Account as lowercase canonical address hex. Required for a signature tuple and optional when the witness identifies the subject account."
             },
             "signature": {
                 "type": "string",
@@ -11234,4 +11253,69 @@ mod tests {
     include!("mcp/dispatch_and_argument_tests.rs");
     include!("mcp/iso20022_operator_auth_tests.rs");
     include!("mcp/body_builder_tests.rs");
+
+    #[test]
+    fn vpn_canonical_auth_emits_ascii_account_headers() {
+        let expected = AccountAddress::parse_encoded(TEST_ACCOUNT_I105, None)
+            .expect("canonical I105 fixture")
+            .canonical_hex()
+            .expect("canonical account hex");
+        for arguments in [
+            norito::json!({
+                "canonical_auth": {
+                    "account": TEST_ACCOUNT_I105,
+                    "signature": "signature",
+                    "timestamp_ms": 1_u64,
+                    "nonce": "nonce"
+                }
+            }),
+            norito::json!({
+                "canonical_auth": {
+                    "account": TEST_ACCOUNT_I105,
+                    "witness": "witness"
+                }
+            }),
+        ] {
+            let headers = vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
+                .expect("canonical authentication headers");
+            let account = headers
+                .as_object()
+                .and_then(|headers| headers.get(crate::HEADER_ACCOUNT))
+                .and_then(Value::as_str)
+                .expect("account header");
+            assert_eq!(account, expected);
+            assert!(account.is_ascii());
+        }
+
+        let alias_arguments = norito::json!({
+            "canonical_auth": {
+                "account": "operator@sora",
+                "witness": "witness"
+            }
+        });
+        let alias_headers =
+            vpn_canonical_auth_headers(alias_arguments.as_object().expect("alias arguments"))
+                .expect("ASCII alias authentication headers");
+        assert_eq!(
+            alias_headers
+                .as_object()
+                .and_then(|headers| headers.get(crate::HEADER_ACCOUNT))
+                .and_then(Value::as_str),
+            Some("operator@sora")
+        );
+    }
+
+    #[test]
+    fn vpn_canonical_auth_rejects_inexact_or_non_ascii_aliases() {
+        for account in [" operator@sora", "operator alias", "账户"] {
+            let arguments = norito::json!({
+                "canonical_auth": {
+                    "account": account,
+                    "witness": "witness"
+                }
+            });
+            vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
+                .expect_err("only exact printable ASCII aliases are supported");
+        }
+    }
 }

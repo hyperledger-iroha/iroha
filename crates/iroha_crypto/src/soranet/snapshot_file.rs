@@ -289,9 +289,9 @@ fn metadata_identifies_same_file(_left: &fs::Metadata, _right: &fs::Metadata) ->
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn bounded_reader_accepts_exact_limit_and_rejects_one_more_byte() {
         let directory = tempdir().expect("temporary directory");

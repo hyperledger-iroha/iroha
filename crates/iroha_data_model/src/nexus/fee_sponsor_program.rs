@@ -1,15 +1,15 @@
 //! On-chain Nexus fee sponsor program model.
-use std::{collections::BTreeSet, fmt, num::NonZeroU64, str::FromStr};
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::{AccountId, ParsedAccountId},
     asset::AssetDefinitionId,
     name::Name,
     smart_contract::ContractAddress,
 };
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{collections::BTreeSet, fmt, num::NonZeroU64, str::FromStr};
 /// Error returned while parsing [`FeeSponsorProgramId`] literals.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum FeeSponsorProgramIdParseError {
@@ -884,9 +884,8 @@ impl FromStr for FeeRejectionCode {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::codec::{Decode as _, Encode as _};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
     fn sponsor_account() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");

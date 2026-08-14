@@ -70,7 +70,7 @@ final class ToriiKagemushaReceiverLineageAuthTests: XCTestCase {
         XCTAssertEqual(request.httpBody, query.noritoArchive)
         XCTAssertEqual(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-            accountId
+            try AccountAddress.parseEncoded(accountId).canonicalHex()
         )
         let signature = try XCTUnwrap(
             request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
@@ -82,8 +82,8 @@ final class ToriiKagemushaReceiverLineageAuthTests: XCTestCase {
             method: String,
             url: URL,
             body: Data
-        ) -> Bool {
-            let message = ToriiCanonicalRequest.signatureMessage(
+        ) throws -> Bool {
+            let message = try ToriiCanonicalRequest.signatureMessage(
                 networkId: networkId,
                 method: method,
                 url: url,
@@ -93,31 +93,31 @@ final class ToriiKagemushaReceiverLineageAuthTests: XCTestCase {
             )
             return publicKey.isValidSignature(signatureData, for: message)
         }
-        XCTAssertTrue(verifies(
+        XCTAssertTrue(try verifies(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: requestURL,
             body: query.noritoArchive
         ))
-        XCTAssertFalse(verifies(
+        XCTAssertFalse(try verifies(
             networkId: TestNetworkIds.other,
             method: "POST",
             url: requestURL,
             body: query.noritoArchive
         ))
-        XCTAssertFalse(verifies(
+        XCTAssertFalse(try verifies(
             networkId: TestNetworkIds.canonical,
             method: "GET",
             url: requestURL,
             body: query.noritoArchive
         ))
-        XCTAssertFalse(verifies(
+        XCTAssertFalse(try verifies(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: URL(string: "https://torii.example/v1/offline/readiness")!,
             body: query.noritoArchive
         ))
-        XCTAssertFalse(verifies(
+        XCTAssertFalse(try verifies(
             networkId: TestNetworkIds.canonical,
             method: "POST",
             url: requestURL,

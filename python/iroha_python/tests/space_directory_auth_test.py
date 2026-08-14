@@ -56,6 +56,9 @@ class _Session(requests.Session):
 NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 AUTHORITY = _account(0x11)
+AUTHORITY_HEADER = AccountAddress.parse_encoded(
+    AUTHORITY, expected_discriminant=0x02F1
+).canonical_hex()
 
 
 def _client(
@@ -105,7 +108,7 @@ def test_publish_is_signed_once_over_exact_path_and_body() -> None:
     assert len(session.calls) == 1
     call = session.calls[0]
     assert call["allow_redirects"] is False
-    assert call["headers"]["X-Iroha-Account"] == AUTHORITY
+    assert call["headers"]["X-Iroha-Account"] == AUTHORITY_HEADER
     assert captured == [
         canonical_network_request_signature_message(
             NETWORK_ID.literal,

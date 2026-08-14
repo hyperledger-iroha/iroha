@@ -18,19 +18,6 @@
 // This module's usage is documented in high detail in the Configuration Reference
 // (`specs/references/configuration.md`).
 #![allow(clippy::doc_markdown, clippy::doc_link_with_quotes)]
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    convert::{Infallible, TryFrom, TryInto},
-    fmt::Debug,
-    fs::{self, File},
-    io::{self, Read},
-    net::IpAddr,
-    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{
     ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
@@ -51,6 +38,19 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    convert::{Infallible, TryFrom, TryInto},
+    fmt::Debug,
+    fs::{self, File},
+    io::{self, Read},
+    net::IpAddr,
+    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 use thiserror::Error;
 mod app_routed_read_config;
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
@@ -391,6 +391,15 @@ where
     }
     Ok((identity, origin))
 }
+use crate::{
+    kura::{FsyncMode as KuraFsyncMode, InitMode as KuraInitMode},
+    logger::{Directives, Format as LoggerFormat},
+    parameters::{
+        actual, defaults, is_production_runtime_handle, validate_webauthn_origin_v1,
+        validate_webauthn_rp_id_v1,
+    },
+    snapshot::Mode as SnapshotMode,
+};
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Quantity, XorQuantity},
@@ -402,15 +411,6 @@ use norito::{
 };
 use soranet_pq::{MlKemSuite, SuiteParseError};
 use url::Url;
-use crate::{
-    kura::{FsyncMode as KuraFsyncMode, InitMode as KuraInitMode},
-    logger::{Directives, Format as LoggerFormat},
-    parameters::{
-        actual, defaults, is_production_runtime_handle, validate_webauthn_origin_v1,
-        validate_webauthn_rp_id_v1,
-    },
-    snapshot::Mode as SnapshotMode,
-};
 type DataSpaceCatalogBuild = (DataSpaceCatalog, BTreeMap<DataSpaceId, FeeSponsorProgramId>);
 /// P2P relay role configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -655,8 +655,8 @@ impl From<SmIntrinsicsPolicyConfig> for actual::SmIntrinsicsPolicy {
 }
 #[cfg(test)]
 mod sm_intrinsics_policy_config_tests {
-    use std::str::FromStr;
     use super::SmIntrinsicsPolicyConfig;
+    use std::str::FromStr;
     #[test]
     fn parses_force_disable_and_enable() {
         assert!(matches!(
@@ -4378,8 +4378,8 @@ impl Sccp {
 }
 #[cfg(test)]
 mod sccp_limit_tests {
-    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     #[test]
     fn canonical_pending_outbound_key_is_required() {
         let canonical: toml::Table =
@@ -5914,8 +5914,8 @@ pub struct TrustedPeerPop {
 }
 #[cfg(test)]
 mod trusted_peers_pop_env_tests {
-    use std::{borrow::Cow, str::FromStr};
     use super::*;
+    use std::{borrow::Cow, str::FromStr};
     const PUBLIC_KEY_HEX: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
     #[test]
     fn trusted_peers_pop_from_env_parses_json() {
@@ -9094,7 +9094,10 @@ pub struct Nexus {
     /// Optional explicit lane catalog entries.
     #[config(default)]
     pub lane_catalog: Vec<LaneDescriptor>,
-    /// Optional data-space catalog entries.
+    /// Optional physical data-space catalog entries.
+    ///
+    /// Lanes and namespaces reference these entries but never create them
+    /// implicitly.
     #[config(default)]
     pub dataspace_catalog: Vec<DataSpaceDescriptor>,
     /// Public-lane staking guardrails.
@@ -9332,7 +9335,7 @@ pub struct LaneDescriptor {
     pub alias: Option<String>,
     /// Optional description for documentation and dashboards.
     pub description: Option<String>,
-    /// Dataspace alias this lane belongs to.
+    /// Physical dataspace alias this logical lane belongs to.
     pub dataspace: Option<String>,
     /// Storage profile identifier (`full_replica`, `commitment_only`, `split_replica`).
     pub storage: Option<String>,
@@ -9354,10 +9357,10 @@ pub struct LaneDescriptor {
     #[config(default)]
     pub metadata: BTreeMap<String, String>,
 }
-/// User-level configuration container for `DataSpaceDescriptor`.
+/// User-level configuration for one physical execution, storage, and validator boundary.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct DataSpaceDescriptor {
-    /// Human-readable alias.
+    /// Human-readable dataspace alias, independent of lane and namespace aliases.
     pub alias: Option<String>,
     /// Explicit numerical identifier override.
     pub id: Option<u64>,
@@ -16779,9 +16782,9 @@ impl ToriiKagemushaCommands {
 }
 #[cfg(test)]
 mod torii_kagemusha_commands_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use iroha_crypto::ExposedPrivateKey;
     use super::*;
+    use iroha_crypto::ExposedPrivateKey;
+    use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
     struct TestKeyFile(PathBuf);
     impl TestKeyFile {
@@ -23850,11 +23853,11 @@ mod sorafs_moderation_orchestrator_tests {
     include!("user/sorafs_moderation_query_bound_tests.rs");
 }
 #[cfg(test)]
-#[path = "user/sorafs_provider_ingest_runtime_config_tests.rs"]
-mod sorafs_provider_ingest_runtime_config_tests;
-#[cfg(test)]
 #[path = "user/sorafs_evidence_viewer_config_tests.rs"]
 mod sorafs_evidence_viewer_config_tests;
+#[cfg(test)]
+#[path = "user/sorafs_provider_ingest_runtime_config_tests.rs"]
+mod sorafs_provider_ingest_runtime_config_tests;
 #[cfg(test)]
 mod sorafs_hedging_billing_runtime_config_tests {
     use super::*;
@@ -26031,8 +26034,8 @@ impl SorafsGovernanceDagServiceRoot {
 }
 #[cfg(test)]
 mod sorafs_governance_dag_service_tests {
-    use iroha_config_base::toml::TomlSource;
     use super::*;
+    use iroha_config_base::toml::TomlSource;
     const VALID_PUBLISHER_PUBLIC_KEY_HEX: &str =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
     const ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX: &str =
@@ -27630,8 +27633,8 @@ impl SorafsGc {
 }
 #[cfg(test)]
 mod sorafs_repair_gc_tests {
-    use iroha_data_model::sorafs::moderation_ledger::REPAIR_LEDGER_MAX_LEASE_MS_V1;
     use super::*;
+    use iroha_data_model::sorafs::moderation_ledger::REPAIR_LEDGER_MAX_LEASE_MS_V1;
     #[test]
     fn sorafs_repair_parse_rejects_unsafe_values_without_clamping() {
         let invalid = SorafsRepair {
@@ -30632,8 +30635,8 @@ impl IsoCurrencyAsset {
 }
 #[cfg(test)]
 mod offline_cfg_tests {
-    use core::str::FromStr;
     use super::*;
+    use core::str::FromStr;
     use iroha_data_model::DomainId;
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31295,13 +31298,9 @@ mod offline_cfg_tests {
 }
 #[cfg(test)]
 mod duration_clamp_tests {
-    use std::{
-        fs,
-        num::NonZeroUsize,
-        path::{Path, PathBuf},
-        str::FromStr,
-        sync::atomic::{AtomicU64, Ordering},
-        time::{Duration, Duration as StdDuration},
+    use crate::parameters::{
+        actual, defaults,
+        user::{SoracloudRuntime, SoracloudRuntimeHuggingFace},
     };
     use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
@@ -31314,11 +31313,15 @@ mod duration_clamp_tests {
         },
     };
     use iroha_primitives::numeric::Quantity;
-    use toml::{Table, Value};
-    use crate::parameters::{
-        actual, defaults,
-        user::{SoracloudRuntime, SoracloudRuntimeHuggingFace},
+    use std::{
+        fs,
+        num::NonZeroUsize,
+        path::{Path, PathBuf},
+        str::FromStr,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, Duration as StdDuration},
     };
+    use toml::{Table, Value};
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
     struct TestDir(PathBuf);
     impl TestDir {

@@ -1,10 +1,3 @@
-use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path};
-use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
-use tempfile::TempDir;
 use super::*;
 use crate::{
     kura::Kura,
@@ -14,6 +7,13 @@ use crate::{
         v2_transport::{AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request},
     },
 };
+use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+use iroha_data_model::{
+    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+    peer::PeerId,
+};
+use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path};
+use tempfile::TempDir;
 struct RecoveryFixture {
     verified: VerifiedHeightContext,
     keys: Vec<KeyPair>,
@@ -1677,7 +1677,7 @@ fn complete_tip_all_row_retirement_consumes_pending_serve_terminal_update() {
         .expect("persist live Serve predecessor ledger");
     drop(payload_store);
     drop(body_store);
-    complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+    let _ = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
         .into_canonical_predecessor_storage(&fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("retire exact Pending Serve and its ProducerTurn");
@@ -1830,7 +1830,7 @@ pub(crate) fn complete_tip_retirement_survives_completed_serve_body_cleanup_with
             "bodyless metadata must not promote a Pending Serve ledger row"
         );
     }
-    complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+    let _ = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
         .into_canonical_predecessor_storage(&fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("retire Completed Serve after body cleanup");

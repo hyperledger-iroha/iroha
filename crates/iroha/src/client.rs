@@ -58,6 +58,7 @@ use iroha_data_model::{
         LaneLifecycleStatusV1, UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
+    soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_logger::prelude::*;
@@ -172,12 +173,25 @@ const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
 const HEADER_NONCE: &str = "x-iroha-nonce";
+const HEADER_WITNESS: &str = "x-iroha-witness";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1: usize = 64;
+const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
+const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: usize = 32;
+const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
+const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1: usize = 36 * 1024;
+const CANONICAL_REQUEST_MAX_NONCE_BYTES_V1: usize = 256;
+const CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1: usize = 64;
+const CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1: usize = Algorithm::MlDsa.signature_payload_len();
+/// Maximum decoded bytes in one canonical V1 request witness.
+pub const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 1024 / 4;
+/// Maximum canonical base64 bytes in one canonical V1 request-witness header.
+pub const CANONICAL_REQUEST_WITNESS_MAX_HEADER_BYTES_V1: usize = 1024 * 1024;
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 #[derive(
     Clone,
@@ -12018,6 +12032,9 @@ impl fmt::Debug for Client {
             .finish()
     }
 }
+
+include!("client/canonical_request_auth.rs");
+
 include!("client/operator_request_auth.rs");
 /// Representation of `Iroha` client.
 impl Client {
@@ -12120,6 +12137,7 @@ impl Client {
                 HEADER_SIGNATURE,
                 HEADER_TIMESTAMP_MS,
                 HEADER_NONCE,
+                HEADER_WITNESS,
             ]
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
@@ -12139,36 +12157,9 @@ impl Client {
         self.enforce_alias_policy(&response)?;
         Ok(response)
     }
-    fn canonical_query_string(raw: Option<&str>) -> String {
-        let Some(raw) = raw else {
-            return String::new();
-        };
-        if raw.is_empty() {
-            return String::new();
-        }
-        let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect();
-        pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-        for (key, value) in pairs {
-            serializer.append_pair(&key, &value);
-        }
-        serializer.finish()
-    }
-    fn canonical_request_message(method: &HttpMethod, url: &Url, body: &[u8]) -> Vec<u8> {
-        let query = Self::canonical_query_string(url.query());
-        let mut hasher = Sha256::new();
-        hasher.update(body);
-        let body_hash = hasher.finalize();
-        format!(
-            "{}\n{}\n{}\n{}",
-            method.as_str().to_ascii_uppercase(),
-            url.path(),
-            query,
-            hex::encode(body_hash)
-        )
-        .into_bytes()
+    #[cfg(test)]
+    fn canonical_query_string(raw: Option<&str>) -> Result<String> {
+        canonical_query_string_v1(raw)
     }
     pub(crate) fn operator_network_request_message(
         network_id: &NetworkId,
@@ -12177,20 +12168,15 @@ impl Client {
         body: &[u8],
         timestamp_ms: u64,
         nonce: &str,
-    ) -> Vec<u8> {
-        const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
-        let canonical_request = Self::canonical_request_message(method, url, body);
-        let mut message = Vec::with_capacity(
-            DOMAIN.len() + network_id.as_bytes().len() + canonical_request.len() + nonce.len() + 32,
-        );
-        message.extend_from_slice(DOMAIN);
-        message.extend_from_slice(network_id.as_bytes());
-        message.extend_from_slice(&canonical_request);
-        message.extend_from_slice(b"\n");
-        message.extend_from_slice(timestamp_ms.to_string().as_bytes());
-        message.extend_from_slice(b"\n");
-        message.extend_from_slice(nonce.as_bytes());
-        message
+    ) -> Result<Vec<u8>> {
+        bounded_network_request_message(
+            b"iroha.operator.http-request.network.v1\0",
+            network_id,
+            method,
+            url,
+            body,
+            Some((timestamp_ms, nonce)),
+        )
     }
     fn exact_network_request_message(
         network_id: &NetworkId,
@@ -12199,20 +12185,15 @@ impl Client {
         body: &[u8],
         timestamp_ms: u64,
         nonce: &str,
-    ) -> Vec<u8> {
-        const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
-        let request = Self::canonical_request_message(method, url, body);
-        let mut message = Vec::with_capacity(
-            DOMAIN.len() + network_id.as_bytes().len() + request.len() + 2 + 20 + nonce.len(),
-        );
-        message.extend_from_slice(DOMAIN);
-        message.extend_from_slice(network_id.as_bytes());
-        message.extend_from_slice(&request);
-        message.push(b'\n');
-        message.extend_from_slice(timestamp_ms.to_string().as_bytes());
-        message.push(b'\n');
-        message.extend_from_slice(nonce.as_bytes());
-        message
+    ) -> Result<Vec<u8>> {
+        canonical_network_request_signature_message(
+            network_id,
+            method,
+            url,
+            body,
+            timestamp_ms,
+            nonce,
+        )
     }
     fn signed_request_nonce() -> Result<String> {
         Self::signed_request_nonce_with_rng(&mut rand::rngs::OsRng)
@@ -12223,7 +12204,24 @@ impl Client {
         let mut nonce_bytes = [0_u8; 12];
         rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut nonce_bytes)
             .map_err(|error| eyre!("signed request nonce OS RNG failed: {error}"))?;
-        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes))
+        let encoded_len = (nonce_bytes.len() / 3)
+            .checked_mul(4)
+            .and_then(|length| {
+                length.checked_add(match nonce_bytes.len() % 3 {
+                    0 => 0,
+                    1 => 2,
+                    _ => 3,
+                })
+            })
+            .ok_or_else(canonical_request_capacity_error)?;
+        let mut encoded = allocate_exact_canonical_request_bytes(encoded_len)?;
+        let written = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode_slice(nonce_bytes, &mut encoded)
+            .map_err(|_| eyre!("failed to encode signed request nonce"))?;
+        if written != encoded_len {
+            return Err(eyre!("signed request nonce base64 length mismatch"));
+        }
+        String::from_utf8(encoded).map_err(|_| eyre!("signed request nonce is not UTF-8"))
     }
     fn transaction_nonce_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
         rng: &mut R,
@@ -12270,15 +12268,17 @@ impl Client {
             &body,
             timestamp_ms,
             &nonce,
-        );
+        )?;
         let signature = Signature::try_new(self.key_pair.private_key(), &message)
             .wrap_err("failed to sign account request headers")?;
-        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+        let account = canonical_request_account_header_value(&self.account)?;
+        let signature_b64 = canonical_request_signature_header_value(&signature)?;
+        let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
         let mut builder = self
             .request_without_canonical_account_auth(method, url)
-            .header(HEADER_ACCOUNT, &self.account.to_string())
+            .header(HEADER_ACCOUNT, &account)
             .header(HEADER_SIGNATURE, &signature_b64)
-            .header(HEADER_TIMESTAMP_MS, &timestamp_ms.to_string())
+            .header(HEADER_TIMESTAMP_MS, &timestamp)
             .header(HEADER_NONCE, &nonce);
         if !body.is_empty() {
             builder = builder.body(body);
@@ -23357,7 +23357,8 @@ mod tests {
             HEADER_NONCE,
         ] {
             assert_eq!(
-                req.headers
+                snapshot
+                    .headers
                     .iter()
                     .filter(|(name, _)| name == header)
                     .count(),
@@ -23367,8 +23368,22 @@ mod tests {
         }
         assert_eq!(
             headers.get(HEADER_ACCOUNT),
-            Some(&client.account.to_string()),
+            Some(
+                &client
+                    .account
+                    .to_canonical_hex()
+                    .expect("fixture account has canonical hexadecimal form"),
+            ),
             "request signer must be the configured client account",
+        );
+        let account_header = headers.get(HEADER_ACCOUNT).expect("account header");
+        assert!(account_header.is_ascii());
+        assert!(account_header.starts_with("0x"));
+        assert!(
+            account_header[2..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "account header must be canonical lowercase ASCII hexadecimal",
         );
         let timestamp_ms = headers
             .get(HEADER_TIMESTAMP_MS)
@@ -23389,15 +23404,20 @@ mod tests {
             .expect("account signature header must pass checked admission");
         let signed_message = Client::exact_network_request_message(
             &client.network_id,
-            &req.method,
-            &req.url,
-            &req.body,
+            &snapshot.method,
+            &snapshot.url,
+            &snapshot.body,
             timestamp_ms,
             nonce,
-        );
+        )
+        .expect("canonical signed message must be constructible");
         signature
             .verify(client.key_pair.public_key(), &signed_message)
             .expect("signature must cover the exact method, path, query, and body");
+        assert!(
+            !headers.contains_key(HEADER_WITNESS),
+            "single-signature request must not retain a configured witness header",
+        );
     }
     pub(super) fn assert_canonical_account_signed_json_request(
         client: &Client,
@@ -23417,6 +23437,7 @@ mod tests {
             HEADER_SIGNATURE,
             HEADER_TIMESTAMP_MS,
             HEADER_NONCE,
+            HEADER_WITNESS,
         ] {
             assert!(
                 !headers.contains_key(header),
@@ -23435,6 +23456,7 @@ mod tests {
             HEADER_SIGNATURE,
             HEADER_TIMESTAMP_MS,
             HEADER_NONCE,
+            HEADER_WITNESS,
         ] {
             client
                 .headers
@@ -27491,11 +27513,7 @@ mod tests {
         let expected_value = format!("Basic {ENCRYPTED_CREDENTIALS}");
         assert_eq!(value, &expected_value);
     }
-    #[test]
-    fn canonical_query_string_sorts_and_encodes() {
-        let canonical = Client::canonical_query_string(Some("b=2&a=3&b=1&space=a+b"));
-        assert_eq!(canonical, "a=3&b=1&b=2&space=a+b");
-    }
+    include!("client/canonical_request_auth_tests.rs");
     #[test]
     fn get_config_includes_operator_signature_headers_when_key_configured() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -27714,7 +27732,8 @@ mod tests {
                 &snapshot.body,
                 timestamp_ms,
                 nonce,
-            );
+            )
+            .expect("bounded local operator message");
             signature
                 .verify(operator_key_pair.public_key(), &local_message)
                 .expect("operator signature must bind the client's exact network");
@@ -27729,7 +27748,8 @@ mod tests {
                 &snapshot.body,
                 timestamp_ms,
                 nonce,
-            );
+            )
+            .expect("bounded foreign operator message");
             assert!(
                 signature
                     .verify(operator_key_pair.public_key(), &foreign_message)
@@ -30051,7 +30071,8 @@ mod tests {
             &[],
             timestamp_ms,
             nonce,
-        );
+        )
+        .expect("bounded operator-panel signature message");
         signature
             .verify(client.key_pair.public_key(), &signed_message)
             .expect("signature must cover filtered operator-panel URL");

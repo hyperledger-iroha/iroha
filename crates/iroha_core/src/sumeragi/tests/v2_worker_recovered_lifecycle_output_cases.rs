@@ -179,7 +179,7 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
     let mut body_store = V2BodyStore::open(directory.path(), service.context.clone())
         .expect("open recovered Sign body store");
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-    body_store
+    let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("store exact recovered Proposal body");
     let proposal_tag = EventTag::new(

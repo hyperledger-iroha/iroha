@@ -1,3 +1,4 @@
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Http;
@@ -11,6 +12,8 @@ public sealed class CanonicalRequestHeaders
         var exactNonce = CanonicalRequest.RequireExactNonBlank(nonce, nameof(nonce));
 
         AccountId = CanonicalRequest.RequireCanonicalAccountId(exactAccountId, nameof(accountId));
+        accountHeaderValue = AccountAddress.Parse(AccountId, AccountAddress.DefaultChainDiscriminant)
+            .CanonicalHex;
         SignatureBase64 = RequireCanonicalSignatureBase64(exactSignatureBase64, nameof(signatureBase64));
         TimestampMs = CanonicalRequest.RequirePositiveTimestamp(timestampMs, nameof(timestampMs));
         Nonce = CanonicalRequest.RequireCanonicalNonce(exactNonce, nameof(nonce));
@@ -24,11 +27,13 @@ public sealed class CanonicalRequestHeaders
 
     public long TimestampMs { get; }
 
+    private readonly string accountHeaderValue;
+
     public IReadOnlyDictionary<string, string> ToDictionary()
     {
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["X-Iroha-Account"] = AccountId,
+            ["X-Iroha-Account"] = accountHeaderValue,
             ["X-Iroha-Nonce"] = Nonce,
             ["X-Iroha-Signature"] = SignatureBase64,
             ["X-Iroha-Timestamp-Ms"] = TimestampMs.ToString(System.Globalization.CultureInfo.InvariantCulture),

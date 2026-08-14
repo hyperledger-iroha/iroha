@@ -4,7 +4,10 @@
 //! so that runtime components can verify `KeyUpdate`/`ContentKeyUpdate` frames,
 //! derive transport keys, and unwrap Group Content Keys (GCKs) while enforcing
 //! the monotonic counter and suite invariants mandated by the spec.
-use std::{cmp, convert::TryInto, fmt};
+use crate::{
+    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
+    kex::is_x25519_low_order_public_key, signature::ed25519::Ed25519Sha512,
+};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::DecodeFromSlice,
@@ -24,13 +27,10 @@ use sha3::{Digest, Sha3_256};
 use soranet_pq::{
     MlKemError, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os, validate_mlkem_key_pair,
 };
+use std::{cmp, convert::TryInto, fmt};
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-use crate::{
-    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
-    kex::is_x25519_low_order_public_key, signature::ed25519::Ed25519Sha512,
-};
 const SNAPSHOT_KEY_DOMAIN: &[u8] = b"iroha.streaming.snapshot-key";
 const FEEDBACK_FP_SHIFT: u32 = 16;
 const FEEDBACK_ALPHA_FP: u32 = 13_107;
@@ -1990,8 +1990,8 @@ pub fn key_update_transcript_bytes(frame: &KeyUpdate) -> Result<Vec<u8>, norito:
 }
 #[cfg(test)]
 mod key_update_tests {
-    use soranet_pq::generate_mlkem_keypair_from_os;
     use super::*;
+    use soranet_pq::generate_mlkem_keypair_from_os;
     fn mlkem_secret_embedded_public_range(suite: MlKemSuite) -> core::ops::Range<usize> {
         const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
         let start =

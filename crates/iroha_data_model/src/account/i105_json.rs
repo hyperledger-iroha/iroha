@@ -1,8 +1,8 @@
 //! Allocation-bounded canonical I105 JSON output for account identifiers.
+use super::{AccountController, AccountId, curve::CurveId};
 use iroha_crypto::PublicKey;
 use norito::json::{BoundedJsonError, JsonWriteSink};
 use std::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
-use super::{AccountController, AccountId, curve::CurveId};
 const ADDRESS_HEADER_SINGLE_V1: u8 = 0b0000_0010;
 const ADDRESS_HEADER_MULTISIG_V1: u8 = 0b0000_1010;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0;
@@ -396,9 +396,9 @@ fn write_i105_symbol(digit: u8, output: &mut dyn JsonWriteSink) -> Result<(), Bo
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard};
+    use iroha_crypto::{Algorithm, KeyPair};
     fn keypair(seed: u64) -> KeyPair {
         let mut bytes = vec![0xA5; 32];
         bytes[..8].copy_from_slice(&seed.to_le_bytes());

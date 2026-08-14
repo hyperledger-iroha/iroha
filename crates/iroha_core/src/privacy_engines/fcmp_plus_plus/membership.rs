@@ -41,10 +41,13 @@ fn secret_unblind_helios_coordinates_v1(
     terms.push(&HelioseleneField::ONE, prior_commitment)?;
     let negative_h = -helios_bp_generators().h;
     terms.push(mask, &negative_h)?;
-    terms
-        .evaluate()?
-        .secret_coordinates_v1()
-        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
+    let point = terms.evaluate()?;
+    let coordinates = point
+        .expose_ref()
+        .secret_coordinates_ref_v1()
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    drop(point);
+    Ok(coordinates)
 }
 fn secret_unblind_selene_coordinates_v1(
     prior_commitment: &SelenePoint,
@@ -54,10 +57,13 @@ fn secret_unblind_selene_coordinates_v1(
     terms.push(&Field25519::ONE, prior_commitment)?;
     let negative_h = -selene_bp_generators().h;
     terms.push(mask, &negative_h)?;
-    terms
-        .evaluate()?
-        .secret_coordinates_v1()
-        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
+    let point = terms.evaluate()?;
+    let coordinates = point
+        .expose_ref()
+        .secret_coordinates_ref_v1()
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    drop(point);
+    Ok(coordinates)
 }
 const ED25519_WEI_A: U256 =
     U256::from_be_hex("2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa984914a144");

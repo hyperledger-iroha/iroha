@@ -14,7 +14,9 @@
 //! enters the wire.
 use super::super::super::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-    bulletproof_t256::{ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1},
+    bulletproof_t256::{
+        SecretT256PointEncodingV1, ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1,
+    },
     commitment::CommitmentKey,
     masked_relaxed::MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
     sponge::Keccak256,
@@ -27,7 +29,7 @@ use super::{
     },
     terminal::ZkAmsPhase3PreparedTerminalOpeningsV1,
 };
-use crate::generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, multiexp};
+use crate::generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, SecretPoint, multiexp};
 use core::{convert::Infallible, mem};
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -156,11 +158,10 @@ impl ProofWriterV2 {
     fn scalar(&mut self, scalar: Scalar) -> Result<(), BridgeErrorV2> {
         self.bytes(self.cursor, &scalar.to_le_bytes())
     }
-    fn point(&mut self, point: Point) -> Result<(), BridgeErrorV2> {
-        let encoded = point
-            .to_non_identity_wire_bytes()
-            .map_err(|_| BridgeErrorV2::Representation)?;
-        self.bytes(self.cursor, &encoded)
+    fn point(&mut self, point: &Point) -> Result<(), BridgeErrorV2> {
+        let encoded =
+            SecretT256PointEncodingV1::new(point).map_err(|_| BridgeErrorV2::Representation)?;
+        self.bytes(self.cursor, encoded.as_ref())
     }
     fn bytes(&mut self, offset: usize, value: &[u8]) -> Result<(), BridgeErrorV2> {
         if offset != self.cursor {
@@ -485,7 +486,10 @@ fn aggregate_rows_v2(
         bp_commitment,
     })
 }
-fn secret_commit_v2(points: &[Point], scalars: &[Scalar]) -> Result<Point, BridgeErrorV2> {
+fn secret_commit_v2(
+    points: &[Point],
+    scalars: &[Scalar],
+) -> Result<SecretPoint<Point>, BridgeErrorV2> {
     if points.len() != scalars.len() || points.is_empty() {
         return Err(BridgeErrorV2::Shape);
     }
@@ -532,7 +536,14 @@ fn sample_mask_v2<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     hyrax_basis: &CheckedBasisV2,
     bp_basis: &CheckedBasisV2,
-) -> Result<(ZeroizingT256ScalarVecV1, Point, Point), BridgeErrorV2> {
+) -> Result<
+    (
+        ZeroizingT256ScalarVecV1,
+        SecretPoint<Point>,
+        SecretPoint<Point>,
+    ),
+    BridgeErrorV2,
+> {
     if hyrax_basis.points.len() != BRIDGE_BASIS_VIEW_V2
         || bp_basis.points.len() != BRIDGE_BASIS_VIEW_V2
     {
@@ -559,23 +570,21 @@ fn schnorr_challenge_v2(
     bridge_root: [u8; 32],
     hyrax_basis_digest: [u8; 32],
     bp_basis_digest: [u8; 32],
-    hyrax_mask: Point,
-    bp_mask: Point,
+    hyrax_mask: &Point,
+    bp_mask: &Point,
 ) -> Result<Scalar, BridgeErrorV2> {
-    let hyrax_mask = hyrax_mask
-        .to_non_identity_wire_bytes()
-        .map_err(|_| BridgeErrorV2::Representation)?;
-    let bp_mask = bp_mask
-        .to_non_identity_wire_bytes()
-        .map_err(|_| BridgeErrorV2::Representation)?;
+    let hyrax_mask =
+        SecretT256PointEncodingV1::new(hyrax_mask).map_err(|_| BridgeErrorV2::Representation)?;
+    let bp_mask =
+        SecretT256PointEncodingV1::new(bp_mask).map_err(|_| BridgeErrorV2::Representation)?;
     let seed = framed_hash_v2(
         SCHNORR_TRANSCRIPT_DOMAIN_V2,
         &[
             &bridge_root,
             &hyrax_basis_digest,
             &bp_basis_digest,
-            &hyrax_mask,
-            &bp_mask,
+            hyrax_mask.as_ref(),
+            bp_mask.as_ref(),
         ],
     )?;
     challenge_v2(SCHNORR_CHALLENGE_DOMAIN_V2, seed)
@@ -607,8 +616,8 @@ fn verify_representation_v2(
     }
     let hyrax_response = secret_commit_v2(&hyrax_basis.points, response.as_slice())?;
     let bp_response = secret_commit_v2(&bp_basis.points, response.as_slice())?;
-    if hyrax_response != hyrax_mask + aggregate.hyrax_commitment.mul_scalar(challenge)
-        || bp_response != bp_mask + aggregate.bp_commitment.mul_scalar(challenge)
+    if !hyrax_response.equals(&(hyrax_mask + aggregate.hyrax_commitment.mul_scalar(challenge)))
+        || !bp_response.equals(&(bp_mask + aggregate.bp_commitment.mul_scalar(challenge)))
     {
         return Err(BridgeErrorV2::Representation);
     }
@@ -634,10 +643,10 @@ fn prove_kernel_v2<R: MaskedRelaxedRandomSourceV1>(
     let bp_basis = bp_basis_v2()?;
     let (commitment_root, eta) = prepare_kernel_v2(&rows.statement, &hyrax_basis, &bp_basis)?;
     let aggregate = aggregate_rows_v2(rows, eta)?;
-    if secret_commit_v2(&hyrax_basis.points, aggregate.opening.as_slice())?
-        != aggregate.hyrax_commitment
-        || secret_commit_v2(&bp_basis.points, aggregate.opening.as_slice())?
-            != aggregate.bp_commitment
+    if !secret_commit_v2(&hyrax_basis.points, aggregate.opening.as_slice())?
+        .equals(&aggregate.hyrax_commitment)
+        || !secret_commit_v2(&bp_basis.points, aggregate.opening.as_slice())?
+            .equals(&aggregate.bp_commitment)
     {
         return Err(BridgeErrorV2::Commitment);
     }
@@ -654,13 +663,13 @@ fn prove_kernel_v2<R: MaskedRelaxedRandomSourceV1>(
         bridge_root,
         hyrax_basis.digest,
         bp_basis.digest,
-        hyrax_mask,
-        bp_mask,
+        hyrax_mask.expose_ref(),
+        bp_mask.expose_ref(),
     )?;
     let response = respond_v2(mask, &aggregate.opening, challenge)?;
     let mut writer = ProofWriterV2::new();
-    writer.point(hyrax_mask)?;
-    writer.point(bp_mask)?;
+    writer.point(hyrax_mask.expose_ref())?;
+    writer.point(bp_mask.expose_ref())?;
     for scalar in response.as_slice() {
         writer.scalar(*scalar)?;
     }
@@ -715,8 +724,8 @@ fn verify_kernel_with_bases_v2(
         bridge_root,
         hyrax_basis.digest,
         bp_basis.digest,
-        hyrax_mask,
-        bp_mask,
+        &hyrax_mask,
+        &bp_mask,
     )?;
     verify_representation_v2(
         hyrax_basis,

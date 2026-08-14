@@ -111,6 +111,8 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
+#[path = "mkhe/global_lookup_statement_v1.rs"]
+mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]

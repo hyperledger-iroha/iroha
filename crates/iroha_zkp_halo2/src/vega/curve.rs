@@ -142,10 +142,25 @@ impl VegaT256PointV1 {
     ///
     /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
     pub fn to_non_identity_wire_bytes(self) -> Result<[u8; 33], VegaCurveError> {
-        if self.is_identity() {
+        let mut encoded = [0_u8; 33];
+        self.write_non_identity_wire_bytes_ref(&mut encoded)?;
+        Ok(encoded)
+    }
+    /// Write this borrowed point's canonical non-identity proof encoding into
+    /// caller-owned storage without introducing a by-value point boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
+    pub fn write_non_identity_wire_bytes_ref(
+        &self,
+        destination: &mut [u8; 33],
+    ) -> Result<(), VegaCurveError> {
+        if bool::from(self.0.is_identity()) {
             return Err(VegaCurveError::IdentityPoint);
         }
-        Ok(self.0.to_bytes().into())
+        destination.copy_from_slice(self.0.to_bytes().as_ref());
+        Ok(())
     }
     /// Return this point's canonical big-endian affine coordinates.
     ///
@@ -153,7 +168,7 @@ impl VegaT256PointV1 {
     ///
     /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
     pub fn coordinates_be(self) -> Result<([u8; 32], [u8; 32]), VegaCurveError> {
-        if self.is_identity() {
+        if bool::from(self.0.is_identity()) {
             return Err(VegaCurveError::IdentityPoint);
         }
         let affine = self.0.to_affine();
@@ -174,15 +189,29 @@ impl VegaT256PointV1 {
     ///
     /// Returns [`VegaCurveError::IdentityTranscriptPoint`] for the identity.
     pub fn to_transcript_bytes(self) -> Result<[u8; 64], VegaCurveError> {
-        let (mut x, mut y) = self
-            .coordinates_be()
-            .map_err(|_| VegaCurveError::IdentityTranscriptPoint)?;
-        x.reverse();
-        y.reverse();
         let mut output = [0_u8; 64];
-        output[..32].copy_from_slice(&x);
-        output[32..].copy_from_slice(&y);
+        self.write_transcript_bytes_ref(&mut output)?;
         Ok(output)
+    }
+    /// Write this borrowed point's exact upstream transcript representation
+    /// `x_LE || y_LE` into caller-owned storage without a by-value point API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VegaCurveError::IdentityTranscriptPoint`] for the identity.
+    pub fn write_transcript_bytes_ref(
+        &self,
+        destination: &mut [u8; 64],
+    ) -> Result<(), VegaCurveError> {
+        if bool::from(self.0.is_identity()) {
+            return Err(VegaCurveError::IdentityTranscriptPoint);
+        }
+        let affine = self.0.to_affine();
+        let coordinates = Option::<Coordinates<T256Affine>>::from(affine.coordinates())
+            .ok_or(VegaCurveError::IdentityTranscriptPoint)?;
+        destination[..32].copy_from_slice(coordinates.x().to_repr().as_ref());
+        destination[32..].copy_from_slice(coordinates.y().to_repr().as_ref());
+        Ok(())
     }
     /// Return whether this point is the group identity.
     #[must_use]
@@ -432,9 +461,31 @@ mod tests {
         );
     }
     #[test]
+    fn borrowed_nonidentity_point_writer_matches_owned_encoding() {
+        let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
+        let expected = generator
+            .to_non_identity_wire_bytes()
+            .expect("nonidentity owned encoding");
+        let mut borrowed = [0_u8; 33];
+        generator
+            .write_non_identity_wire_bytes_ref(&mut borrowed)
+            .expect("nonidentity borrowed encoding");
+        assert_eq!(borrowed, expected);
+        let mut identity = [0xa5_u8; 33];
+        assert_eq!(
+            VegaT256PointV1::identity().write_non_identity_wire_bytes_ref(&mut identity),
+            Err(VegaCurveError::IdentityPoint)
+        );
+    }
+    #[test]
     fn point_transcript_encoding_is_uncompressed_little_endian() {
         let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
         let bytes = generator.to_transcript_bytes().expect("affine point");
+        let mut borrowed = [0xa5_u8; 64];
+        generator
+            .write_transcript_bytes_ref(&mut borrowed)
+            .expect("borrowed affine point");
+        assert_eq!(borrowed, bytes);
         assert_eq!(bytes[0], 3);
         assert_eq!(&bytes[1..32], &[0; 31]);
         let mut expected_y = CANONICAL_GENERATOR_Y_BE_V1;
@@ -444,6 +495,23 @@ mod tests {
             VegaT256PointV1::identity().to_transcript_bytes(),
             Err(VegaCurveError::IdentityTranscriptPoint)
         );
+        assert_eq!(
+            VegaT256PointV1::identity().write_transcript_bytes_ref(&mut borrowed),
+            Err(VegaCurveError::IdentityTranscriptPoint)
+        );
+        let production = include_str!("curve.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production curve source")
+            .0;
+        let borrowed_writer = production
+            .split_once("pub fn write_transcript_bytes_ref(")
+            .expect("borrowed transcript writer")
+            .1
+            .split_once("/// Return whether this point is the group identity")
+            .expect("borrowed transcript writer boundary")
+            .0;
+        assert!(borrowed_writer.contains("bool::from(self.0.is_identity())"));
+        assert!(!borrowed_writer.contains("self.is_identity()"));
     }
     #[test]
     fn generator_derivation_bounds_are_closed() {

@@ -1,6 +1,14 @@
 //! Support types for SM2/SM3/SM4 primitives.
+#[cfg(feature = "sm-ffi-openssl")]
+pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
+#[cfg(not(feature = "ffi_import"))]
+use crate::Algorithm;
+use crate::{
+    Error, ParseError,
+    secrecy::{ExposeSecret, Secret},
+    signature::sm,
+};
 use core::{convert::TryFrom, fmt, str::FromStr};
-use std::sync::{OnceLock, RwLock};
 use derive_more::{Deref, DerefMut};
 use hex_literal::hex;
 use iroha_schema::{IntoSchema, TypeId};
@@ -21,16 +29,8 @@ use sm2::{
 use sm3::digest::Digest as _;
 use sm4::cipher::{Block, BlockDecrypt, BlockEncrypt, KeyInit as Sm4BlockKeyInit};
 use sm4_gcm::{Sm4Key as Sm4AeadKey, sm4_gcm_aad_decrypt, sm4_gcm_aad_encrypt};
+use std::sync::{OnceLock, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-#[cfg(feature = "sm-ffi-openssl")]
-pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
-#[cfg(not(feature = "ffi_import"))]
-use crate::Algorithm;
-use crate::{
-    Error, ParseError,
-    secrecy::{ExposeSecret, Secret},
-    signature::sm,
-};
 const SM2_DISTID_INITIAL: &str = "1234567812345678";
 const SM2_EQUATION_A_BYTES: [u8; 32] =
     hex!("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC");
@@ -1590,12 +1590,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Sm3Digest {
 }
 #[cfg(feature = "sm-ccm")]
 mod sm4_ccm_compat {
+    use super::Error;
     use core::convert::TryFrom;
     use sm4::{
         Sm4,
         cipher::{Block, BlockEncrypt, KeyInit},
     };
-    use super::Error;
     const BLOCK_SIZE: usize = 16;
     fn is_valid_tag_len(len: usize) -> bool {
         (4..=16).contains(&len) && len.is_multiple_of(2)
@@ -2313,10 +2313,6 @@ mod intrinsic_policy_tests {
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview metadata and guard rails for the optional OpenSSL-backed SM provider.
 pub mod openssl_provider {
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    };
     #[cfg(ossl300)]
     use openssl::cipher::Cipher;
     use openssl::{
@@ -2324,6 +2320,10 @@ pub mod openssl_provider {
         hash::{Hasher, MessageDigest},
         nid::Nid,
         version,
+    };
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
     };
     use thiserror::Error;
     /// Errors that can occur while initialising or querying the OpenSSL provider preview.
@@ -2467,6 +2467,7 @@ pub use openssl_provider::{OpenSslProvider, OpenSslProviderError};
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview OpenSSL-backed implementations for SM primitives.
 pub mod openssl_sm {
+    use super::{OpenSslProvider, Sm2Signature, Sm3Digest};
     use openssl::{
         bn::BigNumContext,
         cipher::{Cipher, CipherRef},
@@ -2479,7 +2480,6 @@ pub mod openssl_sm {
     };
     use sm3::Digest;
     use thiserror::Error;
-    use super::{OpenSslProvider, Sm2Signature, Sm3Digest};
     /// Errors returned by the preview OpenSSL SM backend.
     #[derive(Debug, Error)]
     pub enum OpenSslSmError {
@@ -2784,7 +2784,7 @@ pub mod openssl_sm {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::{sm_accel, *};
     use hex::decode as hex_decode;
     use rand_core::{TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
@@ -2793,7 +2793,7 @@ mod tests {
         sec1::{Coordinates, ToEncodedPoint},
     };
     use sm3::Sm3;
-    use super::{sm_accel, *};
+    use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
     const ANNEX_SIG_DER_HEX: &str = "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
     const ANNEX_PUBKEY_HEX: &str = "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857";

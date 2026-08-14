@@ -229,6 +229,24 @@ fn torii_proxy_query_roundtrip_preserves_numeric_and_string_scalars() {
     assert_eq!(decoded.count_mode, params.count_mode);
 }
 #[test]
+fn torii_proxy_pipeline_status_query_preserves_decimal_hash_and_whitespace() {
+    let hash = "11".repeat(32);
+    let params = PipelineStatusQuery {
+        hash: Some(format!(" {hash} ")),
+        scope: Some(" local ".to_owned()),
+    };
+    let encoded = encode_torii_proxy_query(&params)
+        .expect("pipeline-status query encoding should succeed")
+        .expect("non-empty pipeline-status params should produce a query string");
+    let plan = routed_read_test_budget()
+        .request_decode_plan()
+        .expect("request decode plan");
+    let decoded = decode_torii_proxy_string_query::<PipelineStatusQuery>(plan, Some(&encoded))
+        .expect("pipeline-status string query decoding should succeed");
+    assert_eq!(decoded.hash, params.hash);
+    assert_eq!(decoded.scope, params.scope);
+}
+#[test]
 fn torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings() {
     let params = routing::ListFilterParams {
         filter: Some(r#"{"op":"eq","args":["id","alice.i105.invalid"]}"#.to_owned()),
@@ -1918,7 +1936,11 @@ async fn torii_visibility_account_from_headers_rejects_unsigned_account_header()
     let mut headers = HeaderMap::new();
     headers.insert(
         HEADER_ACCOUNT,
-        authority.to_string().parse().expect("account header"),
+        authority
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     let err = torii_visibility_account_from_headers(
         &app,

@@ -1,4 +1,8 @@
 //! Route-to-instruction validation for native `SoraFS` repair submissions.
+use super::{
+    APPLICATION_JSON, Response, SorafsRepairCommandRoute, SorafsRepairEventsFilter,
+    SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter, StatusCode,
+};
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::sorafs::{
@@ -13,10 +17,6 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::json::Value;
-use super::{
-    APPLICATION_JSON, Response, SorafsRepairCommandRoute, SorafsRepairEventsFilter,
-    SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter, StatusCode,
-};
 const REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50;
 fn response_error(kind: &str, detail: &str) -> eyre::Report {
     eyre!("invalid finalized SoraFS repair {kind} response: {detail}")
@@ -378,9 +378,9 @@ pub(super) fn validate_transaction_route(
 }
 #[cfg(test)]
 pub(super) mod route_test_support {
-    use std::sync::Arc;
     use super::super::evidence_http_tests::*;
     use crate::http::StatusCode;
+    use std::sync::Arc;
     pub(in crate::client) fn assert_rejected_before_http<T: std::fmt::Debug>(
         expected_error: String,
         request: impl FnOnce() -> eyre::Result<T>,
@@ -399,7 +399,14 @@ pub(super) mod route_test_support {
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use super::*;
+    use crate::{
+        client::evidence_http_tests::{
+            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
+            with_mock_http,
+        },
+        http::StatusCode,
+    };
     use iroha_data_model::{
         Level,
         events::data::sorafs::{SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind},
@@ -422,14 +429,7 @@ mod tests {
         },
         transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
-    use super::*;
-    use crate::{
-        client::evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
-            with_mock_http,
-        },
-        http::StatusCode,
-    };
+    use std::{num::NonZeroU64, sync::Arc};
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()

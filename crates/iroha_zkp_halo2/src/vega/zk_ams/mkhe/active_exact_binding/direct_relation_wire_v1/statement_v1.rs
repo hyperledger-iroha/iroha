@@ -15,6 +15,9 @@ use super::{
 };
 use crate::vega::sponge::Keccak256;
 use core::marker::PhantomData;
+#[path = "statement_v1/rkg_one_h0_h1_replay_v1.rs"]
+mod rkg_one_h0_h1_replay_v1;
+pub(in super::super) use rkg_one_h0_h1_replay_v1::DirectRkgOneH0H1StatementReplayV1;
 pub(in super::super) mod object_role {
     use super::ZkAmsMkheDirectObjectKindV1;
     pub(in super::super::super) trait Sealed {

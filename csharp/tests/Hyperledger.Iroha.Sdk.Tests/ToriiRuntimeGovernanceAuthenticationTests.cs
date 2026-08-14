@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Torii;
@@ -85,7 +86,9 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             Assert.Equal("GET", request.Method);
             Assert.Equal(string.Empty, request.Query);
             Assert.Null(request.Body);
-            Assert.Equal(AccountId, Header(request, "X-Iroha-Account"));
+            Assert.Equal(
+                AccountAddress.Parse(AccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+                Header(request, "X-Iroha-Account"));
 
             var timestamp = long.Parse(
                 Header(request, "X-Iroha-Timestamp-Ms"),

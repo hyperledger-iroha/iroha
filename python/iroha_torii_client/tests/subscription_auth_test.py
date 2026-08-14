@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import List
 
 import pytest
-from client_test_support import CANONICAL_OWNER, app_api_transaction_draft, canonical_hash
+from client_test_support import (
+    CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
+    app_api_transaction_draft,
+    canonical_hash,
+)
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -61,7 +66,7 @@ def test_subscription_plan_command_signs_exact_body_once_without_redirect() -> N
     assert len(session.calls) == 1
     call = session.calls[0]
     assert call["allow_redirects"] is False
-    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
     assert json.loads(call["data"].decode("utf-8"))["authority"] == CANONICAL_OWNER
     expected = canonical_network_request_signature_message(
         NETWORK_ID,

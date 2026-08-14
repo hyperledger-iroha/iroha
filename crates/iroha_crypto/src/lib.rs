@@ -66,6 +66,8 @@ mod numeric_facade_tests {
         assert_eq!(decoded, facade);
     }
 }
+#[cfg(feature = "sm")]
+pub mod sm;
 #[cfg(not(feature = "ffi_import"))]
 mod varint;
 #[cfg(feature = "bls")]
@@ -85,8 +87,14 @@ mod varint;
 /// - Outputs are computed as raw Blake2b-256 over
 ///   `b"iroha:vrf:v1:output" || proof_bytes`.
 pub mod vrf;
-#[cfg(feature = "sm")]
-pub mod sm;
+#[cfg(feature = "bls")]
+pub use self::signature::bls::{
+    BlsNormal, BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmall, BlsSmallPrivateKey,
+    BlsSmallPublicKey, ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
+    ethereum_bls_pop_validate_public_key,
+};
+#[cfg(not(feature = "ffi_import"))]
+pub use blake2;
 use core::{fmt, str::FromStr};
 #[cfg(any(feature = "bls", feature = "pqc"))]
 use std::sync::Arc;
@@ -99,14 +107,6 @@ use std::{
     string::{String, ToString as _},
     vec,
     vec::Vec,
-};
-#[cfg(not(feature = "ffi_import"))]
-pub use blake2;
-#[cfg(feature = "bls")]
-pub use self::signature::bls::{
-    BlsNormal, BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmall, BlsSmallPrivateKey,
-    BlsSmallPublicKey, ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
-    ethereum_bls_pop_validate_public_key,
 };
 /// Convenience alias for the historical Blake2b-256 digest type which was
 /// previously exported directly from the `blake2` crate. The upstream crate
@@ -147,19 +147,19 @@ pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 use w3f_bls::SerializableToBytes;
 // Zeroize trait is only required under configurations that use it.
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 #[cfg(not(feature = "ffi_import"))]
 pub use self::signature::secp256k1::EcdsaSecp256k1Sha256;
 pub use self::signature::*;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 #[cfg(feature = "gost")]
 pub mod gost {
     //! Public wrapper exposing the GOST signature helpers.
     pub use super::signature::gost::*;
 }
+use crate::secrecy::Secret;
 pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
 #[cfg(feature = "bls")]
 pub use algorithm::{BLS_NORMAL, BLS_SMALL};
-use crate::secrecy::Secret;
 /// Domain separator for BLS Proof-of-Possession over a validator public key.
 /// Message = Hash("iroha:bls:pop:v1" || `pk_bytes`)
 #[cfg(feature = "bls")]
@@ -198,29 +198,104 @@ const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
 /// feature-independent so admission and transport geometry cannot vary with
 /// compiled algorithms.
 pub const MAX_PUBLIC_KEY_PAYLOAD_BYTES: usize = 2 + (u16::MAX as usize / 8) + 65;
-fn reserve_public_key_validation_for_decode(
+
+/// Validate only the allocation-free wire envelope of a compact public key.
+///
+/// Cryptographic validity is established at every public constructor and
+/// decoder. Serializers nevertheless reject structurally forged in-crate
+/// values without reparsing keys or consulting algorithm caches.
+fn validate_public_key_structural_envelope(
     algorithm: Algorithm,
-    payload_bytes: usize,
-) -> Result<(), norito::core::Error> {
-    // Source-derived peak heap held by validation: ML-DSA retains one payload
-    // copy; BLS can hold parsed/canonical/identity payloads; SM2 holds the
-    // borrowed-input copy, two distid strings, and one SEC1 encoding; GOST's
-    // on-curve check can simultaneously retain at most twelve payload-width
-    // coordinate/intermediate buffers. Ed25519 and Secp256k1 use fixed values.
-    let units = match algorithm {
-        Algorithm::Ed25519 | Algorithm::Secp256k1 => 0,
-        Algorithm::MlDsa => 1,
+    payload: &[u8],
+) -> Result<(), ParseError> {
+    let exact_len = |expected: usize| {
+        (payload.len() == expected && !is_all_zero_material(payload))
+            .then_some(())
+            .ok_or_else(|| ParseError("invalid public key structural envelope".to_owned()))
+    };
+    match algorithm {
+        Algorithm::Ed25519 => exact_len(32),
+        Algorithm::Secp256k1 => {
+            exact_len(33)?;
+            matches!(payload.first().copied(), Some(0x02 | 0x03))
+                .then_some(())
+                .ok_or_else(|| ParseError("invalid secp256k1 public key envelope".to_owned()))
+        }
+        Algorithm::MlDsa => exact_len(ML_DSA_65_PUBLIC_KEY_BYTES),
         #[cfg(feature = "bls")]
+        Algorithm::BlsNormal => exact_len(48),
+        #[cfg(feature = "bls")]
+        Algorithm::BlsSmall => exact_len(96),
+        #[cfg(feature = "gost")]
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC => exact_len(64),
+        #[cfg(feature = "gost")]
+        Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => {
+            exact_len(128)
+        }
+        #[cfg(feature = "sm")]
+        Algorithm::Sm2 => {
+            const PREFIX_BYTES: usize = 2;
+            const SEC1_BYTES: usize = 65;
+            let prefix: [u8; PREFIX_BYTES] = payload
+                .get(..PREFIX_BYTES)
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+            let distid_len = usize::from(u16::from_be_bytes(prefix));
+            if distid_len > usize::from(u16::MAX) / 8 {
+                return Err(ParseError("invalid SM2 public key envelope".to_owned()));
+            }
+            let sec1_start = PREFIX_BYTES
+                .checked_add(distid_len)
+                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+            let expected = sec1_start
+                .checked_add(SEC1_BYTES)
+                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+            if payload.len() != expected
+                || core::str::from_utf8(&payload[PREFIX_BYTES..sec1_start]).is_err()
+                || payload.get(sec1_start) != Some(&0x04)
+            {
+                return Err(ParseError("invalid SM2 public key envelope".to_owned()));
+            }
+            Ok(())
+        }
+    }
+}
+
+const fn public_key_validation_heap_units_for_decode(algorithm: Algorithm) -> usize {
+    match algorithm {
+        // These validators borrow the payload and retain no heap-backed parse
+        // result: Ed25519, secp256k1, ML-DSA, and the blstrs BLS backend.
+        Algorithm::Ed25519 | Algorithm::Secp256k1 | Algorithm::MlDsa => 0,
+        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+        Algorithm::BlsNormal | Algorithm::BlsSmall => 0,
+        // The w3f compatibility backend still materializes canonical and
+        // identity encodings while validating. Keep its source-derived charge.
+        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
         Algorithm::BlsNormal | Algorithm::BlsSmall => 2,
+        // GOST's on-curve check can retain up to twelve payload-width
+        // coordinate/intermediate buffers. This is deliberately still a
+        // charged fallback rather than a cache-free claim.
         #[cfg(feature = "gost")]
         Algorithm::Gost3410_2012_256ParamSetA
         | Algorithm::Gost3410_2012_256ParamSetB
         | Algorithm::Gost3410_2012_256ParamSetC
         | Algorithm::Gost3410_2012_512ParamSetA
         | Algorithm::Gost3410_2012_512ParamSetB => 12,
+        // SM2 still uses its allocating envelope/parser path. Preserve the
+        // existing explicit two-payload charge; no cache-free or heap-free
+        // claim is made for this branch.
         #[cfg(feature = "sm")]
         Algorithm::Sm2 => 2,
-    };
+    }
+}
+
+fn reserve_public_key_validation_for_decode(
+    algorithm: Algorithm,
+    payload_bytes: usize,
+) -> Result<(), norito::core::Error> {
+    let units = public_key_validation_heap_units_for_decode(algorithm);
     let bytes = payload_bytes
         .checked_mul(units)
         .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
@@ -596,6 +671,25 @@ impl From<(bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)> for KeyPair {
         }
     }
 }
+fn validate_ml_dsa_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
+    if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
+        return Err(ParseError("invalid ML-DSA public key length".to_string()));
+    }
+    if is_all_zero_material(payload) {
+        return Err(ParseError(
+            "invalid ML-DSA public key: all-zero material".to_string(),
+        ));
+    }
+    #[cfg(feature = "pqc")]
+    {
+        use pqcrypto_mldsa::mldsa65;
+        use pqcrypto_traits::sign::PublicKey as _;
+        mldsa65::PublicKey::from_bytes(payload)
+            .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
+    }
+    Ok(())
+}
+
 /// Decoded version of public key (requires more memory).
 /// Used only for signature verification.
 #[derive(Clone)]
@@ -627,38 +721,16 @@ enum PublicKeyFull {
 }
 impl PublicKeyFull {
     fn from_bytes(algorithm: Algorithm, payload: &[u8]) -> Result<Self, ParseError> {
+        #[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+        record_public_key_validation_call();
         match algorithm {
             Algorithm::Ed25519 => {
                 ed25519::Ed25519Sha512::parse_public_key(payload).map(PublicKeyFull::Ed25519)
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
                 .map(PublicKeyFull::Secp256k1),
-            #[cfg(feature = "pqc")]
             Algorithm::MlDsa => {
-                use pqcrypto_mldsa::mldsa65;
-                use pqcrypto_traits::sign::PublicKey as _;
-                if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
-                    return Err(ParseError("invalid ML-DSA public key length".to_string()));
-                }
-                if is_all_zero_material(payload) {
-                    return Err(ParseError(
-                        "invalid ML-DSA public key: all-zero material".to_string(),
-                    ));
-                }
-                let pk = mldsa65::PublicKey::from_bytes(payload)
-                    .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
-                Ok(PublicKeyFull::MlDsa(pk.as_bytes().to_vec()))
-            }
-            #[cfg(not(feature = "pqc"))]
-            Algorithm::MlDsa => {
-                if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
-                    return Err(ParseError("invalid ML-DSA public key length".to_string()));
-                }
-                if is_all_zero_material(payload) {
-                    return Err(ParseError(
-                        "invalid ML-DSA public key: all-zero material".to_string(),
-                    ));
-                }
+                validate_ml_dsa_public_key_for_decode(payload)?;
                 Ok(PublicKeyFull::MlDsa(payload.to_vec()))
             }
             #[cfg(feature = "gost")]
@@ -682,16 +754,36 @@ impl PublicKeyFull {
             Algorithm::Sm2 => sm::decode_sm2_public_key_payload(payload).map(PublicKeyFull::Sm2),
         }
     }
-    fn from_bytes_uncached_for_decode(
-        algorithm: Algorithm,
-        payload: &[u8],
-    ) -> Result<Self, ParseError> {
+    /// Validate borrowed bytes for decoding. Only the Ed25519, secp256k1,
+    /// ML-DSA, and blstrs branches are cache-free and heap-free on success;
+    /// the feature-dependent fallback parsers are explicitly precharged.
+    fn validate_bytes_for_decode(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
         match algorithm {
             Algorithm::Ed25519 => {
-                ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
-                    .map(Self::Ed25519)
+                ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload).map(drop)
             }
-            _ => Self::from_bytes(algorithm, payload),
+            Algorithm::Secp256k1 => {
+                secp256k1::EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload)
+            }
+            Algorithm::MlDsa => validate_ml_dsa_public_key_for_decode(payload),
+            #[cfg(feature = "gost")]
+            Algorithm::Gost3410_2012_256ParamSetA
+            | Algorithm::Gost3410_2012_256ParamSetB
+            | Algorithm::Gost3410_2012_256ParamSetC
+            | Algorithm::Gost3410_2012_512ParamSetA
+            | Algorithm::Gost3410_2012_512ParamSetB => {
+                Self::from_bytes(algorithm, payload).map(drop)
+            }
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+            Algorithm::BlsNormal => bls::BlsNormal::validate_public_key_for_decode(payload),
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+            Algorithm::BlsSmall => bls::BlsSmall::validate_public_key_for_decode(payload),
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            Algorithm::BlsNormal | Algorithm::BlsSmall => {
+                Self::from_bytes(algorithm, payload).map(drop)
+            }
+            #[cfg(feature = "sm")]
+            Algorithm::Sm2 => Self::from_bytes(algorithm, payload).map(drop),
         }
     }
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -833,9 +925,14 @@ pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey
 /// signature `R` component is malformed, non-canonical, or small-order.
 /// Returns [`Error::Parse`] if the payload is empty or all zero.
 pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
-    let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
+    if payload.is_empty() || payload.iter().all(|byte| *byte == 0) {
+        return Err(Error::Parse(ParseError(
+            "signature payload must not be empty or all zero".to_owned(),
+        )));
+    }
     signature::ed25519::Ed25519Sha512::parse_signature(payload)?;
-    Ok(signature)
+    Signature::try_from_bytes_for_admission(payload)
+        .map_err(|_| Error::Parse(ParseError("invalid Ed25519 signature".to_owned())))
 }
 /// Parse raw ML-DSA-65 signature bytes for admission before storing them as an opaque signature.
 ///
@@ -844,7 +941,11 @@ pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
 /// detached signature encoding is malformed. Returns [`Error::Parse`] if the
 /// payload is empty or all zero.
 pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
-    let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
+    if payload.is_empty() || payload.iter().all(|byte| *byte == 0) {
+        return Err(Error::Parse(ParseError(
+            "signature payload must not be empty or all zero".to_owned(),
+        )));
+    }
     if payload.len() != ML_DSA_65_SIGNATURE_BYTES {
         return Err(Error::BadSignature);
     }
@@ -854,7 +955,58 @@ pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
         use pqcrypto_traits::sign::DetachedSignature as _;
         mldsa65::DetachedSignature::from_bytes(payload).map_err(|_| Error::BadSignature)?;
     }
-    Ok(signature)
+    Signature::try_from_bytes_for_admission(payload)
+        .map_err(|_| Error::Parse(ParseError("invalid ML-DSA signature".to_owned())))
+}
+
+/// Verify an externally admitted signature without consulting persistent key
+/// or success caches for the Ed25519, secp256k1, and ML-DSA V1 algorithms.
+///
+/// Feature-selected BLS, GOST, and SM2 implementations retain their ordinary
+/// verifier until their upstream allocation contracts provide an equivalent
+/// borrowed verification boundary.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] or a fixed parse error when the signature or
+/// public key is invalid for the selected algorithm.
+#[doc(hidden)]
+pub fn verify_signature_for_admission(
+    proof: &Signature,
+    public_key: &PublicKey,
+    message: &[u8],
+) -> Result<(), Error> {
+    let (algorithm, payload) = public_key.try_to_bytes().map_err(Error::from)?;
+    match algorithm {
+        Algorithm::Ed25519 => {
+            let key =
+                signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
+                    .map_err(Error::from)?;
+            signature::ed25519::Ed25519Sha512::verify_uncached(message, proof.payload(), &key)
+        }
+        Algorithm::Secp256k1 => {
+            let key = signature::secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
+                .map_err(Error::from)?;
+            signature::secp256k1::EcdsaSecp256k1Sha256::verify(message, proof.payload(), &key)
+        }
+        Algorithm::MlDsa => {
+            // TODO: replace PQClean's small heap-backed SHAKE context with a
+            // caller-owned fixed workspace once the backend exposes one.
+            pqc_verify_batch_deterministic(&[message], &[proof.payload()], &[payload], [0_u8; 32])
+        }
+        // TODO: replace these backend-owned cache/scratch fallbacks with
+        // borrowed admission verifiers once their allocation contracts are
+        // explicit and source-auditable.
+        #[cfg(feature = "gost")]
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC
+        | Algorithm::Gost3410_2012_512ParamSetA
+        | Algorithm::Gost3410_2012_512ParamSetB => proof.verify(public_key, message),
+        #[cfg(feature = "bls")]
+        Algorithm::BlsNormal | Algorithm::BlsSmall => proof.verify(public_key, message),
+        #[cfg(feature = "sm")]
+        Algorithm::Sm2 => proof.verify(public_key, message),
+    }
 }
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
@@ -1746,7 +1898,7 @@ impl PublicKeyCompact {
                 algorithm_and_payload: ConstVec::new(Box::from_raw(slice)),
             }
         };
-        PublicKeyFull::from_bytes_uncached_for_decode(
+        PublicKeyFull::validate_bytes_for_decode(
             algorithm,
             compact
                 .try_payload()
@@ -1768,15 +1920,12 @@ impl PublicKeyCompact {
         }
         Ok(&self.algorithm_and_payload[1..])
     }
-    fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
-        #[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
-        record_public_key_validation_call();
+
+    fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
         let algorithm = self.try_algorithm()?;
-        if norito::core::decode_limits_active() {
-            PublicKeyFull::from_bytes_uncached_for_decode(algorithm, self.try_payload()?)
-        } else {
-            PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
-        }
+        let payload = self.try_payload()?;
+        validate_public_key_structural_envelope(algorithm, payload)?;
+        Ok((algorithm, payload))
     }
 }
 impl From<PublicKeyFull> for PublicKeyCompact {
@@ -1787,8 +1936,8 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.validated_full()
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        self.structural_components()
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
             &self.algorithm_and_payload,
             writer,
@@ -1796,16 +1945,15 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         // `algorithm_and_payload` is private and every public constructor and
-        // Norito decoder establishes its validity. Sizing must stay purely
-        // structural: reparsing PQ/SM key material here can allocate before a
-        // caller has admitted the encoded length. `serialize` deliberately
-        // retains its validation as defense in depth for internal malformed
-        // fixtures and unsafe FFI construction.
+        // Norito decoder establishes its validity. Encoding and sizing are
+        // therefore structural and never reparse cryptographic key material.
+        self.structural_components().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
     fn encoded_len_exact(&self) -> Option<usize> {
+        self.structural_components().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
@@ -1833,7 +1981,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
         let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
         reserve_public_key_validation_for_decode(algorithm, payload.len() - 1)?;
-        PublicKeyFull::from_bytes_uncached_for_decode(algorithm, &payload[1..])
+        PublicKeyFull::validate_bytes_for_decode(algorithm, &payload[1..])
             .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
         Ok(Self {
             algorithm_and_payload: payload,
@@ -1857,7 +2005,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublicKeyCompact {
         let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
         reserve_public_key_validation_for_decode(algorithm, payload.len() - 1)?;
-        PublicKeyFull::from_bytes_uncached_for_decode(algorithm, &payload[1..])
+        PublicKeyFull::validate_bytes_for_decode(algorithm, &payload[1..])
             .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
         Ok((
             Self {
@@ -1916,27 +2064,6 @@ impl PublicKey {
         // Validate that `payload` is valid before constructing the key.
         let inner = PublicKeyFull::from_bytes(algorithm, payload)?;
         Ok(Self::new(inner))
-    }
-    /// Validate and retain a public key without consulting process-local parse caches.
-    ///
-    /// This decode-only constructor charges and fallibly creates the compact
-    /// key's exact retained allocation under any active Norito decode scope.
-    /// Ordinary callers should continue to use [`Self::from_bytes`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a decode-resource error when the active budget or allocator
-    /// rejects the compact destination, and a fixed parse error otherwise.
-    #[doc(hidden)]
-    pub fn from_bytes_uncached_for_decode(
-        algorithm: Algorithm,
-        payload: &[u8],
-    ) -> Result<Self, norito::core::Error> {
-        reserve_public_key_validation_for_decode(algorithm, payload.len())?;
-        let validated = PublicKeyFull::from_bytes_uncached_for_decode(algorithm, payload)
-            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
-        drop(validated);
-        PublicKeyCompact::try_new_for_decode(algorithm, payload).map(Self)
     }
     /// Derive a public key from private-key material.
     ///
@@ -2007,18 +2134,6 @@ impl PublicKey {
     pub fn try_to_bytes(&self) -> Result<(Algorithm, &[u8]), ParseError> {
         Ok((self.0.try_algorithm()?, self.0.try_payload()?))
     }
-    #[cfg(not(feature = "ffi_import"))]
-    fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
-        #[cfg(all(test, feature = "pqc"))]
-        record_public_key_validation_call();
-        if norito::core::decode_limits_active() {
-            return self.0.validated_full();
-        }
-        signature::public_key_full_cached(self).map_err(|err| match err {
-            Error::Parse(err) => err,
-            err => ParseError(err.to_string()),
-        })
-    }
     /// Construct from hex encoded string. A shorthand over [`Self::from_bytes`].
     ///
     /// # Errors
@@ -2050,6 +2165,84 @@ impl PublicKey {
 }
 #[cfg(not(feature = "ffi_import"))]
 impl PublicKey {
+    /// Validate and retain a public key under active decode resource accounting.
+    ///
+    /// Ed25519, secp256k1, ML-DSA, and blstrs validation borrow the input and do
+    /// not populate parse caches. The w3f, GOST, and SM2 fallback parsers retain
+    /// their explicit source-derived decode charges. The compact key's exact
+    /// retained allocation is charged and created fallibly in every case.
+    /// Ordinary callers should continue to use [`Self::from_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a decode-resource error when the active budget or allocator
+    /// rejects the compact destination, and a fixed parse error otherwise.
+    #[doc(hidden)]
+    pub fn from_bytes_for_decode(
+        algorithm: Algorithm,
+        payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        reserve_public_key_validation_for_decode(algorithm, payload.len())?;
+        PublicKeyFull::validate_bytes_for_decode(algorithm, payload)
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        PublicKeyCompact::try_new_for_decode(algorithm, payload).map(Self)
+    }
+
+    /// Decode one canonical bare multihash literal under active resource limits.
+    ///
+    /// This borrows the hexadecimal source, validates the key without using
+    /// parse caches where the selected backend supports that path, and creates
+    /// the retained compact key through the fallible exact-allocation seam.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-limit error when the active decode budget or
+    /// allocator rejects the key, and a fixed parse error for malformed input.
+    #[doc(hidden)]
+    pub fn from_canonical_str_for_decode(value: &str) -> Result<Self, norito::core::Error> {
+        let decoded = multihash::decode_public_key_str_borrowed(value)
+            .ok_or_else(|| norito::core::Error::Message("invalid public key".to_owned()))?;
+        PublicKeyCompact::try_new_from_canonical_hex_for_decode(
+            decoded.algorithm,
+            decoded.payload_hex,
+        )
+        .map(Self)
+    }
+
+    /// Compatibility alias for the bounded, cache-free decode constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same resource or fixed parse error as
+    /// [`Self::from_bytes_for_decode`].
+    #[doc(hidden)]
+    #[deprecated(note = "use `from_bytes_for_decode`")]
+    pub fn from_bytes_uncached_for_decode(
+        algorithm: Algorithm,
+        payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        Self::from_bytes_for_decode(algorithm, payload)
+    }
+
+    /// Fallibly clone a previously validated compact key for an admitted
+    /// ownership boundary without consulting backend parse caches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a decode-resource or allocation error if the exact compact
+    /// destination cannot be admitted.
+    #[doc(hidden)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::core::Error> {
+        let (algorithm, payload) = self
+            .structural_components()
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        PublicKeyCompact::try_new_for_decode(algorithm, payload).map(Self)
+    }
+
+    fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
+        self.0.structural_components()
+    }
+
     /// Format as a canonical bare multihash hex string.
     ///
     /// # Errors
@@ -2057,12 +2250,24 @@ impl PublicKey {
     /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
-        let full = self.validated_full()?;
-        let algorithm = full.algorithm();
-        let canonical_payload = full.try_payload()?;
-        let bytes = multihash::encode_public_key(algorithm, canonical_payload.as_ref())
-            .map_err(|err| ParseError(err.to_string()))?;
-        multihash::multihash_to_hex_string(&bytes)
+        // Public constructors and decoders establish the compact-key
+        // invariant. Formatting can therefore use the retained canonical
+        // bytes directly without consulting algorithm-specific parse caches.
+        let (algorithm, payload) = self.structural_components()?;
+        let digest_function = multihash::public_key_digest_function(algorithm);
+        let output_len = canonical_public_key_multihash_hex_len(digest_function, payload.len())
+            .ok_or_else(|| ParseError("public-key multihash length overflow".to_owned()))?;
+        let mut output = String::new();
+        output
+            .try_reserve_exact(output_len)
+            .map_err(|_| ParseError("failed to allocate public-key multihash".to_owned()))?;
+        push_lower_varint_hex(digest_function, &mut output);
+        push_lower_varint_hex(payload.len() as u64, &mut output);
+        for byte in payload {
+            push_string_hex_byte(*byte, b"0123456789ABCDEF", &mut output);
+        }
+        debug_assert_eq!(output.len(), output_len);
+        Ok(output)
     }
     fn malformed_compact_marker(&self) -> String {
         format!(
@@ -2082,10 +2287,8 @@ impl PublicKey {
     /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
-        let full = self.validated_full()?;
-        let algorithm = full.algorithm();
-        let canonical_payload = full.try_payload()?;
-        multihash::encode_public_key_prefixed(algorithm, canonical_payload.as_ref())
+        let (algorithm, payload) = self.structural_components()?;
+        multihash::encode_public_key_prefixed(algorithm, payload)
             .map_err(|err| ParseError(err.to_string()))
     }
     #[cfg(not(feature = "ffi_import"))]
@@ -2094,6 +2297,48 @@ impl PublicKey {
         self.try_to_prefixed_string()
             .unwrap_or_else(|_| self.malformed_compact_marker())
     }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn canonical_public_key_multihash_hex_len(
+    mut digest_function: u64,
+    payload_len: usize,
+) -> Option<usize> {
+    let mut header_bytes = 1_usize;
+    while digest_function >= 0x80 {
+        digest_function >>= 7;
+        header_bytes = header_bytes.checked_add(1)?;
+    }
+    let mut encoded_len = u64::try_from(payload_len).ok()?;
+    header_bytes = header_bytes.checked_add(1)?;
+    while encoded_len >= 0x80 {
+        encoded_len >>= 7;
+        header_bytes = header_bytes.checked_add(1)?;
+    }
+    header_bytes
+        .checked_add(payload_len)
+        .and_then(|bytes| bytes.checked_mul(2))
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn push_lower_varint_hex(mut value: u64, output: &mut String) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        push_string_hex_byte(byte, b"0123456789abcdef", output);
+        if value == 0 {
+            return;
+        }
+    }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn push_string_hex_byte(byte: u8, alphabet: &[u8; 16], output: &mut String) {
+    output.push(char::from(alphabet[usize::from(byte >> 4)]));
+    output.push(char::from(alphabet[usize::from(byte & 0x0f)]));
 }
 #[cfg(not(feature = "ffi_import"))]
 impl core::hash::Hash for PublicKey {
@@ -2168,7 +2413,38 @@ impl fmt::Debug for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.normalize_lossy())
+        match self.structural_components() {
+            Ok((algorithm, payload)) => {
+                fmt_lower_varint_hex(multihash::public_key_digest_function(algorithm), f)?;
+                fmt_lower_varint_hex(payload.len() as u64, f)?;
+                for byte in payload {
+                    write!(f, "{byte:02X}")?;
+                }
+                Ok(())
+            }
+            Err(_) => {
+                f.write_str("invalid-public-key:")?;
+                for byte in self.0.algorithm_and_payload.as_ref() {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn fmt_lower_varint_hex(mut value: u64, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        write!(output, "{byte:02x}")?;
+        if value == 0 {
+            return Ok(());
+        }
     }
 }
 #[cfg(not(feature = "ffi_import"))]
@@ -2181,17 +2457,9 @@ impl norito::json::JsonSerialize for PublicKey {
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        let algorithm = self
-            .0
-            .try_algorithm()
+        let (algorithm, payload) = self
+            .structural_components()
             .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
-        let payload = self
-            .0
-            .try_payload()
-            .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
-        if payload.len() > MAX_PUBLIC_KEY_PAYLOAD_BYTES {
-            return Err(norito::json::BoundedJsonError::Unsupported);
-        }
         out.push('"')?;
         write_lower_varint_hex(multihash::public_key_digest_function(algorithm), out)?;
         write_lower_varint_hex(payload.len() as u64, out)?;
@@ -2207,20 +2475,29 @@ impl norito::json::JsonDeserialize for PublicKey {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value: String = norito::json::JsonDeserialize::json_deserialize(parser)?;
-        let decoded = multihash::decode_public_key_str_borrowed(&value)
-            .ok_or_else(|| norito::json::Error::Message("invalid public key".to_owned()))?;
-        PublicKeyCompact::try_new_from_canonical_hex_for_decode(
-            decoded.algorithm,
-            decoded.payload_hex,
-        )
-        .map(Self)
-        .map_err(|error| {
-            if error.is_decode_resource_limit() {
-                norito::json::Error::from_decode_resource(error)
-            } else {
-                norito::json::Error::Message("invalid public key".to_owned())
-            }
-        })
+        Self::from_canonical_str_for_decode(&value).map_err(public_key_json_decode_error)
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let norito::json::Value::String(value) = value else {
+            return Err(norito::json::Error::Message(
+                "invalid public key".to_owned(),
+            ));
+        };
+        Self::from_canonical_str_for_decode(value).map_err(public_key_json_decode_error)
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        Self::from_canonical_str_for_decode(key).map_err(public_key_json_decode_error)
+    }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn public_key_json_decode_error(error: norito::core::Error) -> norito::json::Error {
+    if error.is_decode_resource_limit() {
+        norito::json::Error::from_decode_resource(error)
+    } else {
+        norito::json::Error::Message("invalid public key".to_owned())
     }
 }
 #[cfg(not(feature = "ffi_import"))]
@@ -2271,24 +2548,15 @@ impl FromStr for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.validated_full()
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
-            &self.0.algorithm_and_payload,
-            writer,
-        )
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        // See `PublicKeyCompact`: sizing is structural and allocation-free,
-        // while the serialization path still validates the private invariant.
-        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
-            &self.0.algorithm_and_payload,
-        )
+        // See `PublicKeyCompact`: the private invariant makes both sizing and
+        // serialization structural and free of cryptographic reparsing.
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
-            &self.0.algorithm_and_payload,
-        )
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
 #[cfg(not(feature = "ffi_import"))]
@@ -2303,7 +2571,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
         PublicKeyCompact::try_deserialize(archived_compact).map(Self)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 #[cfg(not(feature = "ffi_import"))]
 impl IntoSchema for PublicKey {
     fn type_name() -> String {

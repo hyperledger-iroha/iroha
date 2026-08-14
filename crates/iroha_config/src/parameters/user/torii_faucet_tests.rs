@@ -1,8 +1,8 @@
 //! Faucet configuration parsing tests.
-use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 use iroha_crypto::PublicKey;
 use iroha_data_model::DomainId;
+use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
 struct TestKeyFile(PathBuf);
 impl TestKeyFile {

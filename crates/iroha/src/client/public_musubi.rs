@@ -1,8 +1,8 @@
 //! Exact-network authenticated public Musubi query helpers.
-use std::time::Duration;
 use super::{APPLICATION_JSON, Client};
 use crate::http::{Method as HttpMethod, RequestBuilder as _, StatusCode};
 use eyre::{Result, WrapErr as _, eyre};
+use std::time::Duration;
 // Exact-release JSON repeats the bounded dependency vector in the authoritative home record and
 // the universal resolver row. Byte-budgeted resolver pages share this Musubi-specific ceiling,
 // which remains below the shared HTTP client's 64 MiB default.

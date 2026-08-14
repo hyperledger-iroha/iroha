@@ -1,7 +1,7 @@
 //! Allocation-bounded canonical-Norito base64 JSON strings.
-use std::io::{self, Write};
 use super::{BoundedJsonError, JsonWriteSink, bounded::UnboundedJsonSink};
 use crate::core::{NoritoSerialize, write_canonical_to_writer};
+use std::io::{self, Write};
 const STANDARD_ALPHABET: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 /// Run a checked JSON writer against an ordinary string destination.

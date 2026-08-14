@@ -4,13 +4,13 @@
 //! commitments. A proof-system commitment must not be added here until
 //! admission can resolve an on-chain verifying key and invoke its real
 //! cryptographic verifier.
+use crate::{Hash, HashOf, MerkleProof, MerkleTree};
 use core::{convert::TryFrom, fmt};
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use crate::{Hash, HashOf, MerkleProof, MerkleTree};
 /// Domain tag used when hashing a raw lane-privacy Merkle leaf.
 ///
 /// The trailing NUL prevents the tag from being a prefix of another protocol

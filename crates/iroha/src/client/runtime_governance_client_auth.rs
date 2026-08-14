@@ -1,7 +1,7 @@
 //! Compact exact-network account-authenticated transport helpers for runtime/governance reads.
+use super::{Client, DefaultRequestBuilder, HttpMethod, Response};
 use eyre::Result;
 use url::Url;
-use super::{Client, DefaultRequestBuilder, HttpMethod, Response};
 impl Client {
     pub(super) fn account_signed_get_request(&self, url: Url) -> Result<DefaultRequestBuilder> {
         self.account_signed_request(HttpMethod::GET, url, Vec::new())

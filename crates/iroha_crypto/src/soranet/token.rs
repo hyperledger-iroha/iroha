@@ -7,12 +7,12 @@
 //!
 //! Persistent token-consumption snapshots are hard-bounded, decoded under
 //! explicit Norito limits, and loaded only from stable direct regular files.
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+use super::{
+    replay_lock::ExclusiveLedgerLock,
+    snapshot_file::{
+        BoundedWriter, create_temporary_direct_regular_file, persist_temporary_snapshot,
+        read_optional_bounded_regular_file,
+    },
 };
 use blake3::Hasher;
 #[cfg(test)]
@@ -24,14 +24,14 @@ use norito::{
 };
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
-use thiserror::Error;
-use super::{
-    replay_lock::ExclusiveLedgerLock,
-    snapshot_file::{
-        BoundedWriter, create_temporary_direct_regular_file, persist_temporary_snapshot,
-        read_optional_bounded_regular_file,
-    },
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use thiserror::Error;
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
 const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
 const ID_DOMAIN: &[u8] = b"soranet.token.id.v1";
@@ -1220,11 +1220,11 @@ pub fn frame_looks_like_token(frame: &[u8]) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand::{SeedableRng, rngs::StdRng};
     use rand_core::{TryCryptoRng, TryRngCore};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
-    use super::*;
     const RELAY_ID: [u8; 32] = [0xAB; 32];
     const TRANSCRIPT: [u8; 32] = [0xCD; 32];
     fn write_token_store_snapshot(path: &std::path::Path, mut entries: Vec<TokenStoreEntry>) {

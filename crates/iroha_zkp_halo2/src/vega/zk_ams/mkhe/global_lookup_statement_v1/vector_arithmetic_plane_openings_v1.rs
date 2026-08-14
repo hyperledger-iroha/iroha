@@ -531,6 +531,8 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
     }
 }
 
+#[path = "vector_arithmetic_plane_openings_v1/global_lookup_proof_session_v3.rs"]
+mod global_lookup_proof_session_v3;
 #[path = "vector_arithmetic_plane_openings_v1/replay_caps_v1.rs"]
 mod replay_caps_v1;
 #[path = "vector_arithmetic_plane_openings_v1/vector_arithmetic_proof_codec_v2.rs"]

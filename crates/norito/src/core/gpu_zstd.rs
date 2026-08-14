@@ -652,10 +652,10 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
 }
 #[cfg(all(test, feature = "gpu-compression"))]
 mod tests {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
-    use std::{io::Cursor, sync::Mutex};
     use super::*;
     use crate::core::hw;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::{io::Cursor, sync::Mutex};
     static GPU_POLICY_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct GpuPolicyGuard(bool);
     impl GpuPolicyGuard {
@@ -808,10 +808,10 @@ mod tests {
 }
 #[cfg(test)]
 mod self_test {
+    use super::*;
     use std::cell::Cell;
     use std::sync::Mutex;
     use std::{io, io::Write, path::Path, path::PathBuf, ptr, slice};
-    use super::*;
     static VALIDATION_TEST_LOCK: Mutex<()> = Mutex::new(());
     fn reset_validation_test_state() {
         VALIDATE_CALLS.store(0, Ordering::Relaxed);

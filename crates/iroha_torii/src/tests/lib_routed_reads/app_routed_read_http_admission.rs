@@ -1,13 +1,6 @@
 // Exact public-HTTP admission regressions for all application routed reads.
 mod app_routed_read_http_admission_tests {
-    use std::{
-        convert::Infallible,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        task::Poll,
-    };
+    use super::*;
     use axum::{
         Router,
         body::{Body, Bytes},
@@ -16,8 +9,15 @@ mod app_routed_read_http_admission_tests {
         response::{IntoResponse as _, Response},
         routing::any,
     };
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::Poll,
+    };
     use tower::ServiceExt as _;
-    use super::*;
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {
@@ -69,61 +69,71 @@ mod app_routed_read_http_admission_tests {
             .body(body)
             .expect("valid test request")
     }
-    fn endpoint_inventory() -> [ToriiReadEndpointV1; 45] {
-        use ToriiReadEndpointV1::*;
-        [
-            AccountGet,
-            ExplorerAccountDetail,
-            AccountAssetsGet,
-            AccountAssetsQuery,
-            AccountPermissionsGet,
-            AccountTransactionsGet,
-            AccountTransactionsQuery,
-            TransactionsQuery,
-            PipelineTransactionStatusGet,
-            ProofRecordGet,
-            AccountsList,
-            AccountsQuery,
-            AccountsPortfolio,
-            AssetDefinitionsList,
-            AssetDefinitionGet,
-            AssetDefinitionsQuery,
-            AssetHoldersGet,
-            AssetHoldersQuery,
-            DomainsList,
-            DomainsQuery,
-            NftsList,
-            NftsQuery,
-            NexusPublicLaneValidators,
-            NexusPublicLaneStake,
-            NexusPublicLaneRewards,
-            NexusDataspacesAccountSummary,
-            SpaceDirectoryBindingsGet,
-            SpaceDirectoryManifestsGet,
-            RwasList,
-            RwasQuery,
-            AliasResolve,
-            AliasResolveIndex,
-            AliasLookupByAccount,
-            ExplorerAssetDefinitionDetail,
-            ExplorerAssetDefinitionEconometrics,
-            ExplorerAssetDefinitionSnapshot,
-            ContractAliasResolve,
-            ContractStateGet,
-            ContractViewPost,
-            ContractViewBatchPost,
-            AccountHistoryGet,
-            InternalAccountGet,
-            InternalAccountTransactionGet,
-            InternalAccountAssetGet,
-            ContractDeploymentState,
-        ]
+    macro_rules! define_endpoint_inventory {
+        ($($endpoint:ident),+ $(,)?) => {
+            const ENDPOINT_INVENTORY: &[ToriiReadEndpointV1] = &[
+                $(ToriiReadEndpointV1::$endpoint),+
+            ];
+            fn endpoint_inventory_is_exhaustive(endpoint: ToriiReadEndpointV1) -> bool {
+                match endpoint {
+                    $(ToriiReadEndpointV1::$endpoint => true),+
+                }
+            }
+        };
     }
+    define_endpoint_inventory!(
+        AccountGet,
+        ExplorerAccountDetail,
+        AccountAssetsGet,
+        AccountAssetsQuery,
+        AccountPermissionsGet,
+        AccountTransactionsGet,
+        AccountTransactionsQuery,
+        TransactionsQuery,
+        PipelineTransactionStatusGet,
+        ProofRecordGet,
+        AccountsList,
+        AccountsQuery,
+        AccountsPortfolio,
+        AssetDefinitionsList,
+        AssetDefinitionGet,
+        AssetDefinitionsQuery,
+        AssetHoldersGet,
+        AssetHoldersQuery,
+        DomainsList,
+        DomainsQuery,
+        NftsList,
+        NftsQuery,
+        NexusPublicLaneValidators,
+        NexusPublicLaneStake,
+        NexusPublicLaneRewards,
+        NexusDataspacesAccountSummary,
+        SpaceDirectoryBindingsGet,
+        SpaceDirectoryManifestsGet,
+        RwasList,
+        RwasQuery,
+        AliasResolve,
+        AliasResolveIndex,
+        AliasLookupByAccount,
+        ExplorerAssetDefinitionDetail,
+        ExplorerAssetDefinitionEconometrics,
+        ExplorerAssetDefinitionSnapshot,
+        ContractAliasResolve,
+        ContractStateGet,
+        ContractViewPost,
+        ContractViewBatchPost,
+        AccountHistoryGet,
+        InternalAccountGet,
+        InternalAccountTransactionGet,
+        InternalAccountAssetGet,
+        ContractDeploymentState,
+    );
     #[test]
     fn all_45_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
-        let expected = endpoint_inventory();
+        let expected = ENDPOINT_INVENTORY;
         assert_eq!(APP_ROUTED_READ_HTTP_ENDPOINTS_V1.len(), expected.len());
-        for endpoint in expected {
+        for &endpoint in expected {
+            assert!(endpoint_inventory_is_exhaustive(endpoint));
             assert_eq!(
                 APP_ROUTED_READ_HTTP_ENDPOINTS_V1
                     .iter()
@@ -242,12 +252,45 @@ mod app_routed_read_http_admission_tests {
         let pointer = admitted.bytes.as_ptr();
         let mut request = Request::new(Body::from(admitted.bytes.clone()));
         request.extensions_mut().insert(admitted.clone());
-        let extension = admitted_app_routed_read_body(&request).expect("stored admitted body");
+        assert!(
+            admitted_app_routed_read_body(&request).is_none(),
+            "a typed extension alone is not trusted without task-local admission provenance"
+        );
+        let app = mk_app_state_for_tests();
+        let reservation = try_acquire_new_query_fanout_memory(&app).expect("test reservation");
+        let admission = AppRoutedReadHttpAdmission {
+            reservation: reservation.clone(),
+            decode_plan: torii_routed_read_request_decode_plan(&app).expect("test request plan"),
+        };
+        let extension = APP_ROUTED_READ_HTTP_ADMISSION
+            .scope(admission, async {
+                admitted_app_routed_read_body(&request).expect("stored admitted body")
+            })
+            .await;
         assert_eq!(extension.as_ptr(), pointer);
         let extracted = axum::body::to_bytes(request.into_body(), 8)
             .await
             .expect("one Full<Bytes> frame collects");
         assert_eq!(extracted.as_ptr(), pointer);
+    }
+    #[tokio::test]
+    async fn zero_body_is_drained_before_returning_canonical_empty_bytes() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let body_polls = Arc::clone(&polls);
+        let body = Body::from_stream(futures::stream::poll_fn(move |_| {
+            let poll = body_polls.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(match poll {
+                0 => Some(Ok::<Bytes, Infallible>(Bytes::new())),
+                _ => None,
+            })
+        }));
+        let admitted = collect_app_routed_read_body(body, 8, None)
+            .await
+            .expect("zero-byte body should drain successfully");
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+        assert_eq!(admitted.destination_bytes, 8);
+        assert_eq!(admitted.bytes, Bytes::new());
+        assert_eq!(admitted.bytes.as_ptr(), Bytes::new().as_ptr());
     }
     #[tokio::test]
     async fn unknown_and_lying_lengths_reject_exact_plus_one() {
@@ -307,6 +350,25 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
     }
     #[tokio::test]
+    async fn bodyless_zero_length_success_holds_admission_until_response_drop() {
+        let app = mk_app_state_for_tests();
+        let descriptor = route_catalog::pipeline::TRANSACTION_STATUS;
+        let before = app.query_fanout_inflight.available_permits();
+        let request = Request::builder()
+            .uri(descriptor.path())
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .expect("empty bodyless request");
+        let response = admission_router(Arc::clone(&app), descriptor, false)
+            .oneshot(request)
+            .await
+            .expect("bodyless success response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(app.query_fanout_inflight.available_permits() < before);
+        drop(response);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+    #[tokio::test]
     async fn one_byte_and_empty_frames_are_bounded_only_by_admitted_bytes() {
         const BYTES: usize = 5_000;
         let frames = futures::stream::iter((0..BYTES * 2).map(|index| {
@@ -357,7 +419,7 @@ mod app_routed_read_http_admission_tests {
         }
     }
     #[tokio::test]
-    async fn authentication_precedes_admission_and_authenticated_body_reaches_deadline() {
+    async fn listener_authentication_precedes_admission_and_body_reaches_deadline() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique test state")
@@ -424,7 +486,11 @@ mod app_routed_read_http_admission_tests {
     fn dynamic_raw_target_exact_and_plus_one_precede_permit_acquisition() {
         let app = mk_app_state_for_tests();
         let before = app.query_fanout_inflight.available_permits();
-        let plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        let mut plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        // `http::Uri` itself has a u16-sized textual ceiling. A small synthetic
+        // admission cap exercises exact/+1 accounting without hitting that
+        // independent parser boundary first.
+        plan.raw_input_limit_bytes = 4_096;
         let exact = format!("/{}", "x".repeat(plan.raw_input_limit_bytes - 1));
         let exact_uri: axum::http::Uri = exact.parse().expect("exact URI");
         assert_eq!(
@@ -437,6 +503,34 @@ mod app_routed_read_http_admission_tests {
         assert!(
             plan.admit_raw_input(app_routed_read_raw_target_bytes(&over_uri))
                 .is_err()
+        );
+        let absolute_prefix = "http://torii.example/";
+        let suffix_bytes = plan
+            .raw_input_limit_bytes
+            .checked_sub(absolute_prefix.len())
+            .expect("request limit exceeds absolute-form prefix");
+        let absolute = format!("{absolute_prefix}{}", "x".repeat(suffix_bytes));
+        let absolute_uri: axum::http::Uri = absolute.parse().expect("absolute-form URI");
+        assert_eq!(
+            app_routed_read_raw_target_bytes(&absolute_uri),
+            absolute.len()
+        );
+        plan.admit_raw_input(app_routed_read_raw_target_bytes(&absolute_uri))
+            .expect("exact absolute-form target fits");
+        let absolute_over_uri: axum::http::Uri = format!("{absolute}x")
+            .parse()
+            .expect("over-limit absolute-form URI");
+        assert!(
+            plan.admit_raw_input(app_routed_read_raw_target_bytes(&absolute_over_uri))
+                .is_err()
+        );
+        let asterisk_uri: axum::http::Uri = "*".parse().expect("asterisk-form URI");
+        assert_eq!(app_routed_read_raw_target_bytes(&asterisk_uri), 1);
+        let authority_uri: axum::http::Uri =
+            "torii.example:8080".parse().expect("authority-form URI");
+        assert_eq!(
+            app_routed_read_raw_target_bytes(&authority_uri),
+            "torii.example:8080".len()
         );
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
         let source = include_str!("../../torii_app_routed_read_http.rs");

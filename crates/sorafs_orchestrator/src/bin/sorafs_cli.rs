@@ -75,7 +75,6 @@ use reqwest::{
 };
 #[cfg(test)]
 use rust_decimal::Decimal;
-use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
@@ -2982,9 +2981,9 @@ fn usage() -> String {
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
-  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
@@ -3025,9 +3024,9 @@ fn usage() -> String {
 }
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]"
         .to_string()
 }
@@ -15698,11 +15697,12 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 struct ReputationRequestAuth {
-    account_literal: String,
+    account_header_value: String,
+    network_id: NetworkId,
     key_pair: KeyPair,
 }
-struct ReputationRequestHeaders {
-    account_literal: String,
+struct ReputationRequestHeaders<'a> {
+    account_header_value: &'a str,
     signature_base64: String,
     timestamp_ms: u64,
     nonce: String,
@@ -15713,6 +15713,7 @@ fn parse_reputation_auth_option(
     context: &str,
     account_literal: &mut Option<String>,
     private_key_path: &mut Option<PathBuf>,
+    network_id: &mut Option<NetworkId>,
 ) -> Result<bool, String> {
     match key {
         "--auth-account" => {
@@ -15729,12 +15730,19 @@ fn parse_reputation_auth_option(
             }
             Ok(true)
         }
+        "--network-id" => {
+            *network_id = Some(value.parse().map_err(|_| {
+                format!("`--network-id` must be a canonical genesis hash for `{context}`")
+            })?);
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
 fn load_reputation_request_auth(
     account_literal: Option<String>,
     private_key_path: Option<PathBuf>,
+    network_id: Option<NetworkId>,
     context: &str,
 ) -> Result<ReputationRequestAuth, String> {
     let account_literal = account_literal
@@ -15742,6 +15750,8 @@ fn load_reputation_request_auth(
     let private_key_path = private_key_path.ok_or_else(|| {
         format!("missing required `--auth-private-key-file=PATH` for `{context}`")
     })?;
+    let network_id = network_id
+        .ok_or_else(|| format!("missing required `--network-id=GENESIS_HASH` for `{context}`"))?;
     if private_key_path.as_os_str().is_empty() {
         return Err(format!(
             "`--auth-private-key-file` must not be empty for `{context}`"
@@ -15760,8 +15770,12 @@ fn load_reputation_request_auth(
             "`--auth-private-key-file` does not control `--auth-account` for `{context}`"
         ));
     }
+    let account_header_value = account
+        .to_canonical_hex()
+        .map_err(|_| format!("failed to encode `--auth-account` for `{context}`"))?;
     Ok(ReputationRequestAuth {
-        account_literal,
+        account_header_value,
+        network_id,
         key_pair,
     })
 }
@@ -16019,36 +16033,7 @@ fn load_reputation_auth_private_key(path: &Path, context: &str) -> Result<Privat
     bytes.fill(0);
     parsed
 }
-fn canonical_reputation_query(raw: Option<&str>) -> String {
-    let Some(raw) = raw else {
-        return String::new();
-    };
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let mut serializer = Serializer::new(String::new());
-    for (key, value) in pairs {
-        serializer.append_pair(&key, &value);
-    }
-    serializer.finish()
-}
-fn canonical_reputation_request_message(endpoint: &Url, timestamp_ms: u64, nonce: &str) -> Vec<u8> {
-    let query = canonical_reputation_query(endpoint.query());
-    let body_hash = Sha256::digest([]);
-    format!(
-        "GET\n{}\n{}\n{}\n{}\n{}",
-        endpoint.path(),
-        query,
-        hex_encode(body_hash),
-        timestamp_ms,
-        nonce
-    )
-    .into_bytes()
-}
+include!("sorafs_cli/reputation_canonical_request.rs");
 fn reputation_request_timestamp_ms_at(now: SystemTime) -> Result<u64, String> {
     let elapsed = now.duration_since(UNIX_EPOCH).map_err(|_| {
         "system clock is before the Unix epoch; cannot sign reputation request".to_owned()
@@ -16067,31 +16052,32 @@ where
         .map_err(|_| "OS RNG failed while signing reputation request".to_owned())?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(nonce))
 }
-fn reputation_request_headers_with_rng_at<R>(
-    auth: &ReputationRequestAuth,
+fn reputation_request_headers_with_rng_at<'a, R>(
+    auth: &'a ReputationRequestAuth,
     endpoint: &Url,
     now: SystemTime,
     rng: &mut R,
-) -> Result<ReputationRequestHeaders, String>
+) -> Result<ReputationRequestHeaders<'a>, String>
 where
     R: rand::rand_core::TryCryptoRng + ?Sized,
 {
     let timestamp_ms = reputation_request_timestamp_ms_at(now)?;
     let nonce = reputation_request_nonce_with_rng(rng)?;
-    let message = canonical_reputation_request_message(endpoint, timestamp_ms, &nonce);
+    let message =
+        canonical_reputation_request_message(&auth.network_id, endpoint, timestamp_ms, &nonce)?;
     let signature = Signature::try_new(auth.key_pair.private_key(), &message)
         .map_err(|_| "failed to sign reputation request".to_owned())?;
     Ok(ReputationRequestHeaders {
-        account_literal: auth.account_literal.clone(),
+        account_header_value: &auth.account_header_value,
         signature_base64: BASE64_STANDARD.encode(signature.payload()),
         timestamp_ms,
         nonce,
     })
 }
-fn reputation_request_headers(
-    auth: &ReputationRequestAuth,
+fn reputation_request_headers<'a>(
+    auth: &'a ReputationRequestAuth,
     endpoint: &Url,
-) -> Result<ReputationRequestHeaders, String> {
+) -> Result<ReputationRequestHeaders<'a>, String> {
     reputation_request_headers_with_rng_at(
         auth,
         endpoint,
@@ -16123,7 +16109,7 @@ fn send_reputation_request(
         .get(endpoint.clone())
         .header("Accept", "application/json")
         .header(ACCEPT_ENCODING, "identity")
-        .header(REPUTATION_HEADER_ACCOUNT, headers.account_literal)
+        .header(REPUTATION_HEADER_ACCOUNT, headers.account_header_value)
         .header(REPUTATION_HEADER_SIGNATURE, headers.signature_base64)
         .header(
             REPUTATION_HEADER_TIMESTAMP_MS,
@@ -16167,6 +16153,7 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
     for arg in raw_args {
         let (key, value) = arg
@@ -16179,6 +16166,7 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -16196,7 +16184,8 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation snapshot`".to_string()
     })?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
     let response = send_reputation_request(&client, &endpoint, &auth)
@@ -16213,6 +16202,7 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
     for arg in raw_args {
         let (key, value) = arg
@@ -16225,6 +16215,7 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -16248,7 +16239,8 @@ fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
             "missing required `--provider-id=ID` for `sorafs_cli reputation fetch`".to_string()
         })
         .and_then(|value| parse_reputation_provider_id(&value))?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let route = format!("v1/sorafs/reputation/providers/{provider_id}");
     let endpoint = reputation_endpoint(&torii_url, &route)?;
@@ -16280,6 +16272,7 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary_out: Option<PathBuf> = None;
     let mut auth_account: Option<String> = None;
     let mut auth_private_key_path: Option<PathBuf> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut seen_options = BTreeSet::new();
     for arg in raw_args {
         let (key, value) = arg
@@ -16292,6 +16285,7 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
             CONTEXT,
             &mut auth_account,
             &mut auth_private_key_path,
+            &mut network_id,
         )? {
             continue;
         }
@@ -16330,7 +16324,8 @@ fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli reputation watch`".to_string()
     })?;
-    let auth = load_reputation_request_auth(auth_account, auth_private_key_path, CONTEXT)?;
+    let auth =
+        load_reputation_request_auth(auth_account, auth_private_key_path, network_id, CONTEXT)?;
     let client = reputation_http_client()?;
     let final_value = run_reputation_watch(
         &torii_url,
@@ -21230,13 +21225,22 @@ mod tests {
     }
     fn fixture_reputation_auth(seed: u8, discriminant: u16) -> ReputationRequestAuth {
         let key_pair = fixture_keypair(seed);
-        let account_literal = AccountId::new(key_pair.public_key().clone())
+        let account = AccountId::new(key_pair.public_key().clone());
+        account
             .to_i105_for_discriminant(discriminant)
             .expect("encode reputation authentication account");
         ReputationRequestAuth {
-            account_literal,
+            account_header_value: account
+                .to_canonical_hex()
+                .expect("encode reputation authentication header"),
+            network_id: fixture_reputation_network_id(),
             key_pair,
         }
+    }
+    fn fixture_reputation_network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("canonical reputation network identity")
     }
     fn write_reputation_private_key(path: &Path, key_pair: &KeyPair) {
         let exposed = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
@@ -21342,72 +21346,7 @@ mod tests {
         }
     }
     impl rand::rand_core::TryCryptoRng for FailingReputationRng {}
-    #[test]
-    fn reputation_auth_headers_match_the_exact_canonical_preimage() {
-        let auth = fixture_reputation_auth(0x31, 369);
-        let endpoint = Url::parse(
-            "http://127.0.0.1/v1/sorafs/reputation/events?z=%2B&b=two+words&a=%7E&a=first",
-        )
-        .expect("endpoint");
-        let now = UNIX_EPOCH + Duration::from_millis(1_725_000_000_123);
-        let mut rng = IncrementingReputationRng { next: 0x11 };
-        let headers = reputation_request_headers_with_rng_at(&auth, &endpoint, now, &mut rng)
-            .expect("signed headers");
-        let expected_nonce = BASE64_URL_SAFE_NO_PAD.encode([0x11_u8; 12]);
-        let expected_message = format!(
-            "GET\n/v1/sorafs/reputation/events\na=first&a=%7E&b=two+words&z=%2B\n{}\n1725000000123\n{expected_nonce}",
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        )
-        .into_bytes();
-        assert_eq!(headers.account_literal, auth.account_literal);
-        assert_eq!(headers.timestamp_ms, 1_725_000_000_123);
-        assert_eq!(headers.nonce, expected_nonce);
-        assert_eq!(
-            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, &headers.nonce),
-            expected_message
-        );
-        let signature_bytes = BASE64_STANDARD
-            .decode(&headers.signature_base64)
-            .expect("standard base64 signature");
-        assert_eq!(
-            BASE64_STANDARD.encode(&signature_bytes),
-            headers.signature_base64
-        );
-        let signature =
-            Signature::try_from_bytes(&signature_bytes).expect("admissible signature payload");
-        signature
-            .verify(auth.key_pair.public_key(), &expected_message)
-            .expect("signature verifies exact canonical request");
-        let mutated_path =
-            Url::parse("http://127.0.0.1/v1/sorafs/reputation/latest").expect("mutated path");
-        let mutated_query = Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?limit=2")
-            .expect("mutated query");
-        for mutated in [
-            canonical_reputation_request_message(
-                &mutated_path,
-                headers.timestamp_ms,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(
-                &mutated_query,
-                headers.timestamp_ms,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(
-                &endpoint,
-                headers.timestamp_ms + 1,
-                &headers.nonce,
-            ),
-            canonical_reputation_request_message(&endpoint, headers.timestamp_ms, "mutated-nonce"),
-        ] {
-            assert!(
-                signature
-                    .verify(auth.key_pair.public_key(), &mutated)
-                    .is_err(),
-                "signature must bind every canonical request component"
-            );
-        }
-    }
+    include!("sorafs_cli/reputation_canonical_request_tests.rs");
     #[test]
     fn reputation_provider_id_parser_matches_the_exact_route_contract() {
         let valid = [
@@ -21677,29 +21616,34 @@ mod tests {
         );
     }
     #[test]
-    fn reputation_reqwest_header_preserves_kana_i105_utf8_bytes() {
-        let literal = fixture_account(0x34)
+    fn reputation_account_header_uses_ascii_canonical_address_hex() {
+        let account = fixture_account(0x34);
+        let literal = account
             .to_i105_for_discriminant(753)
             .expect("Kana-bearing canonical I105");
         assert!(
             !literal.is_ascii(),
             "fixture must exercise I105 Kana bytes: {literal}"
         );
+        let parsed = parse_reputation_auth_account(&literal, "test reputation request")
+            .expect("parse canonical I105 account");
+        let header_value = parsed
+            .to_canonical_hex()
+            .expect("encode canonical account header");
+        assert!(header_value.is_ascii());
+        assert!(header_value.starts_with("0x"));
+        assert_eq!(parsed, account);
         let client = reputation_http_client().expect("hardened reputation client");
         let request = client
             .get("http://127.0.0.1/v1/sorafs/reputation/latest")
-            .header(REPUTATION_HEADER_ACCOUNT, literal.clone())
+            .header(REPUTATION_HEADER_ACCOUNT, header_value.clone())
             .build()
-            .expect("reqwest accepts the canonical I105 header");
+            .expect("reqwest accepts the canonical ASCII account header");
         let header = request
             .headers()
             .get(REPUTATION_HEADER_ACCOUNT)
             .expect("account header");
-        assert_eq!(header.as_bytes(), literal.as_bytes());
-        assert_eq!(
-            std::str::from_utf8(header.as_bytes()).expect("header remains exact UTF-8"),
-            literal
-        );
+        assert_eq!(header.as_bytes(), header_value.as_bytes());
     }
     #[test]
     fn reputation_auth_uses_fresh_nonce_and_signature_for_each_poll() {
@@ -21718,8 +21662,8 @@ mod tests {
             .expect("second signed poll");
         assert_ne!(first.nonce, second.nonce);
         assert_ne!(first.signature_base64, second.signature_base64);
-        assert_eq!(first.account_literal, auth.account_literal);
-        assert_eq!(second.account_literal, auth.account_literal);
+        assert_eq!(first.account_header_value, auth.account_header_value);
+        assert_eq!(second.account_header_value, auth.account_header_value);
     }
     #[test]
     fn reputation_auth_fails_closed_on_rng_and_clock_failures() {
@@ -21862,6 +21806,7 @@ mod tests {
         let error = load_reputation_request_auth(
             Some(account_literal),
             Some(path),
+            Some(fixture_reputation_network_id()),
             "sorafs_cli reputation snapshot",
         )
         .err()

@@ -79,14 +79,36 @@ pub fn parse<'a>(tag: &str, candidate: &'a str) -> Result<&'a str, Error> {
     }
     Ok(body)
 }
+
+/// Parse a canonical literal without constructing source-sized diagnostics.
+///
+/// This is the allocation-free counterpart used by bounded decoders that map
+/// malformed input to their own fixed error. It accepts exactly the same
+/// canonical spelling as [`parse`].
+#[doc(hidden)]
+pub fn parse_without_diagnostics<'a>(tag: &str, candidate: &'a str) -> Option<&'a str> {
+    let rest = candidate.strip_prefix(tag)?.strip_prefix(':')?;
+    let hash_pos = rest.rfind('#')?;
+    let body = &rest[..hash_pos];
+    let checksum = &rest[hash_pos + 1..];
+    if body.is_empty()
+        || checksum.len() != CHECKSUM_WIDTH
+        || checksum.bytes().any(|byte| byte.is_ascii_lowercase())
+    {
+        return None;
+    }
+    let parsed = u16::from_str_radix(checksum, 16).ok()?;
+    (parsed == crc16(tag, body)).then_some(body)
+}
 #[cfg(test)]
 mod tests {
-    use super::{CHECKSUM_WIDTH, format, parse};
+    use super::{CHECKSUM_WIDTH, format, parse, parse_without_diagnostics};
     #[test]
     fn format_and_parse_roundtrip() {
         let literal = format("hash", "ABCDEF");
         let body = parse("hash", &literal).expect("parse literal");
         assert_eq!(body, "ABCDEF");
+        assert_eq!(parse_without_diagnostics("hash", &literal), Some(body));
     }
     #[test]
     fn parse_rejects_missing_tag() {
@@ -98,6 +120,7 @@ mod tests {
         literal.truncate(literal.len() - 4);
         literal.push_str("0000");
         assert!(parse("hash", &literal).is_err());
+        assert_eq!(parse_without_diagnostics("hash", &literal), None);
     }
     #[test]
     fn parse_rejects_lowercase_checksum() {

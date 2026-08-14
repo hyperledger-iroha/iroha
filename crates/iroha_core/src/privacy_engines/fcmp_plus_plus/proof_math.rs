@@ -12,6 +12,8 @@ use super::{
         field25519_is_odd, field25519_is_zero, hash_bytes_to_helios, hash_bytes_to_selene,
         helioselene_is_odd, helioselene_is_zero, invert_field25519, invert_helioselene,
         monero_varint, sqrt_field25519, sqrt_helioselene,
+        with_secret_field25519_scalar_encoding_v1, with_secret_helios_point_encoding_v1,
+        with_secret_helioselene_scalar_encoding_v1, with_secret_selene_point_encoding_v1,
     },
 };
 use blake2::{Blake2b512, Digest as _};
@@ -19,10 +21,11 @@ use blake2::{Blake2b512, Digest as _};
 use iroha_zkp_halo2::generalized_bulletproof::multiexp;
 use iroha_zkp_halo2::generalized_bulletproof::{
     GeneralizedBulletproofErrorV1, ProofRandomSource, ProverTranscript as SharedProverTranscript,
-    VerifierTranscript as SharedVerifierTranscript,
+    SecretScalar, VerifierTranscript as SharedVerifierTranscript,
 };
 pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
-    ProofGeneratorView, ProofGenerators, ProofPoint, ProofScalar, ProofSuite, SecretMultiexpBuilder,
+    ProofGeneratorView, ProofGenerators, ProofPoint, ProofScalar, ProofSuite,
+    SecretMultiexpBuilder, SecretPoint,
 };
 use p256::elliptic_curve::bigint::U256;
 use p256::elliptic_curve::subtle::Choice;
@@ -332,7 +335,9 @@ impl<R: RngCore + CryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> 
             .map_err(|_| GeneralizedBulletproofErrorV1::RandomnessUnavailable)
     }
 }
-pub(super) fn random_scalar_from_fcmp_rng<F, R>(rng: &mut R) -> Result<Option<F>, FcmpNativeErrorV1>
+pub(super) fn random_scalar_from_fcmp_rng<F, R>(
+    rng: &mut R,
+) -> Result<Option<SecretScalar<F>>, FcmpNativeErrorV1>
 where
     F: ProofScalar,
     R: RngCore + CryptoRng,
@@ -352,18 +357,25 @@ impl ProverTranscript {
             proof: Vec::new(),
         }
     }
-    pub(super) fn push_scalar<F: ProofScalar>(&mut self, scalar: F) {
+    fn push_scalar_encoding(&mut self, bytes: &[u8; 32]) {
         self.digest.update([SCALAR_TAG]);
-        let bytes = scalar.encode();
         self.digest.update(bytes);
-        self.proof.extend_from_slice(&bytes);
+        self.proof.extend_from_slice(bytes);
     }
-    pub(super) fn push_point<P: ProofPoint>(&mut self, point: P) {
+    fn push_field25519_scalar(&mut self, scalar: &Field25519) {
+        with_secret_field25519_scalar_encoding_v1(scalar, |bytes| {
+            self.push_scalar_encoding(bytes);
+        });
+    }
+    fn push_helioselene_scalar(&mut self, scalar: &HelioseleneField) {
+        with_secret_helioselene_scalar_encoding_v1(scalar, |bytes| {
+            self.push_scalar_encoding(bytes);
+        });
+    }
+    fn push_point_encoding(&mut self, bytes: &[u8; 32]) {
         self.digest.update([POINT_TAG]);
-        let bytes = point.encode();
-        assert_eq!(P::POINT_BYTES, bytes.as_ref().len());
-        self.digest.update(bytes.as_ref());
-        self.proof.extend_from_slice(bytes.as_ref());
+        self.digest.update(bytes);
+        self.proof.extend_from_slice(bytes);
     }
     pub(super) fn challenge<S: ProofSuite>(&mut self) -> Result<S::Scalar, FcmpNativeErrorV1> {
         challenge::<S>(&mut self.digest)
@@ -372,14 +384,17 @@ impl ProverTranscript {
         &mut self,
         vector: Vec<S::Point>,
         scalar: Vec<S::Point>,
-    ) -> (Vec<S::Point>, Vec<S::Point>) {
+    ) -> Result<(Vec<S::Point>, Vec<S::Point>), GeneralizedBulletproofErrorV1>
+    where
+        Self: SharedProverTranscript<S>,
+    {
         self.digest.update(
             u32::try_from(vector.len())
                 .expect("bounded FCMP commitment count fits u32")
                 .to_le_bytes(),
         );
         for commitment in &vector {
-            self.push_point(*commitment);
+            <Self as SharedProverTranscript<S>>::push_point(self, commitment)?;
         }
         self.digest.update(
             u32::try_from(scalar.len())
@@ -387,9 +402,37 @@ impl ProverTranscript {
                 .to_le_bytes(),
         );
         for commitment in &scalar {
-            self.push_point(*commitment);
+            <Self as SharedProverTranscript<S>>::push_point(self, commitment)?;
         }
-        (vector, scalar)
+        Ok((vector, scalar))
+    }
+    pub(super) fn write_secret_commitments<S: ProofSuite>(
+        &mut self,
+        vector: Vec<SecretPoint<S::Point>>,
+    ) -> Result<Vec<S::Point>, GeneralizedBulletproofErrorV1>
+    where
+        Self: SharedProverTranscript<S>,
+    {
+        let mut published = Vec::new();
+        published
+            .try_reserve_exact(vector.len())
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let allocation_capacity = published.capacity();
+        if allocation_capacity < vector.len() {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
+        self.digest.update(
+            u32::try_from(vector.len())
+                .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?
+                .to_le_bytes(),
+        );
+        for commitment in vector {
+            <Self as SharedProverTranscript<S>>::push_point(self, commitment.expose_ref())?;
+            published.push(*commitment.expose_ref());
+            debug_assert_eq!(published.capacity(), allocation_capacity);
+        }
+        self.digest.update(0_u32.to_le_bytes());
+        Ok(published)
     }
     pub(super) fn challenge_bytes(&mut self) -> [u8; 64] {
         self.digest.update([CHALLENGE_TAG]);
@@ -480,23 +523,26 @@ impl<'a> VerifierTranscript<'a> {
     }
 }
 macro_rules! impl_shared_transcript {
-    ($suite:ty) => {
+    ($suite:ty, $push_scalar:ident, $with_point_encoding:ident) => {
         impl SharedProverTranscript<$suite> for ProverTranscript {
             fn push_scalar(
                 &mut self,
-                scalar: <$suite as ProofSuite>::Scalar,
+                scalar: &<$suite as ProofSuite>::Scalar,
             ) -> Result<(), GeneralizedBulletproofErrorV1> {
-                ProverTranscript::push_scalar(self, scalar);
+                ProverTranscript::$push_scalar(self, scalar);
                 Ok(())
             }
             fn push_point(
                 &mut self,
-                point: <$suite as ProofSuite>::Point,
+                point: &<$suite as ProofSuite>::Point,
             ) -> Result<(), GeneralizedBulletproofErrorV1> {
                 if <<$suite as ProofSuite>::Point as ProofPoint>::POINT_BYTES != 32 {
                     return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
                 }
-                ProverTranscript::push_point(self, point);
+                $with_point_encoding(point, |bytes| {
+                    ProverTranscript::push_point_encoding(self, bytes);
+                })
+                .map_err(shared_error)?;
                 Ok(())
             }
             fn challenge(
@@ -524,8 +570,16 @@ macro_rules! impl_shared_transcript {
         }
     };
 }
-impl_shared_transcript!(SeleneSuite);
-impl_shared_transcript!(HeliosSuite);
+impl_shared_transcript!(
+    SeleneSuite,
+    push_field25519_scalar,
+    with_secret_selene_point_encoding_v1
+);
+impl_shared_transcript!(
+    HeliosSuite,
+    push_helioselene_scalar,
+    with_secret_helios_point_encoding_v1
+);
 fn nonzero_challenge_from_scalar_stream<F: ProofScalar>(
     mut scalar_for_attempt: impl FnMut(usize) -> F,
 ) -> Result<F, FcmpNativeErrorV1> {
@@ -564,6 +618,59 @@ fn challenge<S: ProofSuite>(digest: &mut Blake2b512) -> Result<S::Scalar, FcmpNa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Default)]
+    struct ZeroRandomV1 {
+        calls: usize,
+    }
+    impl RngCore for ZeroRandomV1 {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(0);
+        }
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            self.calls += 1;
+            destination.fill(0);
+            Ok(())
+        }
+    }
+    impl CryptoRng for ZeroRandomV1 {}
+    #[test]
+    fn fcmp_random_adapter_forwards_the_one_attempt_owner() {
+        fn require_owner_result<F: ProofScalar>(
+            _: &Result<Option<SecretScalar<F>>, FcmpNativeErrorV1>,
+        ) {
+        }
+
+        let mut rng = ZeroRandomV1::default();
+        let sampled = random_scalar_from_fcmp_rng::<Field25519, _>(&mut rng);
+        require_owner_result(&sampled);
+        let sampled = sampled
+            .expect("fixed entropy succeeds")
+            .expect("zero is canonical");
+        assert_eq!(rng.calls, 1);
+        assert_eq!(sampled.expose_ref(), &Field25519::ZERO);
+        drop(sampled);
+
+        let production = include_str!("proof_math.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production source boundary")
+            .0;
+        let adapter = production
+            .split_once("pub(super) fn random_scalar_from_fcmp_rng<F, R>(")
+            .expect("FCMP random adapter")
+            .1
+            .split_once("pub(super) struct ProverTranscript")
+            .expect("FCMP random adapter boundary")
+            .0;
+        assert!(adapter.contains("Result<Option<SecretScalar<F>>, FcmpNativeErrorV1>"));
+        assert!(adapter.contains("F::random(&mut FcmpProofRandomSource::new(rng))"));
+        assert!(!adapter.contains("Result<Option<F>"));
+    }
     #[test]
     fn full_bulletproof_generator_domains_extend_tree_generators() {
         let selene = selene_bp_generators();
@@ -605,8 +712,13 @@ mod tests {
         let scalar = Field25519::from_u64(9);
         let point = selene_bp_generators().g;
         let mut prover = ProverTranscript::new(context);
-        prover.push_scalar(scalar);
-        prover.push_point(point);
+        <ProverTranscript as SharedProverTranscript<SeleneSuite>>::push_scalar(
+            &mut prover,
+            &scalar,
+        )
+        .expect("borrowed scalar publication");
+        <ProverTranscript as SharedProverTranscript<SeleneSuite>>::push_point(&mut prover, &point)
+            .expect("borrowed point publication");
         let challenge_p = prover.challenge::<SeleneSuite>();
         let bytes = prover.complete();
         let mut verifier = VerifierTranscript::new(context, &bytes);
@@ -617,6 +729,49 @@ mod tests {
         assert_eq!(verifier.read_point::<SelenePoint>().expect("point"), point);
         assert_eq!(verifier.challenge::<SeleneSuite>(), challenge_p);
         assert_eq!(verifier.consumed(), bytes.len());
+    }
+    #[test]
+    fn fcmp_prover_transcript_publishes_only_borrowed_owned_encodings() {
+        let source = include_str!("proof_math.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production source boundary")
+            .0;
+        let prover = production
+            .split_once("impl ProverTranscript {")
+            .expect("prover transcript")
+            .1
+            .split_once("pub(super) struct VerifierTranscript")
+            .expect("prover transcript boundary")
+            .0;
+        assert!(prover.contains("fn push_scalar_encoding(&mut self, bytes: &[u8; 32])"));
+        assert!(prover.contains("fn push_field25519_scalar(&mut self, scalar: &Field25519)"));
+        assert!(prover.contains("with_secret_field25519_scalar_encoding_v1(scalar"));
+        assert!(
+            prover.contains("fn push_helioselene_scalar(&mut self, scalar: &HelioseleneField)")
+        );
+        assert!(prover.contains("with_secret_helioselene_scalar_encoding_v1(scalar"));
+        assert!(!prover.contains("scalar.encode()"));
+        assert!(prover.contains("fn push_point_encoding(&mut self, bytes: &[u8; 32])"));
+        assert!(!prover.contains("point.encode()"));
+        let adapters = production
+            .split_once("macro_rules! impl_shared_transcript")
+            .expect("shared transcript adapters")
+            .1
+            .split_once("fn nonzero_challenge_from_scalar_stream")
+            .expect("shared transcript adapter boundary")
+            .0;
+        assert!(adapters.contains("scalar: &<$suite as ProofSuite>::Scalar"));
+        assert!(adapters.contains("ProverTranscript::$push_scalar(self, scalar)"));
+        assert!(!adapters.contains("scalar: <$suite as ProofSuite>::Scalar"));
+        assert!(adapters.contains("point: &<$suite as ProofSuite>::Point"));
+        assert!(adapters.contains("$with_point_encoding(point, |bytes|"));
+        assert!(adapters.contains("ProverTranscript::push_point_encoding(self, bytes)"));
+        assert!(!adapters.contains("point: <$suite as ProofSuite>::Point"));
+        assert!(!adapters.contains("point.encode()"));
+        let field = include_str!("field.rs");
+        assert!(field.contains("pub(super) fn secret_encode_ref_v1(&self)"));
+        assert!(!field.contains("let encoded = (*point)\n        .secret_encode_v1()"));
     }
     #[test]
     fn transcript_challenge_retries_zero_and_exhausts_at_a_fixed_bound() {

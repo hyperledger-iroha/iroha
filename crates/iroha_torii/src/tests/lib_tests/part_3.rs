@@ -103,7 +103,11 @@ async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
     let mut headers = HeaderMap::new();
     headers.insert(
         HEADER_ACCOUNT,
-        authority.to_string().parse().expect("account header"),
+        authority
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     let error = handler_alias_lookup_by_account(
         State(app),

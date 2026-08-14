@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytest
-from client_test_support import CANONICAL_OWNER, app_api_transaction_draft, canonical_hash
+from client_test_support import (
+    CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
+    app_api_transaction_draft,
+    canonical_hash,
+)
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +77,7 @@ def test_publish_space_directory_manifest_posts_payload() -> None:
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/space-directory/manifests")
     assert session.calls[0]["headers"]["Content-Type"] == "application/json"
-    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
     assert session.calls[0]["allow_redirects"] is False
     assert len(signed_messages) == 1
     body = json.loads(session.calls[0]["data"])

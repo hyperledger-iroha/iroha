@@ -1,6 +1,5 @@
+use crate::error::NoSuchAlgorithm;
 use core::{fmt, str::FromStr};
-#[cfg(not(feature = "ffi_import"))]
-use std::string::String;
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(not(feature = "ffi_import"))]
 use norito::json::{
@@ -8,7 +7,8 @@ use norito::json::{
 };
 #[cfg(not(feature = "ffi_import"))]
 use norito::{Decode, Encode, core as norito_core};
-use crate::error::NoSuchAlgorithm;
+#[cfg(not(feature = "ffi_import"))]
+use std::string::String;
 /// String algorithm representation
 pub const ED_25519: &str = "ed25519";
 /// String algorithm representation

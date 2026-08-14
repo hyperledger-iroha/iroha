@@ -1,12 +1,12 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #[allow(unused_imports)]
 use core::ffi::{c_char, c_int, c_void};
+use crc64fast::Digest;
 #[allow(unused_imports)]
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use crc64fast::Digest;
 /// CRC64-XZ polynomial (ECMA-182, normal form).
 const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
 /// Portable CRC64-XZ implementation using the `crc64fast` crate.
@@ -659,14 +659,14 @@ const MU: u64 = 0x9c3e_466c_1729_63d5;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod simd {
+    use super::{
+        K_127, K_191, K_255, K_319, K_383, K_447, K_511, K_575, K_639, K_703, K_767, K_831, K_895,
+        K_959, K_1023, K_1087, MU, POLY, crc64_slicing_by_8,
+    };
     use core::{
         fmt::Debug,
         mem,
         ops::{BitXor, BitXorAssign},
-    };
-    use super::{
-        K_127, K_191, K_255, K_319, K_383, K_447, K_511, K_575, K_639, K_703, K_767, K_831, K_895,
-        K_959, K_1023, K_1087, MU, POLY, crc64_slicing_by_8,
     };
     pub(super) trait SimdOps: Copy + Debug + BitXor<Output = Self> + BitXorAssign {
         unsafe fn new(high: u64, low: u64) -> Self;
@@ -676,8 +676,8 @@ mod simd {
     }
     #[cfg(target_arch = "x86_64")]
     mod arch {
-        use core::arch::x86_64::*;
         use super::*;
+        use core::arch::x86_64::*;
         #[repr(transparent)]
         #[derive(Copy, Clone, Debug)]
         pub struct Simd(__m128i);
@@ -740,8 +740,8 @@ mod simd {
     }
     #[cfg(target_arch = "aarch64")]
     mod arch {
-        use core::arch::aarch64::*;
         use super::*;
+        use core::arch::aarch64::*;
         #[repr(transparent)]
         #[derive(Copy, Clone, Debug)]
         pub struct Simd(uint8x16_t);
@@ -1006,11 +1006,11 @@ pub unsafe fn crc64_pmull(data: &[u8]) -> u64 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::sync::atomic::Ordering;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::{fs, path::PathBuf, process::Command, sync::Mutex};
-    use super::*;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     #[cfg(feature = "simd-accel")]

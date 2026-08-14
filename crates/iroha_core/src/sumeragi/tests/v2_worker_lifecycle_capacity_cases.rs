@@ -14,6 +14,152 @@ fn settled_recovered_decision_apply_completion_disarms_drop_guard() {
     drop(guard);
     assert!(!output_guard.restart_required());
 }
+
+#[test]
+fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
+    let (mut service, keys) = fixture();
+    let context = service.context.clone();
+    let output_guard = Arc::clone(&service.output_guard);
+    let body_root = TempDir::new().expect("mixed Completion body root");
+    let body_store =
+        V2BodyStore::open(body_root.path(), context.clone()).expect("open mixed body store");
+    let identity = body_store.instance_identity();
+    let planner = install_lifecycle_planner_io_for_test(
+        &mut service,
+        context.clone(),
+        Arc::clone(&output_guard),
+        body_store,
+        identity,
+        2,
+    );
+    let apply = RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(&context, 10, 0x41);
+    let sign = RecoveredLifecycleSignDispatchKeyV1::for_height_context_test(
+        &context,
+        11,
+        0x42,
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::PhaseVote,
+    );
+    let census = service
+        .capture_recovered_completion_capacity_census(vec![
+            RecoveredCompletionCapacityProbeV1::Apply {
+                ordinal: 10,
+                key: apply,
+            },
+            RecoveredCompletionCapacityProbeV1::Sign {
+                ordinal: 11,
+                key: sign,
+            },
+        ])
+        .expect("freeze one mixed worker/output census");
+    assert_eq!(census.capacity_for_test(10), Some((true, 0)));
+    assert_eq!(census.capacity_for_test(11), Some((true, 0)));
+    let reservation = match census.select_sign(11) {
+        Ok(reservation) => reservation,
+        Err(_) => panic!("the frozen Sign row must transfer its exact reservation"),
+    };
+    reservation.cancel_uncommitted();
+    assert!(!output_guard.restart_required());
+    assert!(planner.command_rx.queue.lock().commands.is_empty());
+
+    let fetch_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let fetch_subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"mixed Completion Fetch block")),
+        payload_hash: Hash::new(b"mixed Completion Fetch payload"),
+    };
+    let (authenticated, _) = production_authenticated_serve_request(
+        &context,
+        &keys,
+        &keys[0],
+        fetch_round,
+        fetch_subject,
+        wire::GlobalPhase::Prepare,
+        &[0, 1, 2, 3],
+    );
+    let fetch_key =
+        RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&context, 13, 0x44);
+    let fetch_owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+        fetch_key,
+        service.active_tag,
+        context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        authenticated,
+    );
+    let fetch_census = service
+        .capture_recovered_completion_capacity_census(vec![
+            RecoveredCompletionCapacityProbeV1::Fetch {
+                ordinal: 13,
+                owner: fetch_owner,
+                executor_available: true,
+            },
+        ])
+        .expect("freeze one exact recovered Fetch capacity owner");
+    assert_eq!(fetch_census.capacity_for_test(13), Some((true, 0)));
+    let (returned_owner, output) = match fetch_census.select_fetch(13) {
+        Ok(selected) => selected,
+        Err(_) => panic!("the exact Fetch row must transfer request and output ownership"),
+    };
+    assert_eq!(returned_owner.dispatch_key(), fetch_key);
+    output.abort_before_claim();
+    assert!(!output_guard.restart_required());
+
+    planner.saturate_consensus_prefix(&service);
+    let saturated = service
+        .capture_recovered_completion_capacity_census(vec![
+            RecoveredCompletionCapacityProbeV1::Apply {
+                ordinal: 10,
+                key: apply,
+            },
+            RecoveredCompletionCapacityProbeV1::Sign {
+                ordinal: 11,
+                key: sign,
+            },
+        ])
+        .expect("a saturated cut remains an authenticated census");
+    assert_eq!(saturated.capacity_for_test(10), Some((false, 4)));
+    assert_eq!(saturated.capacity_for_test(11), Some((false, 4)));
+    saturated.complete_without_selection();
+    assert!(!output_guard.restart_required());
+    planner.detach(&mut service);
+
+    let (mut dropped_service, _keys) = fixture();
+    let dropped_context = dropped_service.context.clone();
+    let dropped_guard = Arc::clone(&dropped_service.output_guard);
+    let dropped_root = TempDir::new().expect("dropped mixed Completion body root");
+    let dropped_store = V2BodyStore::open(dropped_root.path(), dropped_context.clone())
+        .expect("open dropped mixed body store");
+    let dropped_identity = dropped_store.instance_identity();
+    let dropped_planner = install_lifecycle_planner_io_for_test(
+        &mut dropped_service,
+        dropped_context.clone(),
+        Arc::clone(&dropped_guard),
+        dropped_store,
+        dropped_identity,
+        1,
+    );
+    let dropped_key =
+        RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(&dropped_context, 12, 0x43);
+    drop(
+        dropped_service
+            .capture_recovered_completion_capacity_census(vec![
+                RecoveredCompletionCapacityProbeV1::Apply {
+                    ordinal: 12,
+                    key: dropped_key,
+                },
+            ])
+            .expect("arm one census before abandoning it"),
+    );
+    assert!(dropped_guard.restart_required());
+    dropped_planner.detach(&mut dropped_service);
+}
+
 #[test]
 fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
     let apply_source = include_str!("../v2_apply.rs");
@@ -451,6 +597,19 @@ impl LifecyclePlannerIoFixture {
             self.command_rx.try_recv(),
             Ok(V2IoCommand::Shutdown)
         ));
+    }
+    /// Release every synthetic control predecessor queued by saturation.
+    pub(in crate::sumeragi) fn release_all_predecessors(&self) {
+        loop {
+            match self.command_rx.try_recv() {
+                Ok(V2IoCommand::Shutdown) => {}
+                Err(mpsc::TryRecvError::Empty) => break,
+                Ok(_) => panic!("unexpected non-control saturated predecessor"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("saturated predecessor queue disconnected")
+                }
+            }
+        }
     }
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(

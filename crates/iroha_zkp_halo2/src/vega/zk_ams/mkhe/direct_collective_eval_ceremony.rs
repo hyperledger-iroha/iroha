@@ -47,7 +47,7 @@ const DIRECT_TARGET_A_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collectiv
 const DIRECT_FINAL_A_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-rkg-final-a";
 const DIRECT_INITIAL_ROUND_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-initial-round";
-const DIRECT_POLYNOMIAL_STREAM_DOMAIN_V1: &[u8] =
+pub(super) const DIRECT_POLYNOMIAL_STREAM_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-polynomial-stream";
 const DIRECT_CONTRIBUTION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-contribution";
 const DIRECT_RELATION_STATEMENT_DOMAIN_V1: &[u8] =

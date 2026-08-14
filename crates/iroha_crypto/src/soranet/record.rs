@@ -3,14 +3,14 @@
 //! QUIC protects the transport with TLS, while this layer extends the hybrid
 //! `SoraNet` handshake's confidentiality and integrity guarantees to application
 //! data.  Every QUIC stream and wire direction receives an independent key.
-use std::fmt;
+use crate::SessionKey;
 use aead::{AeadInOut, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
 use sha2::Sha256;
+use std::fmt;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-use crate::SessionKey;
 mod io;
 #[doc(hidden)]
 pub use zeroize::Zeroize as __RecordZeroize;

@@ -25003,7 +25003,7 @@ function buildSorafsReputationRequestAuth(
       account.value,
       `${context}.headers.X-Iroha-Account`,
     );
-    setHeader(headers, "X-Iroha-Account", canonicalAccount);
+    setHeader(headers, "X-Iroha-Account", canonicalAccount.includes("@") ? canonicalAccount : AccountAddress.parseEncoded(canonicalAccount).address.canonicalHex());
   }
   return { headers, canonicalAuth: null };
 }

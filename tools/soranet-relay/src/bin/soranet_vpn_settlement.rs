@@ -1,13 +1,8 @@
 //! Operator helper for SoraNet VPN settlement artifacts.
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, ValueEnum};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::NetworkId;
+use iroha_data_model::{NetworkId, account::AccountAddress};
 use iroha_primitives::numeric::Quantity;
 use norito::{
     DecodeLimits,
@@ -17,6 +12,11 @@ use norito::{
 use sha2::{Digest as _, Sha256};
 use soranet_relay::{
     config::read_bounded_direct_regular_file, runtime::VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 const HEADER_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_SIGNATURE: &str = "X-Iroha-Signature";
@@ -61,7 +61,9 @@ struct Cli {
     /// Path to a relay-spooled VPN settlement artifact JSON file.
     #[arg(long)]
     artifact: PathBuf,
-    /// Operator account id to place in X-Iroha-Account.
+    /// Exact canonical I105 operator account or printable ASCII alias.
+    ///
+    /// I105 is emitted in X-Iroha-Account as lowercase canonical address hex.
     #[arg(long)]
     account_id: String,
     /// Exact genesis-derived network identity used by Torii request authentication.
@@ -241,6 +243,23 @@ fn canonical_network_request_signature_message(
     message.extend_from_slice(nonce.as_bytes());
     message
 }
+/// Render an exact account input into the strict ASCII auth-header form.
+fn canonical_account_header_value(account_id: &str) -> Result<String, Box<dyn Error>> {
+    if account_id.is_empty() || account_id.trim() != account_id {
+        return Err("account id must be exact and non-empty".into());
+    }
+    match AccountAddress::parse_encoded(account_id, None) {
+        Ok(address) => address
+            .canonical_hex()
+            .map_err(|err| format!("failed to encode canonical account header: {err}").into()),
+        Err(_) if account_id.bytes().all(|byte| byte.is_ascii_graphic()) => {
+            Ok(account_id.to_owned())
+        }
+        Err(_) => Err(
+            "account id must be a canonical I105 account or printable ASCII account alias".into(),
+        ),
+    }
+}
 fn sign_artifact(
     artifact: &VpnSettlementSpoolRecord,
     account_id: &str,
@@ -252,6 +271,7 @@ fn sign_artifact(
     nonce: &str,
 ) -> Result<SignedSettlementRequest, Box<dyn Error>> {
     let body = request_body(artifact)?;
+    let account_header = canonical_account_header_value(account_id)?;
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
         .map_err(|err| format!("failed to derive settlement signing key: {err}"))?;
     let message = canonical_network_request_signature_message(
@@ -278,7 +298,7 @@ fn sign_artifact(
             },
             SignedHeader {
                 name: HEADER_ACCOUNT.to_owned(),
-                value: account_id.trim().to_owned(),
+                value: account_header,
             },
             SignedHeader {
                 name: HEADER_SIGNATURE.to_owned(),
@@ -317,10 +337,10 @@ fn shell_quote(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use tempfile::tempdir;
-    use super::*;
     fn test_network_id(marker: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([marker; Hash::LENGTH]),
@@ -344,12 +364,13 @@ mod tests {
     }
     #[test]
     fn signs_spooled_artifact_with_verifiable_canonical_message() {
+        const ACCOUNT_I105: &str = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
         let record = sample_record();
         let seed = [0x66; 32];
         let network_id = test_network_id(0x61);
         let signed = sign_artifact(
             &record,
-            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            ACCOUNT_I105,
             &network_id,
             &seed,
             DEFAULT_PATH,
@@ -365,6 +386,17 @@ mod tests {
             Some("http://127.0.0.1:8080/v1/vpn/receipts")
         );
         assert!(signed.body.contains("relay_receipt_hex"));
+        let account_header = signed
+            .headers
+            .iter()
+            .find(|header| header.name == HEADER_ACCOUNT)
+            .expect("account header");
+        let expected_account_header = AccountAddress::parse_encoded(ACCOUNT_I105, None)
+            .expect("canonical I105 account")
+            .canonical_hex()
+            .expect("canonical account hex");
+        assert_eq!(account_header.value, expected_account_header);
+        assert!(account_header.value.is_ascii());
         let signature_b64 = signed
             .headers
             .iter()
@@ -422,6 +454,19 @@ mod tests {
         assert!(curl.contains("X-Iroha-Account: operator"));
         assert!(curl.contains("X-Iroha-Nonce: nonce-2"));
         assert!(curl.contains("relay_receipt_hex"));
+    }
+    #[test]
+    fn account_header_rejects_inexact_or_non_ascii_aliases() {
+        for invalid in [
+            " operator",
+            "operator ",
+            "operator alias",
+            "operator\n",
+            "账户",
+        ] {
+            canonical_account_header_value(invalid)
+                .expect_err("only exact printable ASCII aliases are supported");
+        }
     }
     #[test]
     fn normalize_path_rejects_query_strings() {

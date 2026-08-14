@@ -651,7 +651,7 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         );
     }
     let owner_conversion = registry
-        .split_once("impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry>")
+        .split_once("impl ProductionOpenedRecoveredWalSignLifecycleCut<'_>")
         .expect("locate store-authenticated owner conversion")
         .1
         .split_once("#[cfg(test)]\nimpl OpenedRecoveredWalSignLifecycleCut")

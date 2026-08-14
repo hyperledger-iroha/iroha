@@ -371,11 +371,18 @@ def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) 
     headers[name] = value
 
 
-def _reject_default_onboarding_header(headers: Mapping[str, Any], context: str) -> None:
-    if any(str(name).lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() for name in headers):
+def _reject_reserved_default_headers(headers: Mapping[str, Any], context: str) -> None:
+    normalized = {str(name).lower() for name in headers}
+    if ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() in normalized:
         raise ValueError(
             f"{context} must not contain {ACCOUNT_ONBOARDING_TOKEN_HEADER}; "
             "pass onboarding_token explicitly to onboard_account"
+        )
+    reserved_auth = "x-iroha-account x-iroha-signature x-iroha-timestamp-ms x-iroha-nonce x-iroha-witness"
+    if any(f" {name} " in f" {reserved_auth} " for name in normalized):
+        raise ValueError(
+            f"{context} must not contain canonical authentication headers; "
+            "configure canonical_request_auth instead"
         )
 
 
@@ -2483,7 +2490,6 @@ def _normalize_sorafs_reputation_canonical_auth(
         raise TypeError(f"{context}.signer must be callable")
     return canonical_auth
 
-
 def _normalize_sorafs_reputation_witness_header(value: Any, context: str) -> str:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise ValueError(f"{context} must be exact canonical standard base64")
@@ -2548,20 +2554,20 @@ def _sorafs_reputation_request_auth(
     )
     account = entries.get("x-iroha-account")
     if account is not None:
-        account_id = _require_exact_non_empty_string(
-            account[1],
-            f"{context}.headers.X-Iroha-Account",
-        )
+        account_context = f"{context}.headers.X-Iroha-Account"
+        account_id = _require_exact_non_empty_string(account[1], account_context)
         canonical_account = _normalize_canonical_account_id(
-            account_id,
-            f"{context}.headers.X-Iroha-Account",
-            expected_discriminant=expected_discriminant,
+            account_id, account_context, expected_discriminant=expected_discriminant,
         )
         if canonical_account != account_id:
             raise ValueError(f"{context}.headers.X-Iroha-Account must be exact and canonical")
-        _set_exact_header(headers, "X-Iroha-Account", canonical_account)
+        account_header = canonical_account
+        if "@" not in canonical_account:
+            account_header = AccountAddress.parse_encoded(
+                canonical_account, expected_discriminant=expected_discriminant
+            ).canonical_hex()
+        _set_exact_header(headers, "X-Iroha-Account", account_header)
     return _validated_sorafs_reputation_header_strings(headers, context), None
-
 
 def _validated_sorafs_reputation_header_strings(
     headers: Mapping[str, Any],
@@ -2573,7 +2579,6 @@ def _validated_sorafs_reputation_header_strings(
             raise TypeError(f"{context}.headers.{name} must be a string")
         final_headers[name] = value
     return final_headers
-
 
 def _sorafs_reputation_headers(
     *,
@@ -12580,7 +12585,6 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     websocket = None
 
-
 class TransactionStatusError(RuntimeError):
     """Raised when a transaction reaches a terminal failure status."""
 
@@ -12602,7 +12606,6 @@ class DataModelMismatchError(RuntimeError):
         )
         self.expected = expected
         self.actual = actual
-
 
 _ToriiClientStreamingQueryMixin = create_torii_client_streaming_query_mixin(
     require_crypto=_require_crypto,
@@ -12635,7 +12638,6 @@ _ToriiClientRuntimeAuthMixin = create_torii_client_runtime_auth_mixin(
     runtime_metrics_type=RuntimeMetrics,
     runtime_abi_active_type=RuntimeAbiActive,
 )
-
 
 class ToriiClient(
     _ToriiClientSpaceDirectoryMixin,
@@ -12713,7 +12715,7 @@ class ToriiClient(
         }
         self._default_headers: Dict[str, str] = {"Accept": "application/json"}
         if default_headers:
-            _reject_default_onboarding_header(default_headers, "default_headers")
+            _reject_reserved_default_headers(default_headers, "default_headers")
             self._default_headers.update(default_headers)
         self._auth_token: Optional[str] = None
         self._api_token: Optional[str] = None
@@ -13525,7 +13527,7 @@ class ToriiClient(
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
-        _reject_default_onboarding_header(headers, "headers")
+        _reject_reserved_default_headers(headers, "headers")
         self._default_headers.update(headers)
 
     def request_json(
@@ -21680,8 +21682,6 @@ class ToriiClient(
             query_name=query_name,
         )
         return TriggerListPage.from_payload(payload)
-
-
 
 def create_torii_client(
     base_url: str,

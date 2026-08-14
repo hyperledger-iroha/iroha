@@ -1191,7 +1191,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs),
@@ -1277,7 +1277,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
             XCTAssertEqual(self.bodyJSON(from: request)["schema_version"] as? Int, 1)
@@ -1352,7 +1352,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/aliases/lease/renew/plan")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             XCTAssertEqual(self.bodyJSON(from: request)["schema_version"] as? Int, 1)
             let response = HTTPURLResponse(
@@ -2087,7 +2087,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
             let payload = self.bodyJSON(from: request)
@@ -2160,7 +2160,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["output_hex"] as? String, "c0ffee")
@@ -2250,7 +2250,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
-                self.authority
+                try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")

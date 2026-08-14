@@ -4,24 +4,24 @@
 //! in `nexus.md` and `nexus_transition_notes`. The default catalog remains a
 //! single primary lane for compatibility, while deployments may add lane and
 //! dataspace entries for independent routing, storage, and consensus policy.
+use crate::{
+    da::commitment::DaProofScheme,
+    id::IdBox,
+    parameter::{CustomParameter, CustomParameterId},
+};
+use derive_more::Display;
+use iroha_crypto::Hash;
+#[cfg(feature = "json")]
+use iroha_primitives::json::Json;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::NonZeroU32,
     str::FromStr,
 };
-use derive_more::Display;
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use thiserror::Error;
-use crate::{
-    da::commitment::DaProofScheme,
-    id::IdBox,
-    parameter::{CustomParameter, CustomParameterId},
-};
-#[cfg(feature = "json")]
-use iroha_primitives::json::Json;
 mod axt;
 mod compliance;
 mod endorsement;
@@ -388,10 +388,12 @@ impl LaneLifecycleParameterV1 {
     ffi_type(unsafe {robust})
 )]
 pub struct LaneId(u32);
-/// Identifier for a storage shard serving one or more lanes.
+
+/// Identifier for a storage shard within a data space.
 ///
-/// Shards map to physical DA/Kura partitions; today they track lane bindings
-/// one-to-one but remain distinct to allow future resharding.
+/// Shards map to DA/Kura partitions; today they track lane bindings one-to-one
+/// but remain distinct to allow future resharding. A shard is not a separate
+/// validator/server boundary; that identity belongs to [`DataSpaceId`].
 #[derive(
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
@@ -557,7 +559,7 @@ impl norito::json::JsonDeserialize for ShardId {
         Ok(Self(value))
     }
 }
-/// Identifier for a data space.
+/// Identifier for a physical execution, storage, and validator boundary.
 #[derive(
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
@@ -631,7 +633,7 @@ pub const AUTOSCALE_META_COMMITTEE: &str = "autoscale.committee_v1";
 pub struct LaneConfig {
     /// Lane identifier.
     pub id: LaneId,
-    /// Dataspace the lane belongs to.
+    /// Physical dataspace this logical lane belongs to.
     pub dataspace_id: DataSpaceId,
     /// Human-friendly alias.
     pub alias: String,
@@ -1600,7 +1602,7 @@ pub enum LaneCatalogError {
         lane_count: u32,
     },
 }
-/// Metadata describing a configured data space.
+/// Metadata describing a configured physical data space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataSpaceMetadata {
     /// Identifier assigned to the data space.
@@ -1609,7 +1611,7 @@ pub struct DataSpaceMetadata {
     pub alias: String,
     /// Optional description for dashboards and docs.
     pub description: Option<String>,
-    /// Fault tolerance value (f) used to size lane-local consensus and relay committees (3f + 1).
+    /// Fault tolerance value (f) used to size data-space consensus and relay committees (3f + 1).
     pub fault_tolerance: u32,
 }
 impl Default for DataSpaceMetadata {
@@ -1722,9 +1724,9 @@ impl norito::json::JsonDeserialize for DataSpaceId {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-    use norito::codec::{DecodeAll, Encode};
     use super::*;
+    use norito::codec::{DecodeAll, Encode};
+    use std::num::NonZeroU32;
     fn incarnation_map(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
         catalog
             .lanes()

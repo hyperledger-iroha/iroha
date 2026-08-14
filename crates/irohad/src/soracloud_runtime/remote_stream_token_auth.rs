@@ -226,7 +226,8 @@ mod tests {
         )))
         .expect("operator Ed25519 signature");
         let canonical =
-            iroha_torii::canonical_request_message(&iroha_torii::Method::POST, uri, body);
+            iroha_torii::canonical_request_message(&iroha_torii::Method::POST, uri, body)
+                .expect("canonical remote-stream fixture is within V1 limits");
         let mut message = Vec::new();
         message.extend_from_slice(DOMAIN);
         message.extend_from_slice(network_id.as_bytes());

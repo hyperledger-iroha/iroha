@@ -5,12 +5,45 @@ mod fast_iter_decode;
 mod ordinary_iterable;
 mod ordinary_memory;
 mod singular_memory;
-pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
+use crate::{
+    prelude::ValidSingularQuery,
+    query::{
+        cursor::ErasedQueryIterator,
+        store::{
+            DeferredQueryContinuation, LiveQueryStoreHandle, PagedQueryContinuation,
+            PreparedPagedQueryStart, PreparedQueryStart,
+        },
+    },
+    smartcontracts::ValidQuery,
+    smartcontracts::isi::tx::{
+        TransactionHistoryAnchor, TransactionHistoryCursor, visit_committed_transactions,
+    },
+    state::{State, StateReadOnly, WorldReadOnly},
+};
 pub use canonical_topk::{
     CANONICAL_QUERY_OUTPUT_CONTAINER_OVERHEAD_BYTES, CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES,
     CANONICAL_QUERY_RETAINED_ITEM_OVERHEAD_BYTES, CanonicalQueryOutputAccumulator,
     CanonicalQueryOutputLimits, canonical_query_candidate_allocation_bytes,
 };
+use eyre::Result;
+use fast_iter_decode::{FastIterComponentDecoder, decode_iter_query_payload_exact};
+use iroha_config::parameters::{
+    actual::{Pipeline as PipelineActual, Torii as ToriiActual},
+    defaults::pipeline as pipeline_defaults,
+};
+use iroha_data_model::{
+    escrow::AssetEscrowRecord,
+    prelude::*,
+    query::{
+        CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
+        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
+        dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
+        error::QueryExecutionFail as Error,
+        parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
+    },
+};
+use norito::core::{Header, NoritoSerialize};
+pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
 pub use ordinary_memory::{
     ORDINARY_ABI_VERSION_SOURCE_BYTES, ORDINARY_NAME_ID_SOURCE_BYTES,
     ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES, ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES,
@@ -35,39 +68,6 @@ use std::{
     num::NonZeroU64,
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
-};
-use eyre::Result;
-use iroha_config::parameters::{
-    actual::{Pipeline as PipelineActual, Torii as ToriiActual},
-    defaults::pipeline as pipeline_defaults,
-};
-use iroha_data_model::{
-    escrow::AssetEscrowRecord,
-    prelude::*,
-    query::{
-        CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
-        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-        dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
-        error::QueryExecutionFail as Error,
-        parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
-    },
-};
-use norito::core::{Header, NoritoSerialize};
-use fast_iter_decode::{FastIterComponentDecoder, decode_iter_query_payload_exact};
-use crate::{
-    prelude::ValidSingularQuery,
-    query::{
-        cursor::ErasedQueryIterator,
-        store::{
-            DeferredQueryContinuation, LiveQueryStoreHandle, PagedQueryContinuation,
-            PreparedPagedQueryStart, PreparedQueryStart,
-        },
-    },
-    smartcontracts::ValidQuery,
-    smartcontracts::isi::tx::{
-        TransactionHistoryAnchor, TransactionHistoryCursor, visit_committed_transactions,
-    },
-    state::{State, StateReadOnly, WorldReadOnly},
 };
 /// Return the legacy boxed iterable carrier when one is present.
 ///
@@ -1117,7 +1117,7 @@ fn execute_iterable_source<T, Q>(
     limits: QueryLimits,
     mode: ordinary_memory::OrdinaryCursorMode,
     state: &impl StateReadOnly,
-) -> Result<impl Iterator<Item = T>, Error>
+) -> Result<(impl Iterator<Item = T>, QueryExecutionStats), Error>
 where
     T: NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de> + Send + Sync + 'static,
     Q: ValidQuery<Item = T> + 'static,
@@ -2895,6 +2895,29 @@ where
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
+    apply_query_postprocessing_ephemeral_with_budget_from_stats(
+        iter,
+        selector,
+        params,
+        limits,
+        budget,
+        QueryExecutionStats::default(),
+    )
+}
+fn apply_query_postprocessing_ephemeral_with_budget_from_stats<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    budget: Option<QueryExecutionBudget>,
+    mut stats: QueryExecutionStats,
+) -> Result<(QueryOutput, QueryExecutionStats), Error>
+where
+    I: Iterator<Item: SortableQueryOutput>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
     let batch_size = params
         .fetch_size
         .fetch_size
@@ -2908,7 +2931,6 @@ where
             "canonical query execution requires pre-source admission dispatch".to_owned(),
         ));
     }
-    let mut stats = QueryExecutionStats::default();
     if limits.count_mode == QueryCountMode::Bounded && params.sorting.sort_by_metadata_key.is_none()
     {
         let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
@@ -2936,24 +2958,18 @@ where
             let mut iter = iter;
             for _ in 0..batch_len {
                 let value = iter.next().ok_or(Error::CapacityLimit)?;
-                stats.record_item(&value, budget)?;
                 values.push(value)?;
             }
             let limit_allows_more = !limit.is_some_and(|limit| limit <= batch_size.get());
             let has_more = if limit_allows_more {
-                if let Some(probe) = iter.next() {
-                    stats.record_item(&probe, budget)?;
-                    true
-                } else {
-                    false
-                }
+                iter.next().is_some()
             } else {
                 false
             };
             drop(iter);
-            let batch = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::from(
+            let batch = ordinary_iterable::exact_one_column_batch(QueryOutputBatchBox::from(
                 values.finish()?.into_vec()?,
-            ));
+            ))?;
             return Ok((QueryOutput::new_bounded(batch, has_more, None), stats));
         }
         let probe = limit.map_or_else(
@@ -3238,7 +3254,7 @@ fn validate_query_request_limits(
 }
 #[cfg(test)]
 mod fetch_size_limit_tests {
-    use std::io::Write;
+    use super::*;
     use iroha_config::parameters::{actual::Root as ConfigRoot, defaults::torii as torii_defaults};
     use iroha_data_model::{
         permission::Permission,
@@ -3250,8 +3266,8 @@ mod fetch_size_limit_tests {
     };
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
+    use std::io::Write;
     use tempfile::NamedTempFile;
-    use super::*;
     fn request_with_fetch_size(fetch_size: u64) -> QueryRequest {
         let fetch_size = std::num::NonZeroU64::new(fetch_size).expect("nonzero fetch size");
         QueryRequest::Start(QueryWithParams {
@@ -3495,18 +3511,6 @@ include!("query/valid_query_request.rs");
 #[cfg(test)]
 mod tests {
     #![allow(clippy::many_single_char_names)]
-    use core::time::Duration;
-    use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level, NetworkId,
-        isi::Log,
-        query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
-        transaction::TransactionBuilder,
-    };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
-    use mv::storage::StorageReadOnly as _;
-    use nonzero_ext::nonzero;
     use super::*;
     use crate::{
         block::*,
@@ -3517,6 +3521,18 @@ mod tests {
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
+    use core::time::Duration;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        AccountId, ChainId, DomainId, Level, NetworkId,
+        isi::Log,
+        query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
+        transaction::TransactionBuilder,
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
+    use mv::storage::StorageReadOnly as _;
+    use nonzero_ext::nonzero;
+    use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("query fixture key generation should succeed")
     }
@@ -3642,12 +3658,12 @@ mod tests {
         crate::query::store::LiveQueryStoreHandle,
         iroha_data_model::escrow::AssetEscrowRecord,
     ) {
-        use std::collections::BTreeSet;
         use iroha_data_model::{
             asset::AssetDefinitionId,
             escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
         };
         use iroha_primitives::numeric::Quantity;
+        use std::collections::BTreeSet;
         let escrow_id = EscrowId::new(Hash::new("query-dispatch-escrow"));
         let record = AssetEscrowRecord {
             id: escrow_id,
@@ -4570,15 +4586,15 @@ mod tests {
     }
     #[tokio::test]
     async fn stored_unsorted_bounded_cursor_materializes_owned_tail_without_exact_count() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4736,6 +4752,7 @@ mod tests {
         };
         assert_eq!(error, Error::GasBudgetExceeded);
     }
+
     #[tokio::test]
     async fn stored_unsorted_bounded_cursor_rejects_tail_above_hard_byte_bound() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
@@ -4767,10 +4784,6 @@ mod tests {
     }
     #[tokio::test]
     async fn stored_unsorted_bounded_replay_cursor_does_not_materialize_tail_on_start() {
-        use std::sync::{
-            Arc, Weak,
-            atomic::{AtomicUsize, Ordering},
-        };
         use iroha_data_model::{
             domain::Domain,
             query::{
@@ -4780,6 +4793,10 @@ mod tests {
             },
         };
         use nonzero_ext::nonzero;
+        use std::sync::{
+            Arc, Weak,
+            atomic::{AtomicUsize, Ordering},
+        };
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4837,10 +4854,6 @@ mod tests {
     }
     #[tokio::test]
     async fn stored_unsorted_bounded_replay_limit_boundary_does_not_probe_or_store_cursor() {
-        use std::sync::{
-            Arc, Weak,
-            atomic::{AtomicUsize, Ordering},
-        };
         use iroha_data_model::{
             domain::Domain,
             query::{
@@ -4850,6 +4863,10 @@ mod tests {
             },
         };
         use nonzero_ext::nonzero;
+        use std::sync::{
+            Arc, Weak,
+            atomic::{AtomicUsize, Ordering},
+        };
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4903,15 +4920,15 @@ mod tests {
     }
     #[tokio::test]
     async fn collect_unsorted_bounded_page_rejects_returned_offset_at_limit_without_reading() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let visited = Arc::new(AtomicUsize::new(0));
         let visited_for_iter = Arc::clone(&visited);
         let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
@@ -4943,15 +4960,15 @@ mod tests {
     }
     #[tokio::test]
     async fn collect_unsorted_bounded_page_rejects_oversized_fetch_without_reading() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let visited = Arc::new(AtomicUsize::new(0));
         let visited_for_iter = Arc::clone(&visited);
         let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
@@ -7109,7 +7126,6 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn iter_dispatch_accounts_with_asset_parity_and_continue() {
-        use std::collections::BTreeSet;
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryItemKind, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
@@ -7118,6 +7134,7 @@ mod tests {
             parameters::{FetchSize, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
+        use std::collections::BTreeSet;
         fn build_state_with_holdings() -> (
             State,
             crate::query::store::LiveQueryStoreHandle,

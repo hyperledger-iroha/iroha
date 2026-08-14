@@ -1,10 +1,10 @@
 //! Public lane staking records and reward metadata.
-use std::{collections::BTreeMap, string::String};
+use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId, peer::PeerId};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId, peer::PeerId};
+use std::{collections::BTreeMap, string::String};
 /// Snapshot of a validator registered for a public Nexus lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneValidatorRecord {
@@ -125,9 +125,9 @@ pub struct PublicLanePendingReward {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-    use super::*;
     #[derive(Encode)]
     struct ForgedPublicLaneStakeShare {
         lane_id: LaneId,

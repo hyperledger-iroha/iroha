@@ -1,3 +1,5 @@
+use super::KeyExchangeScheme;
+use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
 use hkdf::Hkdf;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
@@ -6,8 +8,6 @@ use rand_core::TryCryptoRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
-use super::KeyExchangeScheme;
-use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
 const HKDF_SALT: &[u8] = b"iroha:x25519:hkdf:v1";
 const HKDF_INFO: &[u8] = b"iroha:x25519:session-key";
 const LOW_ORDER_CHECK_PRIVATE_KEY: [u8; 32] = [1_u8; 32];
@@ -139,10 +139,10 @@ pub(super) fn is_x25519_low_order_public_key(public_key: &PublicKey) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use curve25519_dalek::constants::EIGHT_TORSION;
     #[cfg(feature = "rand")]
     use rand_core::TryRngCore;
-    use super::*;
     #[cfg(feature = "rand")]
     struct FixedTryRng {
         byte: u8,

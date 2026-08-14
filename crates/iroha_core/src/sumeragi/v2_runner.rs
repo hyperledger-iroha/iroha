@@ -4,13 +4,6 @@
 //! immutable context and safety WAL before processing network traffic, routes
 //! authenticated control and body messages, schedules bounded proposal work,
 //! and performs an explicit Kura-authorized rollover after application.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "runner ownership seams remain test-sealed until cutover"
-    )
-)]
 use super::v2_core::{
     CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,
@@ -119,6 +112,17 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+#[path = "v2_runner/ordinary_ingress_consumer.rs"]
+pub(in crate::sumeragi) mod ordinary_ingress_consumer;
+#[path = "v2_runner/preactivation_ingress.rs"]
+mod preactivation_ingress;
+use ordinary_ingress_consumer::{
+    PreparedDequeuedV2IngressV1, ProductionPreparedCertifiedServeV1,
+    ProductionPreparedOrdinaryIngressConsumptionV1, consume_prepared_dequeued_v2_ingress,
+};
+pub(in crate::sumeragi) use preactivation_ingress::ProductionLifecycleCanonicalRecoveryIngressV1;
+
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
@@ -132,6 +136,7 @@ const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
 pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
     _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
     local_signer: KeyPair,
+    block_cadence: Duration,
 }
 struct RecoveredLifecycleOwnerFactoryDependencyPermitSealV1;
 impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1 {
@@ -141,20 +146,21 @@ impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
     // TODO: Mint this private permit at the atomic runner/owner cutover which
     // moves the runner's exact Queue, archives, and EventsSender into startup.
     #[cfg_attr(not(test), allow(dead_code))]
-    fn mint_for_recovered_runner(local_signer: KeyPair) -> Self {
+    fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self {
         Self {
             _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
             local_signer,
+            block_cadence,
         }
     }
     #[cfg(test)]
     /// Mint the same sealed dependency permit for production-shaped unit tests.
-    pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self {
-        Self::mint_for_recovered_runner(local_signer)
+    pub(in crate::sumeragi) fn for_test(local_signer: KeyPair, block_cadence: Duration) -> Self {
+        Self::mint_for_recovered_runner(local_signer, block_cadence)
     }
-    /// Consume the runner seal into its factory-owned local signer.
-    pub(in crate::sumeragi) fn into_local_signer(self) -> KeyPair {
-        self.local_signer
+    /// Consume the runner seal into its authenticated factory dependencies.
+    pub(in crate::sumeragi) fn into_factory_dependencies(self) -> (KeyPair, Duration) {
+        (self.local_signer, self.block_cadence)
     }
 }
 
@@ -425,6 +431,85 @@ impl ProductionLifecycleActiveRunnerBorrowV1 {
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test() -> Self {
         Self::mint_for_recovered_runner()
+    }
+}
+
+/// Process-local borrow key for preparing a launched lifecycle before activation.
+///
+/// Only the serialized runner can mint this key. It permits bounded lane and
+/// recovery setup through the opaque launched stack while its exact ingress is
+/// still closed; it cannot activate the height or extract any owned component.
+/// The key retains the modular runner's future local-Proposal state so
+/// recovered Proposal ownership cannot be acknowledged without updating the
+/// state used after atomic cutover. Its consuming transition is the sole mint
+/// for the prepared state required by lifecycle activation.
+#[must_use = "the preactivation runner borrow key must remain with setup"]
+pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1 {
+    _seal: ProductionLifecyclePreActivationRunnerBorrowSealV1,
+    local_proposal: Option<ProductionLifecycleLocalProposalStateV1>,
+}
+
+struct ProductionLifecyclePreActivationRunnerBorrowSealV1;
+
+impl Drop for ProductionLifecyclePreActivationRunnerBorrowSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl ProductionLifecyclePreActivationRunnerBorrowV1 {
+    /// Mint beside the launched owner at the atomic runner cutover.
+    #[allow(dead_code)]
+    fn mint_for_recovered_runner() -> Self {
+        Self {
+            _seal: ProductionLifecyclePreActivationRunnerBorrowSealV1,
+            local_proposal: Some(ProductionLifecycleLocalProposalStateV1::fresh()),
+        }
+    }
+
+    /// Mint the same opaque setup borrow for a production-shaped lifecycle test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test() -> Self {
+        Self::mint_for_recovered_runner()
+    }
+
+    /// Bind one exact recovered Proposal owner to the real runner-local state.
+    pub(in crate::sumeragi) fn bind_recovered_local_proposal(
+        &mut self,
+        directive: LocalProposalDirective,
+    ) -> bool {
+        let Some(local_proposal) = self.local_proposal.as_mut() else {
+            return false;
+        };
+        if !local_proposal.state.is_pristine() {
+            return false;
+        }
+        local_proposal.state =
+            LocalProposalState::from_recovered_lifecycle_attempt(true, directive);
+        true
+    }
+
+    /// Whether setup still owns an untouched local-Proposal scheduler.
+    pub(in crate::sumeragi) fn local_proposal_state_is_pristine(&self) -> bool {
+        self.local_proposal
+            .as_ref()
+            .is_some_and(|local_proposal| local_proposal.state.is_pristine())
+    }
+
+    /// Revalidate the retained scheduler state against the prepared directive.
+    pub(in crate::sumeragi) fn prepared_local_proposal_exactly_matches(
+        &self,
+        directive: LocalProposalDirective,
+    ) -> bool {
+        self.local_proposal.as_ref().is_some_and(|local_proposal| {
+            local_proposal.state.is_pristine() || local_proposal.already_attempted(directive)
+        })
+    }
+
+    /// Check the retained state in focused runner-boundary tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn already_attempted(&self, directive: LocalProposalDirective) -> bool {
+        self.local_proposal
+            .as_ref()
+            .is_some_and(|local_proposal| local_proposal.already_attempted(directive))
     }
 }
 
@@ -714,6 +799,15 @@ struct LocalProposalState {
     global_selection: Option<PendingGlobalSelection>,
 }
 impl LocalProposalState {
+    fn is_pristine(&self) -> bool {
+        self.attempted.is_none()
+            && self.submitted.is_none()
+            && self.non_empty_retry.is_none()
+            && self.candidate_work_wait.is_none()
+            && self.pending_events.is_none()
+            && self.global_selection.is_none()
+    }
+
     fn from_replayed_proposal(
         replayed: Option<ReplayedProposalSign>,
         current: LocalProposalDirective,
@@ -737,6 +831,18 @@ impl LocalProposalState {
             ..Self::default()
         }
     }
+    /// Initialize from the lifecycle owner's already-authenticated replay join.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn from_recovered_lifecycle_attempt(
+        already_attempted: bool,
+        current: LocalProposalDirective,
+    ) -> Self {
+        Self {
+            attempted: already_attempted.then_some(LocalProposalOwner::from(current)),
+            ..Self::default()
+        }
+    }
+
     /// Retire every volatile item which is not owned by the exact current
     /// lock/decision snapshot. A Decision owns no further proposal work.
     fn reconcile(&mut self, owner: LocalProposalOwner) -> LocalProposalOwner {
@@ -927,6 +1033,33 @@ impl LocalProposalState {
         })
     }
 }
+/// Opaque runner ownership of local-Proposal scheduling state.
+///
+/// The future atomic lifecycle cutover constructs one owner for the complete
+/// height, lends it to preactivation recovery, then uses the same private state
+/// in the live scheduling loop. No lifecycle caller can manufacture a shadow
+/// state or extract its recovered owner.
+#[must_use = "runner local-Proposal state must remain with the height loop"]
+pub(in crate::sumeragi) struct ProductionLifecycleLocalProposalStateV1 {
+    state: LocalProposalState,
+}
+
+impl ProductionLifecycleLocalProposalStateV1 {
+    // TODO: Construct this owner at the atomic non-PendingKura runner cutover
+    // and replace the legacy free-standing `LocalProposalState` local.
+    #[allow(dead_code)]
+    fn fresh() -> Self {
+        Self {
+            state: LocalProposalState::default(),
+        }
+    }
+
+    /// Check whether the retained state owns the exact recovered attempt.
+    pub(in crate::sumeragi) fn already_attempted(&self, directive: LocalProposalDirective) -> bool {
+        self.state.attempted == Some(LocalProposalOwner::from(directive))
+    }
+}
+
 /// Run the v2-only worker until shutdown or a fail-closed error.
 pub(super) fn run(worker: SumeragiWorker) {
     let mut status_clear = V2StatusClearGuard::new();
@@ -2119,11 +2252,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 .map_err(V2RunnerError::Service)?;
             let now = Instant::now();
             if !recovering_interrupted_tip && now >= next_npos_vrf_retransmit {
-                broadcast_npos_vrf_messages(
-                    npos_vrf.retransmission(),
-                    output_guard.as_ref(),
-                    &services,
-                )?;
+                broadcast_npos_vrf_messages(npos_vrf.retransmission(), &output_guard, &services)?;
                 next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
             }
             if executor.has_retained_certified_body_response() {
@@ -2189,7 +2318,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut executor,
                             &mut services,
                             &mut lane_work,
-                            output_guard.as_ref(),
+                            &output_guard,
                             kura.as_ref(),
                             &common_config.key_pair,
                             block_sync_server
@@ -2212,7 +2341,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         &mut executor,
                         &mut services,
                         &mut lane_work,
-                        output_guard.as_ref(),
+                        &output_guard,
                         kura.as_ref(),
                         &common_config.key_pair,
                         block_sync_server
@@ -2333,7 +2462,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut executor,
                             &mut services,
                             &mut lane_work,
-                            output_guard.as_ref(),
+                            &output_guard,
                             kura.as_ref(),
                             &common_config.key_pair,
                             block_sync_server
@@ -2388,7 +2517,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 &mut executor,
                                 &mut services,
                                 &mut lane_work,
-                                output_guard.as_ref(),
+                                &output_guard,
                                 kura.as_ref(),
                                 &common_config.key_pair,
                                 block_sync_server
@@ -2445,7 +2574,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut executor,
                             &mut services,
                             &mut lane_work,
-                            output_guard.as_ref(),
+                            &output_guard,
                             kura.as_ref(),
                             &common_config.key_pair,
                             block_sync_server
@@ -2559,7 +2688,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut executor,
                     &mut services,
                     &mut lane_work,
-                    output_guard.as_ref(),
+                    &output_guard,
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server
@@ -3413,7 +3542,7 @@ enum OuterIngressTurn {
 #[cfg_attr(not(test), allow(dead_code))]
 #[cfg_attr(
     test,
-    expect(
+    allow(
         dead_code,
         reason = "the test build currently observes only the ingress rank target directly"
     )
@@ -3631,15 +3760,36 @@ pub(in crate::sumeragi) fn lifecycle_ingress_rank_snapshot_for_test(
     }
 }
 
-/// Mint the exact first Completion observation for a lifecycle worker fixture.
+/// Exercise a closure with one genuine borrow-bound current runner turn.
+///
+/// The cursor advances through earlier turns exactly as production does. The
+/// closure's return type cannot borrow the local cursor, so it must consume or
+/// drop any pass-through authority before returning. The second tuple element
+/// is the target observed immediately afterwards and proves the exact Drop
+/// transition behavior without minting a free-standing production snapshot.
 #[cfg(test)]
-pub(in crate::sumeragi) fn lifecycle_completion_rank_snapshot_for_test(
+pub(in crate::sumeragi) fn with_lifecycle_current_runner_turn_for_test<R>(
     context: &wire::HeightContext,
-) -> LifecycleRunnerRankSnapshot {
-    let turns = OuterIngressTurns::new(1, context.id(), context.height);
-    turns
-        .lifecycle_rank_snapshot(LifecycleRunnerRankTarget::Completion)
-        .expect("the outer cursor starts at its immediate Completion turn")
+    target: LifecycleRunnerRankTarget,
+    service: impl for<'cursor> FnOnce(LifecycleCurrentRunnerTurn<'cursor>) -> R,
+) -> (R, LifecycleRunnerRankTarget) {
+    let mut turns = OuterIngressTurns::new(2, context.id(), context.height);
+    loop {
+        let turn = turns
+            .next_current()
+            .expect("two-cycle fixture reaches every outer runner target");
+        if turn.target() != target {
+            drop(turn);
+            continue;
+        }
+        let result = service(turn);
+        let next = turns
+            .next_current()
+            .expect("one serviced fixture turn leaves a successor target");
+        let next_target = next.target();
+        drop(next);
+        return (result, next_target);
+    }
 }
 
 #[cfg(test)]
@@ -4547,6 +4697,11 @@ pub(super) enum V2RunnerError {
     /// The runner activation permit named another fair-ingress instance.
     #[error("launched lifecycle changed the runner-owned fair-ingress instance")]
     LifecycleActivationIngressMismatch,
+    /// Closed-ingress setup of the launched lifecycle failed closed.
+    #[error(transparent)]
+    LifecyclePreActivation(
+        #[from] super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+    ),
     /// Reducer/WAL adapter failed.
     #[error(transparent)]
     Adapter(#[from] super::v2::AdapterError),

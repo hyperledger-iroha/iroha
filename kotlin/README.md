@@ -60,6 +60,10 @@ are `RETRY_SAFE`; all other requests are `ONE_SHOT`.
 Raw `witness_base64` body authentication is not an SDK surface. Multisig writes must use a
 canonical signed transaction or a closed typed signed intent.
 
+Canonical request builders keep I105 as the semantic SDK identity but emit its lowercase
+canonical-hex address in `X-Iroha-Account`, which is safe on strict ASCII HTTP stacks. Active
+printable-ASCII aliases are emitted unchanged; signed JSON `account_id` fields remain I105.
+
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
 `ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt

@@ -51,12 +51,15 @@ impl Client {
             &body,
             timestamp_ms,
             nonce.as_str(),
-        );
+        )?;
         let signature = Signature::try_new(operator_key_pair.private_key(), &message)
             .wrap_err("failed to sign operator request headers")?;
-        let public_key = operator_key_pair.public_key().to_string();
-        let timestamp = timestamp_ms.to_string();
-        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+        let public_key = operator_key_pair
+            .public_key()
+            .try_to_multihash_string()
+            .wrap_err("failed to encode operator public key header")?;
+        let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
+        let signature_b64 = canonical_request_signature_header_value(&signature)?;
         let builder = self
             .request_without_operator_or_token_auth(method, url)
             .header(HEADER_OPERATOR_PUBLIC_KEY, &public_key)

@@ -22,6 +22,11 @@ use super::{
     ordered_membership_roots,
 };
 use crate::vega::VegaT256ScalarV1 as Scalar;
+#[path = "predecode_v1/rkg_one_semantic_verifier_v1.rs"]
+mod rkg_one_semantic_verifier_v1;
+pub(in super::super) use rkg_one_semantic_verifier_v1::{
+    CompletedDirectRkgOneSemanticVerificationV1, verify_direct_rkg_one_semantic_candidate_v1,
+};
 pub(super) const MEMBERSHIP_HEADER_BYTES_V1: usize = 339;
 pub(super) const BOUND_ONE_CHUNK_WIRE_BYTES_V1: usize = 1_494;
 pub(super) const BOUND_TWO_CHUNK_WIRE_BYTES_V1: usize = 1_560;

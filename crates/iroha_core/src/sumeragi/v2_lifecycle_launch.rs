@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+#[path = "v2_lifecycle_preactivation.rs"]
+mod preactivation;
 #[path = "v2_lifecycle_turn_driver.rs"]
 mod turn_driver;
 
@@ -19,6 +22,7 @@ mod turn_driver_tests;
 
 use super::{
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
+    ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
     ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
     ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
@@ -26,6 +30,7 @@ use super::{
     ProductionRecoveredLifecycleSignDispatchV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+    ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
@@ -36,7 +41,7 @@ use crate::{
     kura::{Kura, KuraV2CommitReceipt},
     state::State,
     sumeragi::{
-        FairV2Ingress,
+        FairV2Ingress, FairV2IngressDequeueDisposition, InboundBlockMessage,
         output_guard::ConsensusOutputGuard,
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
@@ -48,14 +53,27 @@ use crate::{
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            CertifiedServeIngressGate, DurableExactOutputServiceOwner,
-            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
+            CertifiedServeIngressGate, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
+            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
+            PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
             RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
             RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
         },
     },
+};
+#[cfg(test)]
+use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
+pub(in crate::sumeragi) use preactivation::{
+    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
+};
+#[cfg(test)]
+pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
+pub(in crate::sumeragi) use turn_driver::{
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
@@ -232,6 +250,14 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     owner: ProductionLifecycleOwnerV1,
     executor: V2EffectExecutor<SerializedV2Runtime>,
     services: ProductionV2Services,
+    // The exact Decision Fetch has already entered runtime ownership, but only
+    // this seal may verify and dispatch it through interrupted-tip recovery.
+    pending_kura_apply_replay: Option<super::super::v2::PreparedRecoveredPendingKuraApplyReplayV1>,
+    // A recovered ProposalIntent has already consumed its sole startup Sign.
+    // Preactivation must compare this opaque owner with the reducer directive
+    // before live clocks can admit fresh local proposal work.
+    recovered_local_proposal_attempt:
+        Option<super::super::v2::RecoveredLifecycleLocalProposalAttemptV1>,
     // Guarded completion/retry owners drop only after their exact service has
     // stopped, so their fail-stop queue identities remain representable.
     recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>,
@@ -1518,6 +1544,18 @@ pub(in crate::sumeragi) enum ProductionLifecycleActivationErrorV1 {
     /// The process-wide output barrier was already closed.
     #[error("canonical consensus output is closed")]
     OutputClosed,
+    /// Interrupted-tip recovery must use its dedicated no-clock live state.
+    #[error("pending Kura recovery cannot arm ordinary live lifecycle clocks")]
+    PendingKuraApply,
+    /// A recovered Proposal Sign was not joined to runner-local proposal state.
+    #[error("recovered local Proposal ownership was not initialized before activation")]
+    LocalProposalReplayUninitialized,
+    /// The reducer could not reproject the prepared local-Proposal directive.
+    #[error("live lifecycle could not revalidate its prepared local Proposal: {0}")]
+    LocalProposalDirective(#[source] super::super::v2_effects::EffectExecutorError),
+    /// Prepared runner state no longer names this exact context and directive.
+    #[error("prepared runner local Proposal state does not match lifecycle activation")]
+    LocalProposalPreparationMismatch,
     /// Pacemaker clocks could not be armed exactly once.
     #[error("live lifecycle clocks could not be armed: {0}")]
     RuntimeClock(#[source] super::super::v2_runtime::RuntimeClockError),
@@ -1530,6 +1568,20 @@ pub(in crate::sumeragi) enum ProductionLifecycleActivationErrorV1 {
     /// The runner-owned ingress/status authority rejected the launched stack.
     #[error("runner lifecycle activation failed: {0}")]
     Runner(String),
+}
+
+fn lifecycle_activation_recovery_blocker(
+    pending_kura_replay: bool,
+    pending_kura_evidence: bool,
+    recovered_local_proposal: bool,
+) -> Option<ProductionLifecycleActivationErrorV1> {
+    if pending_kura_replay || pending_kura_evidence {
+        Some(ProductionLifecycleActivationErrorV1::PendingKuraApply)
+    } else if recovered_local_proposal {
+        Some(ProductionLifecycleActivationErrorV1::LocalProposalReplayUninitialized)
+    } else {
+        None
+    }
 }
 
 /// Fail-stop failure while consuming an activated height into final rollover.
@@ -1621,12 +1673,52 @@ impl ProductionLifecycleFinalizationOutcomeV1 {
     }
 }
 
+/// Move-only runner state joined to one exact launched reducer directive.
+///
+/// Only [`LaunchedProductionLifecycleV1::initialize_recovered_local_proposal`]
+/// can construct this value. Ordinary and CompleteTip activation consume it,
+/// revalidate the exact context/directive under fail-stop, and retain the real
+/// runner scheduler state until readiness and ingress retire.
+#[must_use = "prepared local-Proposal state must enter lifecycle activation"]
+pub(in crate::sumeragi) struct ProductionLifecyclePreparedLocalProposalStateV1 {
+    runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+    context_id: wire::HeightContextId,
+    directive: super::super::v2::LocalProposalDirective,
+}
+
+impl ProductionLifecyclePreparedLocalProposalStateV1 {
+    fn exactly_matches(
+        &self,
+        context_id: wire::HeightContextId,
+        directive: super::super::v2::LocalProposalDirective,
+    ) -> bool {
+        self.context_id == context_id
+            && self.directive == directive
+            && self
+                .runner
+                .prepared_local_proposal_exactly_matches(directive)
+    }
+
+    /// Check whether the prepared state owns the exact recovered attempt.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn already_attempted(
+        &self,
+        directive: super::super::v2::LocalProposalDirective,
+    ) -> bool {
+        self.runner.already_attempted(directive)
+    }
+}
+
 /// Opaque lifecycle stack after clocks, diagnostics, status, and ingress activate.
 #[must_use = "the activated lifecycle stack owns the live height"]
 pub(in crate::sumeragi) struct ActivatedProductionLifecycleV1 {
     // Drop readiness/ingress ownership before the launched stack unbinds its
     // durable gates. Finalization consumes the same authority explicitly.
     runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,
+    // The exact runner-local Proposal state remains live until readiness and
+    // ingress retire. Dropping the prepared owner before this boundary would
+    // have made activation impossible.
+    local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,
     launched: LaunchedProductionLifecycleV1,
 }
 
@@ -1714,10 +1806,12 @@ impl LaunchedProductionLifecycleV1 {
         self,
         now: Instant,
         runner: super::super::v2_runner::ProductionLifecycleRunnerActivationV1,
+        local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,
     ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
         self.activate_with(
             now,
             ProductionLifecycleActivationPublicationV1::Runner(runner),
+            local_proposal,
         )
     }
 
@@ -1728,10 +1822,12 @@ impl LaunchedProductionLifecycleV1 {
         now: Instant,
         runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
         retirement: super::ledger::RetiredRecoveredCompleteTipActivationAuthorityV1,
+        local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,
     ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
         self.activate_with(
             now,
             ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { runner, retirement },
+            local_proposal,
         )
     }
 
@@ -1739,11 +1835,31 @@ impl LaunchedProductionLifecycleV1 {
         mut self,
         now: Instant,
         publication: ProductionLifecycleActivationPublicationV1,
+        local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,
     ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
+        if let Some(error) = lifecycle_activation_recovery_blocker(
+            self.pending_kura_apply_replay.is_some(),
+            self.executor
+                .pending_kura_apply_recovery_evidence()
+                .is_some(),
+            self.recovered_local_proposal_attempt.is_some(),
+        ) {
+            self.services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            return Err(error);
+        }
         let output_guard = self.services.lifecycle_output_guard();
         let activation = output_guard
             .begin_fail_stop_operation()
             .ok_or(ProductionLifecycleActivationErrorV1::OutputClosed)?;
+        let current_directive = self
+            .executor
+            .local_proposal_directive()
+            .map_err(ProductionLifecycleActivationErrorV1::LocalProposalDirective)?;
+        if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {
+            return Err(ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch);
+        }
         self.executor
             .arm_live_clocks(now)
             .map_err(ProductionLifecycleActivationErrorV1::RuntimeClock)?;
@@ -1764,6 +1880,7 @@ impl LaunchedProductionLifecycleV1 {
         activation.complete();
         Ok(ActivatedProductionLifecycleV1 {
             runner_activation,
+            local_proposal,
             launched: self,
         })
     }
@@ -1783,6 +1900,8 @@ impl ActivatedProductionLifecycleV1 {
     ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
     {
         if !self.launched.executor.ready_to_finish()
+            || self.launched.pending_kura_apply_replay.is_some()
+            || self.launched.recovered_local_proposal_attempt.is_some()
             || self
                 .launched
                 .recovered_decision_fetch_body_completion
@@ -1802,12 +1921,14 @@ impl ActivatedProductionLifecycleV1 {
         }
 
         let Self {
-            runner_activation,
             mut launched,
+            local_proposal,
+            runner_activation,
         } = self;
         runner_activation
             .retire(&launched.leader_wire_ingress_binding.ingress)
             .map_err(|error| ProductionLifecycleFinalizationErrorV1::Runner(error.to_string()))?;
+        drop(local_proposal);
         launched
             .leader_wire_ingress_binding
             .retire()
@@ -1820,6 +1941,8 @@ impl ActivatedProductionLifecycleV1 {
             owner,
             executor,
             services,
+            pending_kura_apply_replay,
+            recovered_local_proposal_attempt,
             recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
@@ -1827,12 +1950,16 @@ impl ActivatedProductionLifecycleV1 {
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
+        debug_assert!(pending_kura_apply_replay.is_none());
+        debug_assert!(recovered_local_proposal_attempt.is_none());
         debug_assert!(recovered_decision_apply_deferred.is_none());
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(recovered_lifecycle_sign_completion.is_none());
         debug_assert!(recovered_ingress_capacity_wait.is_none());
         debug_assert!(completion_observer_activation.is_none());
         drop(recovered_decision_apply_deferred);
+        drop(pending_kura_apply_replay);
+        drop(recovered_local_proposal_attempt);
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
         drop(recovered_ingress_capacity_wait);
@@ -1869,12 +1996,14 @@ impl ActivatedProductionLifecycleV1 {
         receipt: KuraV2CommitReceipt,
     ) -> Result<ProductionLifecycleCleanupReadyV1, String> {
         let Self {
-            runner_activation,
             mut launched,
+            local_proposal,
+            runner_activation,
         } = self;
         runner_activation
             .retire(&launched.leader_wire_ingress_binding.ingress)
             .map_err(|error| error.to_string())?;
+        drop(local_proposal);
         launched
             .leader_wire_ingress_binding
             .retire()
@@ -1893,6 +2022,8 @@ impl ActivatedProductionLifecycleV1 {
             owner,
             executor,
             services,
+            pending_kura_apply_replay,
+            recovered_local_proposal_attempt,
             recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
@@ -1900,12 +2031,16 @@ impl ActivatedProductionLifecycleV1 {
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
+        assert!(pending_kura_apply_replay.is_none());
+        assert!(recovered_local_proposal_attempt.is_none());
         assert!(recovered_decision_apply_deferred.is_none());
         assert!(recovered_decision_fetch_body_completion.is_none());
         assert!(recovered_lifecycle_sign_completion.is_none());
         assert!(recovered_ingress_capacity_wait.is_none());
         assert!(completion_observer_activation.is_none());
         drop(executor);
+        drop(pending_kura_apply_replay);
+        drop(recovered_local_proposal_attempt);
         drop(recovered_decision_apply_deferred);
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
@@ -2227,14 +2362,15 @@ impl ProductionLifecycleOwnerV1 {
             .take()
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         let body_store_identity = body_store.instance_identity();
-        let runtime = adapter_startup
-            .into_serialized_runtime(
-                inputs.runtime_started_at,
-                inputs.round_timeout,
-                inputs.runtime_queue,
-                lifecycle_ordinals.clone(),
-            )
-            .map_err(ProductionLifecycleLaunchErrorV1::Runtime)?;
+        let (runtime, pending_kura_apply_replay, recovered_local_proposal_attempt) =
+            adapter_startup
+                .into_serialized_runtime(
+                    inputs.runtime_started_at,
+                    inputs.round_timeout,
+                    inputs.runtime_queue,
+                    lifecycle_ordinals.clone(),
+                )
+                .map_err(ProductionLifecycleLaunchErrorV1::Runtime)?;
         let (mut executor, body_store) = V2EffectExecutor::open_with_body_store(
             runtime,
             body_store,
@@ -2312,6 +2448,8 @@ impl ProductionLifecycleOwnerV1 {
             owner: self,
             executor,
             services,
+            pending_kura_apply_replay,
+            recovered_local_proposal_attempt,
             recovered_decision_apply_deferred: None,
             recovered_decision_fetch_body_completion: None,
             recovered_lifecycle_sign_completion: None,
@@ -2331,6 +2469,76 @@ mod tests {
     use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
     use iroha_crypto::{Hash, HashOf};
     use tempfile::TempDir;
+    #[test]
+    fn preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete() {
+        let dropped_guard = ConsensusOutputGuard::isolated();
+        drop(ProductionLifecyclePreActivationFailStopScopeV1::new(
+            Arc::clone(&dropped_guard),
+        ));
+        assert!(dropped_guard.restart_required());
+
+        let completed_guard = ConsensusOutputGuard::isolated();
+        ProductionLifecyclePreActivationFailStopScopeV1::new(Arc::clone(&completed_guard))
+            .complete();
+        assert!(!completed_guard.restart_required());
+    }
+
+    #[test]
+    fn activation_recovery_blocker_requires_pending_and_proposal_preactivation() {
+        assert!(matches!(
+            lifecycle_activation_recovery_blocker(true, false, false),
+            Some(ProductionLifecycleActivationErrorV1::PendingKuraApply)
+        ));
+        assert!(matches!(
+            lifecycle_activation_recovery_blocker(false, true, true),
+            Some(ProductionLifecycleActivationErrorV1::PendingKuraApply)
+        ));
+        assert!(matches!(
+            lifecycle_activation_recovery_blocker(false, false, true),
+            Some(ProductionLifecycleActivationErrorV1::LocalProposalReplayUninitialized)
+        ));
+        assert!(lifecycle_activation_recovery_blocker(false, false, false).is_none());
+    }
+
+    #[test]
+    fn prepared_local_proposal_state_is_affine_and_context_directive_bound() {
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"prepared local Proposal lifecycle context",
+        )));
+        let tag = crate::sumeragi::v2_core::EventTag::new(
+            1,
+            2,
+            crate::sumeragi::v2_core::Generation::new(3),
+        );
+        let directive =
+            crate::sumeragi::v2::LocalProposalDirective::for_test(tag, 0, None, None, None);
+        let runner =
+            crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+        let prepared = ProductionLifecyclePreparedLocalProposalStateV1 {
+            runner,
+            context_id,
+            directive,
+        };
+        assert!(prepared.exactly_matches(context_id, directive));
+
+        let foreign_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign prepared local Proposal lifecycle context",
+        )));
+        assert!(!prepared.exactly_matches(foreign_context, directive));
+        let foreign_directive = crate::sumeragi::v2::LocalProposalDirective::for_test(
+            crate::sumeragi::v2_core::EventTag::new(
+                1,
+                4,
+                crate::sumeragi::v2_core::Generation::new(5),
+            ),
+            0,
+            None,
+            None,
+            None,
+        );
+        assert!(!prepared.exactly_matches(context_id, foreign_directive));
+    }
+
     #[test]
     fn launch_local_identity_requires_the_bound_key_and_exact_roster_position() {
         let key_pair = KeyPair::random();
@@ -2580,8 +2788,14 @@ mod tests {
     }
     #[test]
     fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
-        let source = include_str!("v2_lifecycle_launch.rs");
-        let adapter_source = include_str!("v2.rs");
+        let source = concat!(
+            include_str!("v2_lifecycle_launch.rs"),
+            include_str!("v2_lifecycle_preactivation.rs")
+        );
+        let adapter_source = concat!(
+            include_str!("v2.rs"),
+            include_str!("v2_pending_kura_recovery.rs")
+        );
         let safety_wal_source = include_str!("safety_wal.rs");
         let kura_source = concat!(
             include_str!("../kura.rs"),
@@ -2589,6 +2803,8 @@ mod tests {
         );
         let adjacent_store_source = include_str!("serviced_candidate_store.rs");
         let worker_source = include_str!("v2_worker.rs");
+        let effects_source = include_str!("v2_effects.rs");
+        let runtime_source = include_str!("v2_runtime.rs");
         let runner_source = include_str!("v2_runner.rs");
         let finalized_output_source = include_str!("v2_runner/finalized_output_rollover.rs");
         let runner_tests_source = include_str!("v2_runner_tests.rs");
@@ -2639,7 +2855,9 @@ mod tests {
                 "CompleteTip activation consumes the still-joined launched owner and retirement",
             );
         let typed_activation = bound_launch
-            .find("launched.activate_recovered_complete_tip(now, runner, retirement)")
+            .find(
+                "launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)",
+            )
             .expect("CompleteTip activation enters only the typed publication boundary");
         assert!(
             bind < launch
@@ -3029,6 +3247,12 @@ mod tests {
         let services_field = launched_fields
             .find("services: ProductionV2Services")
             .expect("launched wrapper retains the service worker");
+        let pending_kura_field = launched_fields
+            .find("pending_kura_apply_replay:")
+            .expect("launched wrapper retains pending-Kura replay ownership");
+        let proposal_attempt_field = launched_fields
+            .find("recovered_local_proposal_attempt:")
+            .expect("launched wrapper retains recovered local-Proposal ownership");
         let sign_completion_field = launched_fields
             .find(
                 "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
@@ -3038,7 +3262,10 @@ mod tests {
             .find("leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1")
             .expect("launched wrapper retains leader-wire binding ownership");
         assert!(
-            services_field < sign_completion_field && sign_completion_field < binding_field,
+            services_field < pending_kura_field
+                && pending_kura_field < proposal_attempt_field
+                && proposal_attempt_field < sign_completion_field
+                && sign_completion_field < binding_field,
             "Rust field drop order must stop services before dropping the Sign guard and unbinding leader-wire ingress"
         );
         let leader_wire_drop = source
@@ -3161,6 +3388,287 @@ mod tests {
         assert!(!launch.contains("activate_effect_completion_observer("));
         assert!(!runner_source.contains("activate_effect_completion_observer("));
 
+        let preactivation_runner = runner_source
+            .split_once(
+                "pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1",
+            )
+            .expect("runner has one sealed lifecycle preactivation borrow")
+            .1
+            .split_once("/// Cadence-derived process-local deadline")
+            .expect("preactivation borrow ends before interrupted-tip recovery")
+            .0;
+        for required in [
+            "_seal: ProductionLifecyclePreActivationRunnerBorrowSealV1",
+            "local_proposal: Option<ProductionLifecycleLocalProposalStateV1>",
+            "struct ProductionLifecyclePreActivationRunnerBorrowSealV1;",
+            "impl Drop for ProductionLifecyclePreActivationRunnerBorrowSealV1",
+            "fn mint_for_recovered_runner() -> Self",
+            "local_proposal: Some(ProductionLifecycleLocalProposalStateV1::fresh())",
+            "#[cfg(test)]",
+            "pub(in crate::sumeragi) fn for_test() -> Self",
+            "fn bind_recovered_local_proposal(",
+            "let Some(local_proposal) = self.local_proposal.as_mut()",
+            "if !local_proposal.state.is_pristine()",
+            "LocalProposalState::from_recovered_lifecycle_attempt(true, directive)",
+            "fn local_proposal_state_is_pristine(",
+            "fn prepared_local_proposal_exactly_matches(",
+        ] {
+            assert!(preactivation_runner.contains(required));
+        }
+        for forbidden in [
+            "derive(Clone)",
+            "derive(Copy)",
+            "pub _seal:",
+            "pub(crate) _seal:",
+            "pub(in crate::sumeragi) _seal:",
+            "pub local_proposal:",
+            "pub(crate) local_proposal:",
+            "pub(in crate::sumeragi) local_proposal:",
+            "pub(in crate::sumeragi) fn mint_for_recovered_runner",
+            "fn into_parts(",
+        ] {
+            assert!(!preactivation_runner.contains(forbidden));
+        }
+        let local_proposal_owner = runner_source
+            .split_once("pub(in crate::sumeragi) struct ProductionLifecycleLocalProposalStateV1")
+            .expect("runner retains one opaque lifecycle local-Proposal state owner")
+            .1
+            .split_once("/// Run the v2-only worker until shutdown")
+            .expect("opaque lifecycle local-Proposal state ends before the runner")
+            .0;
+        assert!(local_proposal_owner.contains("state: LocalProposalState"));
+        assert!(local_proposal_owner.contains("fn fresh() -> Self"));
+        assert!(!local_proposal_owner.contains("pub state:"));
+        assert!(!local_proposal_owner.contains("fn into_parts("));
+        let prepared_local_proposal = source
+            .split_once("struct ProductionLifecyclePreparedLocalProposalStateV1")
+            .expect("launch owns one affine prepared local-Proposal state")
+            .1
+            .split_once("/// Opaque lifecycle stack after clocks")
+            .expect("prepared local-Proposal state ends before activated ownership")
+            .0;
+        for required in [
+            "runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1",
+            "context_id: wire::HeightContextId",
+            "directive: super::super::v2::LocalProposalDirective",
+            "fn exactly_matches(",
+            "self.context_id == context_id",
+            "self.directive == directive",
+            "prepared_local_proposal_exactly_matches(directive)",
+        ] {
+            assert!(prepared_local_proposal.contains(required));
+        }
+        for forbidden in [
+            "derive(Clone)",
+            "derive(Copy)",
+            "pub runner:",
+            "pub context_id:",
+            "pub directive:",
+            "fn into_parts(",
+        ] {
+            assert!(!prepared_local_proposal.contains(forbidden));
+        }
+        assert!(runtime_source.contains(
+            "pub(in crate::sumeragi) const fn lifecycle_live_clocks_are_armed(&self) -> bool {\n        self.clocks_armed\n    }"
+        ));
+        assert!(effects_source.contains(
+            "pub(in crate::sumeragi) fn lifecycle_live_clocks_are_unarmed(&self) -> bool {\n        !self.runtime.lifecycle_live_clocks_are_armed()\n    }"
+        ));
+        let preactivation_fail_stop = source
+            .split_once("struct ProductionLifecyclePreActivationFailStopScopeV1")
+            .expect("preactivation setup has one non-permit fail-stop scope")
+            .1
+            .split_once("impl LaunchedProductionLifecycleV1")
+            .expect("preactivation fail-stop scope ends before launched setup")
+            .0;
+        for required in [
+            "output_guard: Arc<ConsensusOutputGuard>",
+            "armed: bool",
+            "impl Drop for ProductionLifecyclePreActivationFailStopScopeV1",
+            "self.output_guard.close_admission_for_restart()",
+        ] {
+            assert!(preactivation_fail_stop.contains(required));
+        }
+        assert!(!preactivation_fail_stop.contains("ConsensusFailStopOperation"));
+        let preactivation_setup = source
+            .split_once("fn with_runner_setup_transaction<R, E>(")
+            .expect("launched lifecycle has one sealed preactivation setup transaction")
+            .1
+            .split_once("/// Borrow executor and services for closed-ingress runner setup")
+            .expect("private setup transaction ends before its runner aperture")
+            .0;
+        let setup_guard = preactivation_setup
+            .find("let output_guard = self.services.lifecycle_output_guard()")
+            .expect("preactivation setup binds the exact output guard first");
+        let setup_initial_admission = preactivation_setup
+            .find("let initial_admission = output_guard")
+            .expect("preactivation setup witnesses initially open output");
+        let setup_release_initial = preactivation_setup
+            .find("drop(initial_admission)")
+            .expect("preactivation setup releases its permit before the callback");
+        let setup_arm = preactivation_setup
+            .find("ProductionLifecyclePreActivationFailStopScopeV1::new")
+            .expect("preactivation setup arms a non-permit fail-stop scope");
+        let setup_owner = preactivation_setup
+            .find("matches_lifecycle_executor_output_guard(&self.executor)")
+            .expect("preactivation setup authenticates executor/service ownership");
+        let setup_ingress = preactivation_setup
+            .find("self.leader_wire_ingress_binding.ingress.state.lock().open")
+            .expect("preactivation setup keeps exact ingress closed");
+        let setup_observer = preactivation_setup
+            .find("self.completion_observer_activation.is_none()")
+            .expect("preactivation setup retains the observer authority");
+        let setup_clocks = preactivation_setup
+            .find("self.executor.lifecycle_live_clocks_are_unarmed()")
+            .expect("preactivation setup keeps live clocks unarmed");
+        let setup_callback = preactivation_setup
+            .find("operation(&mut self.executor, &mut self.services)?")
+            .expect("preactivation transaction exposes only executor and services");
+        let setup_post_owner = preactivation_setup[setup_callback..]
+            .find("matches_lifecycle_executor_output_guard(&self.executor)")
+            .map(|offset| setup_callback + offset)
+            .expect("preactivation setup reauthenticates ownership after the callback");
+        let setup_post_ingress = preactivation_setup[setup_post_owner..]
+            .find("self.leader_wire_ingress_binding.ingress.state.lock().open")
+            .map(|offset| setup_post_owner + offset)
+            .expect("preactivation setup rechecks closed ingress after the callback");
+        let setup_post_observer = preactivation_setup[setup_post_ingress..]
+            .find("self.completion_observer_activation.is_none()")
+            .map(|offset| setup_post_ingress + offset)
+            .expect("preactivation setup rechecks the observer after the callback");
+        let setup_post_clocks = preactivation_setup[setup_post_observer..]
+            .find("self.executor.lifecycle_live_clocks_are_unarmed()")
+            .map(|offset| setup_post_observer + offset)
+            .expect("preactivation setup rechecks live clocks after the callback");
+        let setup_complete = preactivation_setup
+            .find("setup.complete()")
+            .expect("preactivation setup opens output only after postflight");
+        let setup_final_admission = preactivation_setup
+            .find("let final_admission = output_guard")
+            .expect("preactivation setup re-witnesses open output before success");
+        let setup_release_final = preactivation_setup
+            .find("drop(final_admission)")
+            .expect("preactivation setup releases its final witness after disarming");
+        assert!(
+            setup_guard < setup_initial_admission
+                && setup_initial_admission < setup_arm
+                && setup_arm < setup_release_initial
+                && setup_arm < setup_owner
+                && setup_owner < setup_ingress
+                && setup_ingress < setup_observer
+                && setup_observer < setup_clocks
+                && setup_clocks < setup_callback
+                && setup_callback < setup_post_owner
+                && setup_post_owner < setup_post_ingress
+                && setup_post_ingress < setup_post_observer
+                && setup_post_observer < setup_post_clocks
+                && setup_post_clocks < setup_final_admission
+                && setup_final_admission < setup_complete
+                && setup_complete < setup_release_final
+        );
+        assert!(!preactivation_setup.contains("begin_fail_stop_operation()"));
+        for forbidden in [
+            "&mut self.owner",
+            "ProductionLifecyclePreActivationRunnerBorrowV1",
+            "bind_recovered_local_proposal",
+            "arm_live_clocks(",
+            "activate_effect_completion_observer(",
+            "open_and_publish(",
+            "into_parts(",
+        ] {
+            assert!(!preactivation_setup.contains(forbidden));
+        }
+        let public_setup = source
+            .split_once("pub(in crate::sumeragi) fn with_runner_setup<R, E>(")
+            .expect("launched lifecycle exposes one sealed runner setup aperture")
+            .1
+            .split_once("/// Join one recovered local Proposal attempt")
+            .expect("public setup aperture ends before Proposal initialization")
+            .0;
+        assert!(public_setup.contains("self.with_runner_setup_transaction(operation)"));
+        assert!(!public_setup.contains("bind_recovered_local_proposal"));
+        assert!(!public_setup.contains("operation(&mut self.executor"));
+
+        let proposal_initialization = source
+            .split_once("pub(in crate::sumeragi) fn initialize_recovered_local_proposal(")
+            .expect("preactivation has one recovered local-Proposal join")
+            .1
+            .split_once("/// Install one opaque recovered-attempt fixture")
+            .expect("local-Proposal join stays bounded before its test seam")
+            .0;
+        let proposal_take = proposal_initialization
+            .find("self.recovered_local_proposal_attempt.take()")
+            .expect("local-Proposal join consumes its opaque replay owner once");
+        let proposal_setup = proposal_initialization
+            .find("self.with_runner_setup_transaction(")
+            .expect("local-Proposal join remains inside closed-ingress setup");
+        let proposal_directive = proposal_initialization
+            .find(".local_proposal_directive()")
+            .expect("local-Proposal join reads only the reducer directive");
+        let proposal_compare = proposal_initialization
+            .find("recovered.exactly_matches_directive(directive)")
+            .expect("local-Proposal join compares through the opaque oracle");
+        let proposal_bind = proposal_initialization
+            .find("runner.bind_recovered_local_proposal(directive)")
+            .expect("local-Proposal join mutates the real runner-owned state");
+        let proposal_non_pristine = proposal_initialization
+            .find("ProductionLifecyclePreActivationErrorV1::RunnerProposalStateNotPristine")
+            .expect("non-pristine runner-local Proposal state fails closed");
+        let proposal_mismatch = proposal_initialization
+            .find("ProductionLifecyclePreActivationErrorV1::RecoveredProposalMismatch")
+            .expect("local-Proposal drift fails closed");
+        let proposal_result = proposal_initialization
+            .find("ProductionLifecyclePreparedLocalProposalStateV1 {")
+            .expect("local-Proposal join privately mints its affine state owner");
+        let proposal_return = proposal_initialization
+            .find("Ok((directive, prepared))")
+            .expect("local-Proposal join returns the directive with its affine state owner");
+        assert!(
+            proposal_take < proposal_setup
+                && proposal_setup < proposal_directive
+                && proposal_directive < proposal_compare
+                && proposal_compare < proposal_bind
+                && proposal_bind < proposal_non_pristine
+                && proposal_non_pristine < proposal_mismatch
+                && proposal_mismatch < proposal_result
+                && proposal_result < proposal_return
+        );
+        assert_eq!(
+            proposal_initialization
+                .matches("runner.bind_recovered_local_proposal(directive)")
+                .count(),
+            1,
+            "only the WAL-authenticated initializer may bind runner Proposal state"
+        );
+        for forbidden in ["fn into_parts(", "fn tag(", "fn round(", "fn subject("] {
+            assert!(!proposal_initialization.contains(forbidden));
+        }
+
+        let activation_blocker = source
+            .split_once("fn lifecycle_activation_recovery_blocker(")
+            .expect("activation has one recovery preflight classifier")
+            .1
+            .split_once("/// Fail-stop failure while consuming an activated height")
+            .expect("activation recovery classifier stays bounded")
+            .0;
+        let pending_blocker = activation_blocker
+            .find("pending_kura_replay || pending_kura_evidence")
+            .expect("pending-Kura recovery blocks ordinary clocks");
+        let pending_error = activation_blocker
+            .find("ProductionLifecycleActivationErrorV1::PendingKuraApply")
+            .expect("pending-Kura recovery maps to its exact error");
+        let proposal_blocker = activation_blocker
+            .find("else if recovered_local_proposal")
+            .expect("uninitialized recovered Proposal blocks ordinary clocks");
+        let proposal_error = activation_blocker
+            .find("ProductionLifecycleActivationErrorV1::LocalProposalReplayUninitialized")
+            .expect("uninitialized recovered Proposal maps to its exact error");
+        assert!(
+            pending_blocker < pending_error
+                && pending_error < proposal_blocker
+                && proposal_blocker < proposal_error
+        );
+
         let lifecycle_activation = source
             .split_once("fn activate_with(")
             .expect("the launched lifecycle has one consuming activation transaction")
@@ -3168,9 +3676,27 @@ mod tests {
             .split_once("impl ActivatedProductionLifecycleV1")
             .expect("activation ends before the runner-borrowed live type state")
             .0;
+        let recovery_blocker = lifecycle_activation
+            .find("lifecycle_activation_recovery_blocker(")
+            .expect("activation checks every recovery-only precondition first");
+        let recovery_close = lifecycle_activation
+            .find("close_admission_for_restart()")
+            .expect("activation closes output when recovery setup is incomplete");
+        let recovery_error = lifecycle_activation
+            .find("return Err(error)")
+            .expect("activation returns only after fail-stop closure");
         let activation_guard = lifecycle_activation
             .find("begin_fail_stop_operation()")
             .expect("activation arms the process-wide fail-stop boundary");
+        let proposal_reproject = lifecycle_activation
+            .find(".local_proposal_directive()")
+            .expect("activation reprojects the reducer Proposal directive");
+        let proposal_exact = lifecycle_activation
+            .find("local_proposal.exactly_matches(self.executor.context().id(), current_directive)")
+            .expect("activation rejoins prepared state to this exact lifecycle");
+        let proposal_mismatch = lifecycle_activation
+            .find("ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch")
+            .expect("foreign or stale prepared Proposal state fails closed");
         let clocks = lifecycle_activation
             .find("arm_live_clocks(now)")
             .expect("activation arms live clocks");
@@ -3190,10 +3716,16 @@ mod tests {
             .find("activation.complete()")
             .expect("activation releases output only after publication");
         let activated = lifecycle_activation
-            .find("ActivatedProductionLifecycleV1 {\n            runner_activation,\n            launched: self,")
+            .find("ActivatedProductionLifecycleV1 {\n            runner_activation,\n            local_proposal,\n            launched: self,")
             .expect("activation returns the sole opaque live owner");
         assert!(
-            activation_guard < clocks
+            recovery_blocker < recovery_close
+                && recovery_close < recovery_error
+                && recovery_error < activation_guard
+                && activation_guard < proposal_reproject
+                && proposal_reproject < proposal_exact
+                && proposal_exact < proposal_mismatch
+                && proposal_mismatch < clocks
                 && clocks < status
                 && status < observer
                 && observer < register_observer
@@ -3214,11 +3746,17 @@ mod tests {
         assert!(activated_owner.contains(
             "runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1"
         ));
+        assert!(
+            activated_owner
+                .contains("local_proposal: ProductionLifecyclePreparedLocalProposalStateV1")
+        );
         assert!(activated_owner.contains("launched: LaunchedProductionLifecycleV1"));
         assert!(
             activated_owner.find("runner_activation:").unwrap()
-                < activated_owner.find("launched:").unwrap(),
-            "runner readiness must drop before the launched stack unbinds durable gates"
+                < activated_owner.find("local_proposal:").unwrap()
+                && activated_owner.find("local_proposal:").unwrap()
+                    < activated_owner.find("launched:").unwrap(),
+            "readiness and local Proposal state must drop before durable gates"
         );
         for forbidden in [
             "pub launched:",
@@ -3227,6 +3765,9 @@ mod tests {
             "pub runner_activation:",
             "pub(crate) runner_activation:",
             "pub(in crate::sumeragi) runner_activation:",
+            "pub local_proposal:",
+            "pub(crate) local_proposal:",
+            "pub(in crate::sumeragi) local_proposal:",
             "impl Clone for ActivatedProductionLifecycleV1",
             "impl Copy for ActivatedProductionLifecycleV1",
         ] {
@@ -3306,6 +3847,9 @@ mod tests {
             .split_once("/// Borrow the live owner/runtime/service triple")
             .expect("retirement fixture ends before the ordinary runner borrow")
             .0;
+        let fixture_owner_order = fixture_retirement
+            .find("let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,")
+            .expect("fixture retains drop-safe launched/local/runner binding order");
         let readiness_retire = fixture_retirement
             .find("runner_activation\n            .retire(")
             .expect("retirement clears runner readiness first");
@@ -3322,7 +3866,8 @@ mod tests {
             .find(".retire_lifecycle_stores()")
             .expect("fixture exercises the post-handoff durable retirement tail");
         assert!(
-            readiness_retire < gates_retire
+            fixture_owner_order < readiness_retire
+                && readiness_retire < gates_retire
                 && gates_retire < output_handoff
                 && output_handoff < refresh
                 && refresh < retirement
@@ -3341,6 +3886,9 @@ mod tests {
         let registry_ready = activated_finalization
             .find("exactly_covers_finalization_work")
             .expect("finalization first proves exact lifecycle-owner quiescence");
+        let owner_order = activated_finalization
+            .find("let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,")
+            .expect("finalization retains drop-safe launched/local/runner binding order");
         let runner_retire = activated_finalization
             .find("runner_activation\n            .retire(")
             .expect("finalization clears runner readiness and ingress");
@@ -3359,9 +3907,10 @@ mod tests {
         let operation_complete = activated_finalization
             .find("operation.complete()")
             .expect("adapter finalization completes the fail-stop operation last");
-        assert!(executor_ready < runner_retire && registry_ready < runner_retire);
+        assert!(executor_ready < owner_order && registry_ready < owner_order);
         assert!(
-            runner_retire < gate_retire
+            owner_order < runner_retire
+                && runner_retire < gate_retire
                 && gate_retire < executor_consume
                 && executor_consume < operation
                 && operation < adapter_finish
@@ -3503,6 +4052,36 @@ mod tests {
         assert!(
             lifecycle_startup_test_source
                 .contains("production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout")
+        );
+        let proposal_initialization_behavior = lifecycle_startup_test_source
+            .split_once(
+                "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+            )
+            .expect("Kura-bound owner has one preactivation Proposal behavior fixture")
+            .1
+            .split_once("fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network")
+            .expect("preactivation Proposal fixture ends before factory-input tests")
+            .0;
+        let proposal_fixture = proposal_initialization_behavior
+            .find("RecoveredLifecycleLocalProposalAttemptV1::for_test(")
+            .expect("fixture retains one opaque recovered Proposal attempt");
+        let proposal_retain = proposal_initialization_behavior
+            .find("retain_recovered_local_proposal_attempt_for_test(recovered_attempt)")
+            .expect("fixture installs the opaque attempt without exposing its parts");
+        let proposal_initialize = proposal_initialization_behavior
+            .find("initialize_recovered_local_proposal(setup_runner)")
+            .expect("fixture executes the production preactivation join");
+        let proposal_attempted = proposal_initialization_behavior
+            .find("assert!(local_proposal_state.already_attempted(directive))")
+            .expect("fixture proves the real runner-local state owns the Proposal");
+        let proposal_activate = proposal_initialization_behavior
+            .find(".activate(Instant::now(), activation, local_proposal_state)")
+            .expect("fixture activates only after Proposal initialization");
+        assert!(
+            proposal_fixture < proposal_retain
+                && proposal_retain < proposal_initialize
+                && proposal_initialize < proposal_attempted
+                && proposal_attempted < proposal_activate
         );
         assert!(
             lifecycle_startup_test_source
@@ -3652,10 +4231,12 @@ mod tests {
         for required in [
             "_seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
             "local_signer: KeyPair",
-            "fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+            "block_cadence: Duration",
+            "fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self",
             "#[cfg(test)]",
-            "fn for_test(local_signer: KeyPair) -> Self",
-            "fn into_local_signer(self) -> KeyPair",
+            "fn for_test(",
+            "fn into_factory_dependencies(self) -> (KeyPair, Duration)",
+            "(self.local_signer, self.block_cadence)",
             "impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
         ] {
             assert!(runner_dependency_permit.contains(required));
@@ -3846,7 +4427,7 @@ mod tests {
         assert!(!runner_borrow.contains("pub(in crate::sumeragi) fn mint_for_recovered_runner"));
         assert!(!runner_borrow.contains("fn into_parts("));
         assert!(runner_tests_source.contains(
-            "fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer()"
+            "fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadence()"
         ));
         let factory_bind = adapter_source
             .split_once("fn bind_production_lifecycle_owner_factory_inputs_v1(")
@@ -3858,7 +4439,12 @@ mod tests {
         assert!(factory_bind.contains(
             "permit: super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1"
         ));
-        assert!(factory_bind.contains("let local_signer = permit.into_local_signer();"));
+        assert!(
+            factory_bind.contains(
+                "let (local_signer, block_cadence) = permit.into_factory_dependencies();"
+            )
+        );
+        assert!(!factory_bind.contains("state.sumeragi_block_cadence()"));
         assert!(!source.contains("fn body_store("));
         assert!(!source.contains("fn adapter("));
         assert!(!source.contains("debug_assert!(startup_effects.is_empty())"));

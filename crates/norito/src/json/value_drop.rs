@@ -1,5 +1,7 @@
 //! Fixed-stack cleanup state for recursively owned JSON values.
-use super::{Error, MAX_JSON_VALUE_NESTING_DEPTH, Value, native::Map, try_decode_vec_with_capacity};
+use super::{
+    Error, MAX_JSON_VALUE_NESTING_DEPTH, Value, native::Map, try_decode_vec_with_capacity,
+};
 enum ValueDropFrame {
     Array(std::vec::IntoIter<Value>),
     Object(std::collections::btree_map::IntoValues<String, Value>),

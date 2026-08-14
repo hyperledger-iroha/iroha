@@ -205,11 +205,11 @@ pub enum LanePrivacyProofError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{
         MerkleTree,
         privacy::{LanePrivacyCommitment, MerkleCommitment, PrivacyError},
     };
-    use super::*;
     #[test]
     fn merkle_from_raw_path_sets_prehashed_bits() {
         let mut leaves = Vec::new();

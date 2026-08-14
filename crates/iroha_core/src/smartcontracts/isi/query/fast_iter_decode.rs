@@ -1,6 +1,6 @@
 //! Exact, cumulative decoding for opaque iterable-query components.
-use norito::core::{NoritoDeserialize, NoritoSerialize};
 use super::{Error, QueryLimits};
+use norito::core::{NoritoDeserialize, NoritoSerialize};
 struct ExactBareWriter<'a> {
     expected: &'a [u8],
     written: usize,

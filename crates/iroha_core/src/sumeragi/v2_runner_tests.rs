@@ -38,11 +38,15 @@ include!("tests/v2_runner_unsealed_02.rs");
 include!("tests/v2_runner_upstream_recovery.rs");
 include!("tests/v2_runner_lifecycle_startup_order.rs");
 #[test]
-fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer() {
+fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadence() {
     let local_signer = KeyPair::random();
     let expected = local_signer.public_key().clone();
-    let permit = RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(local_signer);
-    assert_eq!(permit.into_local_signer().public_key(), &expected);
+    let expected_cadence = Duration::from_millis(777);
+    let permit =
+        RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(local_signer, expected_cadence);
+    let (local_signer, block_cadence) = permit.into_factory_dependencies();
+    assert_eq!(local_signer.public_key(), &expected);
+    assert_eq!(block_cadence, expected_cadence);
 
     let _guard = super::super::status::rbc_status_test_guard();
     super::super::status::clear_v2_status();

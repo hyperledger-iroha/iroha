@@ -187,6 +187,29 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testRejectsNonV1AndControllerClassInconsistentHeaders() throws {
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x01, count: 32))
+        let canonical = try address.canonicalBytes()
+
+        var nonV1Header = canonical
+        nonV1Header[0] = 0x22
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(nonV1Header)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidHeaderVersion(1))
+        }
+
+        var nonV1Normalization = canonical
+        nonV1Normalization[0] = 0x04
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(nonV1Normalization)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidNormVersion(2))
+        }
+
+        var mismatchedClass = canonical
+        mismatchedClass[0] = 0x0A
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(mismatchedClass)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
+        }
+    }
+
     func testParseEncodedRejectsCanonicalHex() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x42, count: 32))
         let canonical = try address.canonicalHex()

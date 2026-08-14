@@ -9918,7 +9918,7 @@ mod tests {
     #[test]
     fn asset_home_proved_state_coverage_overlay_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -10197,7 +10197,7 @@ mod tests {
     fn asset_home_proved_settlement_overlay_dvp_global_bindings_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
@@ -11493,7 +11493,7 @@ mod tests {
     fn global_asset_transfer_alias_binding_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -11552,7 +11552,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -11593,7 +11593,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -11617,7 +11617,7 @@ mod tests {
     #[test]
     fn asset_home_coverage_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -11631,7 +11631,7 @@ mod tests {
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -11655,7 +11655,7 @@ mod tests {
     #[test]
     fn global_asset_mint_to_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -11694,7 +11694,7 @@ mod tests {
     #[test]
     fn global_asset_burn_from_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -11739,7 +11739,7 @@ mod tests {
     #[test]
     fn global_asset_mint_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -11778,7 +11778,7 @@ mod tests {
     #[test]
     fn global_asset_burn_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -11818,7 +11818,7 @@ mod tests {
     fn global_asset_transfer_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -11958,7 +11958,7 @@ mod tests {
     #[test]
     fn global_asset_explicit_dataspace_scoped_mint_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("sbp");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -12007,7 +12007,7 @@ mod tests {
     #[test]
     fn global_asset_explicit_dataspace_scoped_burn_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("sbp");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -12050,7 +12050,7 @@ mod tests {
     fn global_asset_explicit_dataspace_scoped_transfer_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("sbp");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -12093,7 +12093,7 @@ mod tests {
     #[test]
     fn global_asset_zk_registration_from_private_authority_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -13140,7 +13140,7 @@ mod tests {
     #[test]
     fn asset_home_coverage_burn_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -13154,7 +13154,7 @@ mod tests {
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13195,7 +13195,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13236,7 +13236,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13267,7 +13267,7 @@ mod tests {
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13327,7 +13327,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13369,7 +13369,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13410,7 +13410,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13451,7 +13451,7 @@ mod tests {
                 bob_id,
             ))],
         );
-        let mut state = state_with_bound_numeric_asset_definition(
+        let state = state_with_bound_numeric_asset_definition(
             &asset_definition,
             "pkr#paynet",
             "pkr",
@@ -13476,7 +13476,7 @@ mod tests {
     fn known_opaque_global_asset_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -13526,7 +13526,7 @@ mod tests {
     #[test]
     fn known_opaque_global_asset_mint_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -13574,7 +13574,7 @@ mod tests {
     #[test]
     fn known_opaque_global_asset_mint_with_stored_private_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (_dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -13998,7 +13998,7 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"router::uaid-bound-sender"));
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+        let (dataspace_id, _lane_id, dataspace_catalog, lane_catalog, router) =
             routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(

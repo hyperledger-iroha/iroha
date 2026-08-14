@@ -1,23 +1,23 @@
 //! Guard directory snapshot helpers.
 #![allow(unexpected_cfgs)]
-use std::{
-    collections::{HashMap, HashSet},
-    convert::TryFrom,
-    fs,
-    io::{self, Read as _},
-    path::Path,
-};
-use blake3::Hasher as Blake3Hasher;
-use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
-};
-use soranet_pq::MlDsaSuite;
 use crate::{
     signature::ed25519::{Ed25519Sha512, PublicKey as Ed25519PublicKey},
     soranet::certificate::{
         CertificateValidationPhase, RelayCertificateBundleV2, RelayCertificateV2,
         SRC_V2_MAX_BUNDLE_BYTES,
     },
+};
+use blake3::Hasher as Blake3Hasher;
+use norito::{
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
+};
+use soranet_pq::MlDsaSuite;
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryFrom,
+    fs,
+    io::{self, Read as _},
+    path::Path,
 };
 const SRC_V2_ISSUER_FINGERPRINT_DOMAIN: &[u8] = b"soranet.src.v2.issuer";
 const GUARD_DIRECTORY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"soranet.guard-directory.snapshot.v2";

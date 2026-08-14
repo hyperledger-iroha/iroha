@@ -1,4 +1,5 @@
 //! Type-safe native `SoraFS` reputation-journal transaction and query helpers.
+use super::{Client, QueryError, QueryResult};
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha_data_model::{
     isi::sorafs::{
@@ -19,7 +20,6 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
-use super::{Client, QueryError, QueryResult};
 fn validate_entry_for_transaction(
     client: &Client,
     entry: &ReputationJournalEntryV1,
@@ -254,7 +254,15 @@ impl Client {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use super::*;
+    use crate::{
+        client::evidence_http_tests::{
+            SnapshotStore, base_url, client_with_base_url, mark_data_model_compatible,
+            with_mock_http,
+        },
+        http::{Response as HttpResponse, StatusCode},
+        http_default::RequestSnapshot,
+    };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
@@ -280,15 +288,7 @@ mod tests {
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
     };
     use iroha_version::codec::DecodeVersioned as _;
-    use super::*;
-    use crate::{
-        client::evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, mark_data_model_compatible,
-            with_mock_http,
-        },
-        http::{Response as HttpResponse, StatusCode},
-        http_default::RequestSnapshot,
-    };
+    use std::sync::{Arc, Mutex};
     const SOURCE_TIME_MS: u64 = 1_700_000_000_000;
     fn policy(authority: &AccountId) -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {

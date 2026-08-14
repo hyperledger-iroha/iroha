@@ -6,6 +6,7 @@
 //! resulting 32-byte key material is suitable for ChaCha20-Poly1305 while the
 //! secondary output provides a deterministic re-key secret so callers can rotate
 //! envelopes without advertising new long-term public keys.
+use crate::kex::is_x25519_low_order_public_key;
 use core::{fmt, str::FromStr};
 use hkdf::Hkdf;
 use rand_core::TryCryptoRng;
@@ -17,7 +18,6 @@ use soranet_pq::{
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-use crate::kex::is_x25519_low_order_public_key;
 const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:transcript-v1";
 const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:transcript-v1";
 const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:transcript-v1";
@@ -691,11 +691,11 @@ fn validate_kyber_ciphertext_not_all_zero(kyber_ciphertext: &[u8]) -> Result<(),
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
     use zeroize::Zeroize as _;
-    use super::*;
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;

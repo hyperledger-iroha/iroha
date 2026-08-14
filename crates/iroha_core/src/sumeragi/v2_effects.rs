@@ -1876,10 +1876,18 @@ impl RecoveredDecisionFetchResponseCandidateV1 {
         self.response_hash
     }
     /// Return the recovered Fetch round.
+    #[allow(
+        dead_code,
+        reason = "reviewed recovered-response inspection seam retained for selector diagnostics"
+    )]
     pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
     /// Return the recovered Fetch subject.
+    #[allow(
+        dead_code,
+        reason = "reviewed recovered-response inspection seam retained for selector diagnostics"
+    )]
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
@@ -3778,48 +3786,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
         RecoveredDecisionFetchRequestRegistrationErrorV1,
     > {
-        if self.output_guard.restart_required()
-            || self.fatal_reason.is_some()
-            || !owner.validates_exact_executor_context(&self.context, &self.requester)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
-        }
-        if self.validated_certified_request_presence().is_err() {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
-        }
-        let key = owner.dispatch_key();
-        let request_hash = owner.request_hash();
-        if self
-            .outstanding_requests
-            .len()
-            .checked_add(self.recovered_decision_fetches.len())
-            .is_none_or(|owned| owned >= self.config.max_certified_requests)
-        {
+        if !self.recovered_decision_fetch_registration_available(&owner)? {
             return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
-        }
-        if !self.recovered_decision_fetches.is_empty()
-            || self
-                .recovered_decision_fetch_by_request
-                .contains_key(&request_hash)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
-        }
-        if self.certified_work.contains_key(&request_hash)
-            || self.outstanding_requests.contains(request_hash)
-            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
-            || self.pending_fetches.values().any(|pending| {
-                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
-            })
-            || self.recovered_decision_fetches.values().any(|existing| {
-                let projection = owner.candidate_projection();
-                existing.matches_body_coordinates(projection.round, projection.subject)
-            })
-            || self
-                .recovered_decision_fetch_by_request
-                .values()
-                .any(|existing| *existing == key)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
         }
         Ok(PreparedRecoveredDecisionFetchRequestRegistrationV1 {
             executor: self,
@@ -4069,6 +4037,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .map_err(|_| RuntimeClockError::ProducerReservation)?;
         self.runtime.arm_live_clocks(now)
     }
+    /// Prove runner setup has not crossed the one-shot live-clock boundary.
+    pub(in crate::sumeragi) fn lifecycle_live_clocks_are_unarmed(&self) -> bool {
+        !self.runtime.lifecycle_live_clocks_are_armed()
+    }
+
     /// Freeze the exact executor/runtime around one lifecycle-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
         &mut self,
@@ -4358,6 +4331,60 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Borrow the immutable context governing this executor height.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
+    }
+    /// Preflight one dedicated recovered request without retaining an executor borrow.
+    ///
+    /// `Ok(false)` is reserved for the configured request-capacity bound. Every
+    /// identity, index, coordinate, or existing dedicated-owner conflict stays
+    /// a typed error so the scheduler cannot hide corruption as backpressure.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<bool, RecoveredDecisionFetchRequestRegistrationErrorV1> {
+        if self.output_guard.restart_required()
+            || self.fatal_reason.is_some()
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
+        }
+        if self.validated_certified_request_presence().is_err() {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
+        }
+        let key = owner.dispatch_key();
+        let request_hash = owner.request_hash();
+        if !self.recovered_decision_fetches.is_empty()
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if self.certified_work.contains_key(&request_hash)
+            || self.outstanding_requests.contains(request_hash)
+            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+            || self.pending_fetches.values().any(|pending| {
+                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+            })
+            || self.recovered_decision_fetches.values().any(|existing| {
+                let projection = owner.candidate_projection();
+                existing.matches_body_coordinates(projection.round, projection.subject)
+            })
+            || self
+                .recovered_decision_fetch_by_request
+                .values()
+                .any(|existing| *existing == key)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
+        }
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Ok(false);
+        }
+        Ok(true)
     }
     /// Authenticate a certified-body request through the same production
     /// certificate verifier used for reducer ingress.

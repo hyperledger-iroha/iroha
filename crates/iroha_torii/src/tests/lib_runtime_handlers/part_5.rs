@@ -71,12 +71,13 @@ fn parse_signed_transaction_hash_rejects_invalid() {
     assert!(parse_signed_transaction_hash("not-a-hash").is_err());
 }
 #[tokio::test]
-async fn pipeline_status_string_query_preserves_all_decimal_hash() {
+async fn pipeline_status_string_query_preserves_decimal_hash_and_whitespace() {
     use axum::extract::FromRequestParts as _;
     let hash = "11".repeat(32);
+    let padded_hash = format!(" {hash} ");
     let request = axum::http::Request::builder()
         .uri(format!(
-            "/v1/pipeline/transactions/status?hash={hash}&scope=local"
+            "/v1/pipeline/transactions/status?hash=+{hash}+&scope=%20local%20"
         ))
         .body(())
         .expect("pipeline status request");
@@ -85,8 +86,8 @@ async fn pipeline_status_string_query_preserves_all_decimal_hash() {
         crate::NoritoStringQuery::<PipelineStatusQuery>::from_request_parts(&mut parts, &())
             .await
             .expect("pipeline status string query should decode");
-    assert_eq!(query.hash.as_deref(), Some(hash.as_str()));
-    assert_eq!(query.scope.as_deref(), Some("local"));
+    assert_eq!(query.hash.as_deref(), Some(padded_hash.as_str()));
+    assert_eq!(query.scope.as_deref(), Some(" local "));
 }
 #[tokio::test]
 async fn pipeline_status_handler_returns_queued() {

@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn stable_wire_id_remapping_preserves_every_codec_byte_path() {
         let typed = apply_registrars(ALL_REGISTRARS.iter().copied());
-        let remapped = with_stable_ids(typed.clone());
+        let remapped = wire_ids::apply(typed.clone());
         for inventory in wire_ids::ALL {
             let type_name = (inventory.type_name)();
             let before = typed

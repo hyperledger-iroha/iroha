@@ -25,6 +25,9 @@ def _canonical_owner_literal(domain: str = "wonderland") -> str:
 
 
 CANONICAL_AUTHORITY = _canonical_owner_literal()
+CANONICAL_AUTHORITY_HEADER = AccountAddress.parse_encoded(
+    CANONICAL_AUTHORITY, expected_discriminant=0x02F1
+).canonical_hex()
 GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 GOVERNANCE_AUTH = ToriiCanonicalRequestAuth(
@@ -593,7 +596,7 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
         expected["network_id"] = GOVERNANCE_NETWORK_ID.literal
         assert "chain_id" not in expected
     if method_name in _GOVERNANCE_CANONICAL_AUTH_METHODS:
-        assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_AUTHORITY
+        assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_AUTHORITY_HEADER
         assert "X-Iroha-Signature" in session.calls[0]["headers"]
     if method_name == "governance_submit_plain_ballot":
         expected["duration_blocks"] = str(payload["duration_blocks"])

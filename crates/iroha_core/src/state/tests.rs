@@ -71,7 +71,6 @@ use iroha_data_model::{
         PublicLaneUnbonding, RemoteSpendIntent, SpendOp, TouchManifest,
     },
     peer::PeerId,
-    prelude::*,
     proof::{ProofId, ProofRecord, ProofStatus},
     query::{
         dsl::CompoundPredicate,
@@ -8997,7 +8996,7 @@ fn autoscale_cold_window_stages_irreversible_drain_without_geometry_change() {
 }
 #[test]
 fn pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_change() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     let parent_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
     install_default_autoscale_test_nexus(&mut state, "install autoscale test nexus");
     state
@@ -13383,7 +13382,7 @@ fn autoscale_transition_adds_managed_elastic_lane_for_public_base_profile() {
 }
 #[test]
 fn autoscale_transition_fails_closed_for_restricted_base_profile() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     let restricted_base = LaneConfig {
         visibility: LaneVisibility::Restricted,
         lane_type: Some("private-regulated".to_owned()),
@@ -13843,7 +13842,7 @@ fn apply_autoscale_lane_lifecycle_rejects_transition_plan_mismatch() {
 }
 #[test]
 fn apply_autoscale_lane_lifecycle_rejects_transition_capacity_mismatch() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     install_default_autoscale_test_nexus(
         &mut state,
         "apply scale-out capacity mismatch test nexus config",
@@ -13883,7 +13882,7 @@ fn apply_autoscale_lane_lifecycle_rejects_transition_capacity_mismatch() {
         "scale-out capacity mismatch must leave the catalog unchanged"
     );
     assert!(state_block.pending_autoscale_lifecycle.is_none());
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     install_default_autoscale_test_nexus(
         &mut state,
         "apply scale-in capacity mismatch test nexus config",
@@ -14440,7 +14439,7 @@ fn autoscale_transition_failed_internal_lifecycle_does_not_record_cooldown() {
 }
 #[test]
 fn autoscale_transition_scale_out_requires_complete_historical_window() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     install_default_autoscale_test_nexus(
         &mut state,
         "apply autoscale history guard test nexus config",
@@ -14622,11 +14621,6 @@ fn autoscale_transition_scale_out_rejects_runtime_max_lanes_above_safety_cap() {
         nexus.autoscale.last_transition_height, 0,
         "invalid runtime lane bounds must not record an autoscale transition"
     );
-}
-#[derive(Clone, Copy)]
-enum AutoscaleElasticRangeDirection {
-    ScaleOut,
-    ScaleIn,
 }
 include!("autoscale_elastic_range_corruption_tests.rs");
 #[test]
@@ -28611,7 +28605,7 @@ fn canonical_reset_filters_same_incarnation_certified_lane_block_snapshots() {
 }
 #[test]
 fn lane_lifecycle_same_lane_policy_change_ignores_stale_direct_application_marker_after_reset() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     let reset_lane_id = LaneId::new(1);
     let lane1_config = LaneConfig {
         id: reset_lane_id,
@@ -31992,7 +31986,7 @@ fn sample_verified_lane_relay_record_for_merge_candidate_test()
 }
 #[test]
 fn record_lane_relay_persists_and_deduplicates() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -32031,7 +32025,7 @@ fn transaction_relay_registration_authenticates_valid_committee_qc() {
 }
 #[test]
 fn record_lane_relay_uses_signed_state_only() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -32042,7 +32036,7 @@ fn record_lane_relay_uses_signed_state_only() {
 }
 #[test]
 fn record_lane_relay_rejects_invalid_envelope() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -32076,7 +32070,7 @@ fn record_lane_relay_rejects_far_future_global_proposal_height() {
 }
 #[test]
 fn record_lane_relay_stores_pending_without_fastpq_proof() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     ensure_merge_carrier_parent_for_test(&state);
     let mut envelope =
@@ -32226,7 +32220,7 @@ fn lane_relay_store_namespaces_reused_heights_by_incarnation() {
 fn record_lane_relay_rejects_identity_drift_during_pending_upgrade() {
     let _status_guard = crate::sumeragi::status::lane_relay_test_guard();
     crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     ensure_merge_carrier_parent_for_test(&state);
     let descriptor_a = Hash::new(b"record-lane-relay-descriptor-a");
@@ -32272,7 +32266,7 @@ fn record_lane_relay_rejects_identity_drift_during_pending_upgrade() {
 }
 #[test]
 fn record_lane_relay_rejects_invalid_fastpq_proof() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -33395,7 +33389,7 @@ fn record_lane_relay_rejects_when_nexus_disabled() {
 }
 #[test]
 fn record_lane_relay_rejects_without_finality_authority() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -33407,7 +33401,7 @@ fn record_lane_relay_rejects_without_finality_authority() {
 }
 #[test]
 fn record_lane_relay_rejects_stale_relay() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
     ensure_merge_carrier_parent_for_test(&state);
     let first_relay = seed_effect_authenticated_relay_for_merge_test(
@@ -33440,7 +33434,7 @@ fn record_lane_relay_rejects_stale_relay() {
 }
 #[test]
 fn record_lane_relay_accepts_out_of_order_future_relay_but_merge_waits_for_gap() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
     ensure_merge_carrier_parent_for_test(&state);
     seed_committed_height_for_state_test(&state, 2);
@@ -33513,7 +33507,7 @@ fn record_lane_relay_accepts_out_of_order_future_relay_but_merge_waits_for_gap()
 }
 #[test]
 fn record_lane_relay_rejects_conflicting_relay() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -33545,7 +33539,7 @@ fn record_lane_relay_rejects_conflicting_relay() {
 }
 #[test]
 fn record_lane_relay_rejects_dataspace_mismatch() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -33561,7 +33555,7 @@ fn record_lane_relay_rejects_dataspace_mismatch() {
 }
 #[test]
 fn record_lane_relay_rejects_finality_artifact_hash_mismatch() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs);
@@ -33578,7 +33572,7 @@ fn record_lane_relay_rejects_finality_artifact_hash_mismatch() {
 }
 #[test]
 fn record_lane_relay_rejects_finality_authority_height_mismatch() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -33624,7 +33618,7 @@ fn record_lane_relay_rejects_unsupported_finality_authority_version() {
 }
 #[test]
 fn record_lane_relay_rejects_finality_statement_proof_mismatch() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -36337,7 +36331,7 @@ fn authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane() {
 }
 #[test]
 fn record_lane_relay_builds_merge_candidate_for_single_lane() {
-    let (state, validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
+    let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state();
     let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
     ensure_merge_carrier_parent_for_test(&state);
     let envelope = seed_effect_authenticated_relay_for_merge_test(
@@ -37051,7 +37045,7 @@ fn da_receipt_cursors_guard_regressions() {
 }
 #[test]
 fn genesis_allows_missing_shard_cursor_without_da_bundle() {
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
     let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, None)
@@ -37066,7 +37060,7 @@ fn genesis_allows_missing_shard_cursor_without_da_bundle() {
 }
 #[test]
 fn touched_lane_without_da_bundle_allows_missing_cursor() {
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
     let genesis_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, None)
@@ -37086,7 +37080,7 @@ fn touched_lane_without_da_bundle_allows_missing_cursor() {
 }
 #[test]
 fn touched_lane_with_empty_da_bundle_requires_cursor() {
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
     let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, None)
@@ -37121,7 +37115,7 @@ fn missing_shard_cursor_blocks_touched_lane_when_da_bundle_present() {
     };
     let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1.clone()]).expect("lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -38545,7 +38539,7 @@ fn da_bundle_indexes_are_not_committed_when_block_height_mismatches() {
 }
 #[test]
 fn missing_insert_world_only_commit_does_not_publish_block_metadata() {
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut state_block = state.block(header);
@@ -39321,7 +39315,7 @@ fn apply_without_execution_canonicalizes_commit_roster_signatures() {
     let _guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let roster = vec![
@@ -39412,7 +39406,7 @@ fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_hi
     let _guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let (state, kura) = blank_test_state_with_kura();
+    let (state, _kura) = blank_test_state_with_kura();
     let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let roster = vec![
@@ -39626,7 +39620,7 @@ fn commit_roster_record_persists_sidecar_to_kura() {
     let _guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let (_temp_dir, kura, state, block_hash, commit_cert, checkpoint) =
+    let (_temp_dir, kura, state, _block_hash, commit_cert, checkpoint) =
         commit_roster_sidecar_fixture();
     state
         .record_commit_roster(&commit_cert, &checkpoint, None)
@@ -39655,7 +39649,7 @@ fn commit_roster_with_sidecar_keeps_hot_path_journal_in_memory() {
     let _guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let (_temp_dir, kura, state, block_hash, commit_cert, checkpoint) =
+    let (_temp_dir, kura, state, _block_hash, commit_cert, checkpoint) =
         commit_roster_sidecar_fixture();
     assert!(
         state
@@ -40715,7 +40709,7 @@ fn block_and_revert_rewinds_da_indexes() {
 }
 #[test]
 fn apply_without_execution_records_da_cursor_errors_without_panic() {
-    let (mut state, kura) = blank_test_state_with_kura();
+    let (mut state, _kura) = blank_test_state_with_kura();
     let lane_count = nonzero!(1_u32);
     let catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);

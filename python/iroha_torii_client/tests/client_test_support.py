@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_OWNER_HEADER = "0x02000120" + "00" * 32
 
 
 def authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:

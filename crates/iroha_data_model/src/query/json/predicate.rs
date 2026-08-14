@@ -4,14 +4,14 @@
 //! [`CompoundPredicate`] values.  The structures keep field ordering stable so
 //! serialised predicates are deterministic and easy to compare in tests or
 //! caches.
+use crate::query::dsl::CompoundPredicate;
+use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use std::{
     cell::Cell,
     string::{String, ToString},
     vec::Vec,
 };
-use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
-use crate::query::dsl::CompoundPredicate;
 #[derive(Clone, Copy)]
 struct PredicateJsonExecutionBounds {
     body_bytes: usize,
@@ -696,12 +696,11 @@ mod tests {
     }
     #[test]
     fn predicate_wire_decoders_have_no_borrowed_deep_clone_path() {
-        for source in [include_str!("../dsl.rs"), include_str!("../dsl_fast.rs")] {
-            assert!(!source.contains("PredicateJson::try_from_value(&value)"));
-            assert!(!source.contains(
-                "PredicateJsonPayload::from_predicate(&predicate)\n                    .as_str()",
-            ));
-        }
+        let source = include_str!("../dsl_fast.rs");
+        assert!(!source.contains("PredicateJson::try_from_value(&value)"));
+        assert!(!source.contains(
+            "PredicateJsonPayload::from_predicate(&predicate)\n                    .as_str()",
+        ));
     }
     #[test]
     fn predicate_empty_defaults_to_pass() {

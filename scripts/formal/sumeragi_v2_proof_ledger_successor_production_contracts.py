@@ -117,6 +117,9 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     runner_path, runner_source = load(
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
+    ordinary_consumer_path, ordinary_consumer_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"
+    )
     if runner_source:
         for item_name, expected_sha256 in (
             _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256.items()
@@ -216,7 +219,7 @@ drain_v2_ingress(
     &mut executor,
     &mut services,
     &mut lane_work,
-    output_guard.as_ref(),
+    &output_guard,
     kura.as_ref(),
     &common_config.key_pair,
     block_sync_server
@@ -430,8 +433,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "fn drain_v2_ingress(",
             "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
         )
+        historical_ingress += ordinary_consumer_source
         require_tokens(
-            runner_path,
+            ordinary_consumer_path,
             "historical ingress routing",
             historical_ingress,
             (
@@ -442,7 +446,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
         )
         require_token_count(
-            runner_path,
+            ordinary_consumer_path,
             "historical ingress routing omits production refinement tokens when either reviewed route changes",
             historical_ingress,
             "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
@@ -666,7 +670,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
                 "CanonicalIdentityProjection::zero()",
                 "drop(authority);",
-                "pub(crate) fn activate_recovered_complete_tip_v2_height(",
+                "pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height(",
                 "activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())",
             ),
         )
@@ -1334,4 +1338,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 errors.append(
                     f"{release_path}: production refinement test must be pinned exactly once: {test}"
                 )
+    errors.extend(
+        _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root)
+    )
     return errors

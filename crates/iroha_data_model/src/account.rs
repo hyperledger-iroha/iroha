@@ -1,15 +1,4 @@
 //! Structures, traits and impls related to `Account`s.
-use core::fmt;
-use std::{format, str::FromStr, string::String, vec::Vec};
-pub use admission::{
-    ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
-    DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
-};
-use iroha_crypto::{Hash, PublicKey};
-use iroha_data_model_derive::{IdEqOrdHash, model};
-use iroha_primitives::json::Json;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 pub use self::{
     model::*,
     recovery::{
@@ -21,6 +10,17 @@ pub use self::{
         AccountRekeyTransitionProvenance,
     },
 };
+pub use admission::{
+    ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
+    DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
+};
+use core::fmt;
+use iroha_crypto::{Hash, PublicKey};
+use iroha_data_model_derive::{IdEqOrdHash, model};
+use iroha_primitives::json::Json;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{format, str::FromStr, string::String, vec::Vec};
 pub mod address;
 pub mod admission;
 pub mod controller;
@@ -29,8 +29,6 @@ pub mod curve;
 mod i105_json;
 pub mod recovery;
 pub mod rekey;
-pub use address::{AccountAddress, AccountAddressError, AccountAddressErrorCode};
-pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref},
@@ -39,6 +37,8 @@ use crate::{
     name::Name,
     nexus::UniversalAccountId,
 };
+pub use address::{AccountAddress, AccountAddressError, AccountAddressErrorCode};
+pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
 #[model]
 mod model {
     use super::*;
@@ -149,18 +149,38 @@ impl norito::json::JsonDeserialize for AccountId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        reserve_account_literal_json_decode(value.len())?;
-        AccountId::parse_encoded(&value)
-            .map(ParsedAccountId::into_account_id)
-            .map_err(|error| {
-                if error.reason() == address::AccountAddressErrorCode::DecodeResourceLimit.as_str()
-                {
-                    norito::json::Error::DecodeResourceLimit
-                } else {
-                    norito::json::Error::Message("invalid account identifier".to_owned())
-                }
-            })
+        account_id_from_json_str(&value)
     }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let norito::json::Value::String(value) = value else {
+            return Err(invalid_account_id_json());
+        };
+        account_id_from_json_str(value)
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        account_id_from_json_str(key)
+    }
+}
+
+#[cfg(feature = "json")]
+fn account_id_from_json_str(value: &str) -> Result<AccountId, norito::json::Error> {
+    reserve_account_literal_json_decode(value.len())?;
+    AccountId::parse_encoded(value)
+        .map(ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            if error.reason() == address::AccountAddressErrorCode::DecodeResourceLimit.as_str() {
+                norito::json::Error::DecodeResourceLimit
+            } else {
+                invalid_account_id_json()
+            }
+        })
+}
+
+#[cfg(feature = "json")]
+fn invalid_account_id_json() -> norito::json::Error {
+    norito::json::Error::Message("invalid account identifier".to_owned())
 }
 #[cfg(feature = "json")]
 pub(super) fn reserve_account_literal_json_decode(
@@ -592,10 +612,7 @@ impl AccountId {
     ///
     /// Propagates [`ParseError`] when the textual representation is invalid.
     pub fn parse_encoded(input: &str) -> Result<ParsedAccountId, ParseError> {
-        let (account_id, source) = Self::parse_internal(input)?;
-        let canonical = account_id
-            .canonical_i105()
-            .map_err(|err| ParseError::new(err.code_str()))?;
+        let (account_id, source, canonical) = Self::parse_internal(input)?;
         Ok(ParsedAccountId {
             account_id,
             canonical,
@@ -610,7 +627,7 @@ impl AccountId {
     pub fn canonicalize(input: &str) -> Result<String, ParseError> {
         Self::parse_encoded(input).map(|parsed| parsed.canonical)
     }
-    fn parse_internal(input: &str) -> Result<(Self, AccountAddressSource), ParseError> {
+    fn parse_internal(input: &str) -> Result<(Self, AccountAddressSource, String), ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
@@ -620,7 +637,9 @@ impl AccountId {
         }
         Self::parse_address_literal(trimmed)
     }
-    fn parse_address_literal(input: &str) -> Result<(Self, AccountAddressSource), ParseError> {
+    fn parse_address_literal(
+        input: &str,
+    ) -> Result<(Self, AccountAddressSource, String), ParseError> {
         let expected_prefix = address::chain_discriminant();
         match AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)) {
             Ok(address) => {
@@ -633,7 +652,11 @@ impl AccountId {
                 let controller = address
                     .to_account_controller()
                     .map_err(|err| ParseError::new(err.code_str()))?;
-                Ok((Self { controller }, AccountAddressSource::Encoded))
+                Ok((
+                    Self { controller },
+                    AccountAddressSource::Encoded,
+                    canonical,
+                ))
             }
             Err(
                 AccountAddressError::MissingI105Sentinel
@@ -845,10 +868,10 @@ impl fmt::Display for NewAccount {
 }
 #[cfg(test)]
 mod account_id_parsing_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{core::decode_from_bytes, to_bytes};
     use super::*;
     use crate::DomainId;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::{core::decode_from_bytes, to_bytes};
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
     }
@@ -1189,9 +1212,9 @@ pub mod prelude {
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use super::*;
     use crate::{name::Name, nexus::DataSpaceId};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked account fixture keypair")
     }
@@ -1381,8 +1404,6 @@ mod tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::codec::{decode_adaptive, encode_adaptive};
     use super::*;
     use crate::{
         account::address,
@@ -1391,6 +1412,8 @@ mod json_tests {
         nexus::{DataSpaceId, UniversalAccountId},
         prelude::Register,
     };
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{decode_adaptive, encode_adaptive};
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
     }
@@ -1428,6 +1451,47 @@ mod json_tests {
         assert_eq!(json, expected);
         let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
         assert_eq!(decoded.controller(), id.controller());
+    }
+    #[test]
+    fn account_id_value_and_map_key_json_decoders_are_borrowed_and_measured() {
+        use norito::json::JsonDeserialize as _;
+
+        let _guard = guard_chain_discriminant();
+        let id = AccountId::new(checked_random_keypair().public_key().clone());
+        let literal = id.canonical_i105().expect("i105 encoding");
+        let value = norito::json::Value::String(literal.clone());
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let (_, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+            AccountId::json_from_value(&value)
+        });
+        let exact = usage.total_allocated_bytes();
+        for decode in [
+            AccountId::json_from_value(&value),
+            AccountId::json_from_map_key(&literal),
+        ] {
+            assert_eq!(decode.expect("borrowed AccountId JSON decode"), id);
+        }
+        for decode in [
+            norito::core::with_decode_limits_measured(limits(exact), || {
+                AccountId::json_from_value(&value)
+            }),
+            norito::core::with_decode_limits_measured(limits(exact), || {
+                AccountId::json_from_map_key(&literal)
+            }),
+        ] {
+            assert_eq!(decode.0.expect("exact AccountId budget"), id);
+            assert_eq!(decode.1.total_allocated_bytes(), exact);
+        }
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            AccountId::json_from_map_key(&literal)
+        });
+        assert!(matches!(
+            decoded,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert!(usage.total_allocated_bytes() <= exact - 1);
     }
     #[test]
     fn account_id_json_roundtrips_large_multisig_as_canonical_i105() {

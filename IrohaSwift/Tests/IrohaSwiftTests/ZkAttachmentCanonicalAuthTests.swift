@@ -96,12 +96,15 @@ final class ZkAttachmentCanonicalAuthTests: XCTestCase {
             let (method, encodedPath, body) = expectation
             XCTAssertEqual(request.httpMethod, method)
             XCTAssertTrue(request.url!.absoluteString.contains(encodedPath))
-            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), accountId)
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                try AccountAddress.parseEncoded(accountId).canonicalHex()
+            )
             let signature = try XCTUnwrap(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
             )
             let signatureData = try XCTUnwrap(Data(base64Encoded: signature))
-            let message = ToriiCanonicalRequest.signatureMessage(
+            let message = try ToriiCanonicalRequest.signatureMessage(
                 networkId: TestNetworkIds.canonical,
                 method: method,
                 url: request.url!,
@@ -109,7 +112,7 @@ final class ZkAttachmentCanonicalAuthTests: XCTestCase {
                 timestampMs: timestampMs,
                 nonce: nonce
             )
-            let foreign = ToriiCanonicalRequest.signatureMessage(
+            let foreign = try ToriiCanonicalRequest.signatureMessage(
                 networkId: TestNetworkIds.other,
                 method: method,
                 url: request.url!,

@@ -1,16 +1,16 @@
 //! Account controller policies (single key and multisignature).
 #![allow(clippy::useless_let_if_seq)]
-use core::fmt;
-use std::vec::Vec;
+use super::curve::CurveId;
 use blake2::{
     Blake2bMac,
     digest::{Mac, consts::U32},
 };
+use core::fmt;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use std::vec::Vec;
 use thiserror::Error;
-use super::curve::CurveId;
 /// Controller responsible for authorising account actions.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -125,22 +125,32 @@ impl MultisigPolicy {
             if member.weight() == 0 {
                 return Err(MultisigPolicyError::MemberWeightZero);
             }
+            member
+                .public_key()
+                .try_to_bytes()
+                .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
         }
-        let mut keyed: Vec<(Vec<u8>, MultisigMember)> = members
-            .into_iter()
-            .map(|member| member.canonical_sort_key().map(|key| (key, member)))
-            .collect::<Result<_, _>>()?;
-        keyed.sort_by(|left, right| left.0.cmp(&right.0));
-        let mut deduped = Vec::with_capacity(keyed.len());
-        let mut previous_key: Option<Vec<u8>> = None;
-        for (key, member) in keyed {
-            if previous_key.as_ref().is_some_and(|prev| prev == &key) {
-                return Err(MultisigPolicyError::DuplicateMember);
-            }
-            previous_key = Some(key);
-            deduped.push(member);
+        let mut members = members;
+        members.sort_unstable_by(|left, right| {
+            let (left_algorithm, left_payload) = left
+                .public_key()
+                .try_to_bytes()
+                .expect("multisig member key was validated above");
+            let (right_algorithm, right_payload) = right
+                .public_key()
+                .try_to_bytes()
+                .expect("multisig member key was validated above");
+            left_algorithm
+                .as_static_str()
+                .cmp(right_algorithm.as_static_str())
+                .then_with(|| left_payload.cmp(right_payload))
+        });
+        if members
+            .windows(2)
+            .any(|pair| pair[0].public_key() == pair[1].public_key())
+        {
+            return Err(MultisigPolicyError::DuplicateMember);
         }
-        let members = deduped;
         let total_weight = members
             .iter()
             .map(|member| u32::from(member.weight()))
@@ -303,17 +313,6 @@ impl MultisigMember {
         self.try_algorithm()
             .expect("validated multisig member public key must remain well-formed")
     }
-    fn canonical_sort_key(&self) -> Result<Vec<u8>, MultisigPolicyError> {
-        let (algorithm, payload) = self
-            .public_key
-            .try_to_bytes()
-            .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
-        let mut key = Vec::with_capacity(algorithm.as_static_str().len() + 1 + payload.len());
-        key.extend_from_slice(algorithm.as_static_str().as_bytes());
-        key.push(0);
-        key.extend_from_slice(payload);
-        Ok(key)
-    }
 }
 impl TryFrom<(&PublicKey, u16)> for MultisigMember {
     type Error = MultisigPolicyError;
@@ -432,8 +431,8 @@ fn cbor_write_len(buffer: &mut Vec<u8>, major: u8, len: usize) {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }

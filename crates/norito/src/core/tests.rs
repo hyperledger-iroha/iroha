@@ -1,11 +1,11 @@
 //! Focused tests for the Norito core codec.
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use crc64fast::Digest;
 use super::*;
 use crate::{
     NoritoDeserialize, NoritoSerialize, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
+use crc64fast::Digest;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[test]
 fn encoder_sink_paths_produce_identical_bytes() {
     let value = 0xA1B2_C3D4_E5F6_0718_u64;
@@ -1762,7 +1762,9 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
 }
 #[test]
 fn collection_and_map_encoded_lengths_match_payloads() {
-    use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
+    use std::collections::{
+        BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
+    };
     fn assert_lengths<T: NoritoSerialize>(value: &T) {
         let mut bytes = Vec::new();
         serialize_to_buffer(value, &mut bytes).expect("serialize value");

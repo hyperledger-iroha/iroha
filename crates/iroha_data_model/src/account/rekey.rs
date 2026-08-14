@@ -1,10 +1,4 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
-use core::fmt;
-use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
-use iroha_crypto::PublicKey;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use super::{Account, AccountId, Name};
 use crate::{
     alias_setup::AccountAliasName,
@@ -12,6 +6,12 @@ use crate::{
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
+use core::fmt;
+use iroha_crypto::PublicKey;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
+use thiserror::Error;
 /// Dataspace-scoped alias-domain segment used only inside account aliases.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -469,9 +469,9 @@ impl AccountRekeyRecord {
 }
 #[cfg(test)]
 mod rekey_record_tests {
+    use super::*;
     use iroha_crypto::KeyPair;
     use norito::codec::{DecodeAll, Encode};
-    use super::*;
     fn account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()

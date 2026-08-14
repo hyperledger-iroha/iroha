@@ -16,7 +16,10 @@ use crate::{
     },
     vega::{
         VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-        bulletproof_t256::{ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, ZkAmsT256BulletproofSuiteV1},
+        bulletproof_t256::{
+            SecretT256PointEncodingV1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            ZkAmsT256BulletproofSuiteV1, with_borrowed_t256_scalar_encoding_v1,
+        },
         sponge::{Keccak256, keccak256},
     },
 };
@@ -948,18 +951,20 @@ impl CrossFieldProverTranscriptV2 {
     }
 }
 impl ProverTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldProverTranscriptV2 {
-    fn push_scalar(&mut self, scalar: Scalar) -> Result<(), GeneralizedBulletproofErrorV1> {
-        self.state.push(0);
-        self.state.extend_from_slice(&scalar.to_le_bytes());
-        self.push_bytes_v2(&scalar.to_le_bytes())
+    fn push_scalar(&mut self, scalar: &Scalar) -> Result<(), GeneralizedBulletproofErrorV1> {
+        with_borrowed_t256_scalar_encoding_v1(scalar, |encoded| {
+            self.state.push(0);
+            self.state.extend_from_slice(encoded);
+            self.push_bytes_v2(encoded)
+        })
     }
-    fn push_point(&mut self, point: Point) -> Result<(), GeneralizedBulletproofErrorV1> {
-        let encoded = point
-            .to_non_identity_wire_bytes()
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointIdentity)?;
+    fn push_point(&mut self, point: &Point) -> Result<(), GeneralizedBulletproofErrorV1> {
+        let encoded = SecretT256PointEncodingV1::new(point)?;
         self.state.push(1);
-        self.state.extend_from_slice(&encoded);
-        self.push_bytes_v2(&encoded)
+        self.state.extend_from_slice(encoded.as_ref());
+        let result = self.push_bytes_v2(encoded.as_ref());
+        drop(encoded);
+        result
     }
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_challenge_v2(&mut self.state, &mut self.challenge_ordinal)

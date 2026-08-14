@@ -291,8 +291,8 @@ macro_rules! define_soranet_record_io_adapters {
             }
             #[cfg(test)]
             mod tests {
-                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
                 use super::*;
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
                 use $crate::{
                     SessionKey,
                     soranet::record::{

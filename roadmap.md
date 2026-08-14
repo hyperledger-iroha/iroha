@@ -1,17 +1,17 @@
 # Roadmap
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
-- Hold the fifth conflict-free (`U0`) integration merge uncommitted until MKHE
-  reaches an exact stable postimage. From that frozen tree, complete the final
-  governed-source/source-budget seal and authoritative full formal proof-ledger
-  checker, then prepare the signed merge commit. The bounded formal pass is
-  green, but it is not the full-checker receipt.
+- Freeze the shared worktree after the current optimization integration, then
+  complete the final governed-source/source-budget seal and authoritative full
+  formal proof-ledger checker before preparing a signed merge commit. Do not
+  treat validation from the earlier fifth integration merge as a receipt for
+  the current source tree.
 - After that freeze, use the official workflows to regenerate and check the
   JavaScript current-Rust-contract fixture and generated-artifact registry.
   Preserve the green SDK release guard after its end-to-end closure repin and
@@ -21,9 +21,34 @@ Completed history lives in [`status.md`](./status.md).
   generated outputs in a descendant. Refresh SF1 rows and projections only
   with an authorized council re-sign over the current manifest digest.
 - Reconcile the merged Cargo manifests with the immutable lock policy before
-  Cargo validation. `Cargo.lock` remains unchanged at SHA-256
-  `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`;
-  no authoritative current-merge Cargo validation is available.
+  authoritative workspace validation. Keep `Cargo.lock` unchanged unless a
+  reviewed lockfile update is supplied through the release process.
+- Finish borrowed, cache-/scratch-audited admission verification for default
+  w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
+  Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
+  with producer-specific semantic parity and cold-Kura bounds. Then rerun the
+  focused Rust suites and strict all-target Clippy from the frozen candidate.
+
+## Nexus topology model closure
+
+- Move physical validator/server membership, replication, privacy, DA, and
+  governance ownership into a dataspace-level manifest. The current V1 runtime
+  still projects several of these fields through lane configuration and lane
+  manifests; until that migration lands, enforce that every lane in one
+  dataspace has an identical projection of its owning dataspace's roster and
+  security policy.
+- Replace overloaded account-route strings with typed namespace and dataspace
+  match fields. Preserve `MusubiNamespaceBindingV1` as an explicit
+  namespace-to-home-dataspace binding and stop inferring either identity from a
+  shared textual suffix.
+- Before a Taira release claims `dpn`, `is`, `is2`, or `cbsi` as a live physical
+  dataspace, archive deployment evidence for its distinct validator/server
+  cohort, storage boundary, and dataspace manifest. A catalog entry or repeated
+  lane-manifest roster is insufficient evidence.
+- Expose each dataspace manifest's canonical validator-to-`PeerId`/Torii
+  bindings in operator status so rollout validation can prove disjoint machine
+  cohorts directly. The V1 gate can compare manifest validator-account rosters
+  and quorum projections, but account identities alone are not host evidence.
 
 ## Build-efficiency closeout
 
@@ -51,8 +76,8 @@ Completed history lives in [`status.md`](./status.md).
 
 Signed queries, ordinary transactions, peer authentication, core consensus
 preimages, NPoS and IVM VRF proofs, beacon helpers, SoraFS provider PoR VRF
-submissions, and their durable VRF snapshots now use the exact genesis-derived
-`NetworkId`. Signed
+submissions, SoraFS reputation-read authentication, and their durable VRF
+snapshots now use the exact genesis-derived `NetworkId`. Signed
 requests are fresh, fail closed on replay, and use one-shot owned transports;
 genesis transactions have a separate explicit domain and ordinary admission
 rejects it after initialization. Complete DAT-17 by replacing the remaining
@@ -145,21 +170,46 @@ to:
   physical ordinals: ordinary dequeue and lifecycle discovery share the same
   ready-source/lane, strict-before-dependency selector, and the lifecycle path
   returns a recovered selector only when that exact fair winner owns the
-  authenticated response family. Complete the unified Completion/Ingress
-  driver before cutover. It must retain ordinary pass-through ownership and a
-  stateful current-height Certified-Serve preparation/capacity-wait token,
-  because Serve admission can create off-queue debt and cannot be represented
-  by the inert queue probe alone. It must also classify all recovered Ready
-  work before consuming a runner turn and retain Apply deferral plus guarded
-  Sign/Fetch completions internally. The runner's freshly opened body store
-  must first enter a
+  authenticated response family. A lifecycle-owned unified Completion/Ingress
+  turn driver prerequisite is now landed around the real borrow-bound runner
+  cursor, but the production runner loop deliberately does not call it yet.
+  It retains Apply deferral, guarded Sign/Fetch completions, and recovered
+  ingress capacity waits internally; takes at most one physical Completion
+  head; classifies the complete Ready census; and returns the unchanged cursor
+  only when no fair ingress winner exists. Its queue-owned ordinary ingress
+  prerequisite now freezes that exact fair winner, prepares current-height
+  Certified-Serve state under the legacy lock/transaction discipline, and
+  physically removes the same occurrence into an opaque fail-stop token.
+  Backpressure retains the carrier plus off-queue debt, while recovered
+  Decision-Fetch retains its queue witness through Phase A. Mixed
+  Apply/Sign/Fetch Ready rows now freeze one composite worker/output-capacity
+  census and transfer only the ranked row's typed reservation. A sealed
+  preactivation runner key now permits one callback over only the launched
+  executor and services while exact
+  output ownership, closed ingress, the retained observer, and unarmed clocks
+  hold before and after the callback. Recovered ProposalIntent ownership is
+  retained through cold adapter advancement and can clear its activation
+  blocker only by binding the matching reducer directive into a move-only
+  prepared runner state which ordinary and CompleteTip activation retain. The
+  production runner still needs to mint/use that state in place of its legacy
+  local-Proposal scheduler at the atomic cutover. An
+  armed non-permit fail-stop scope closes output on error or unwind without
+  retaining a read permit across nested service fail-stop code.
+  The ordinary token now enters the same private runner-owned post-dequeue
+  consumer used by the legacy loop, and the opaque `PendingKuraApply`
+  Decision-Fetch/WAL/runtime replay join is sealed through preactivation.
+  Before cutover, wire the preactivation key mint, add PendingKura's dedicated
+  no-clock lane-recovery/finalization state, and atomically replace the legacy
+  loop owner. The runner's
+  freshly opened body store must first enter a
   move-only quarantine that rejects any already promoted, rejected, or retired
   marker, then enter the sole production factory with an adapter-bound
   execution/storage seal. The quarantine's only consuming transition fixes
   finality filtering, WAL-authority filtering, semantic marker replay, and
   sealing with the same `V2ApplyService` the owner retains for launch. It has
   no root-reopen or raw validation-callback alternative. A private runner-only
-  permit now seals the prerequisite dependency/local-signer handoff, but its
+  permit now seals the prerequisite dependency/local-signer/authenticated-cadence handoff,
+  avoiding the uncommitted State placeholder at fresh height one, but its
   production mint remains intentionally unwired until the atomic runner
   cutover; launch will reject a different peer key or incorrect claimed
   validator position before gate/runtime creation. Authenticated height recovery now
@@ -169,6 +219,10 @@ to:
   retains the universal genesis account derived from its authenticated genesis
   key; the factory moves that account into its single replay/live service only
   after exact State/Kura Arc, network, storage, and startup-instance checks.
+  Verified live successors now retain that State-owned Kura identity and can
+  consume themselves into context, activation, and a rotating-policy lifecycle
+  storage authority; the runner remains intentionally unwired from this new
+  projection until the atomic owner switch.
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire

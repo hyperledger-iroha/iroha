@@ -1,6 +1,4 @@
 //! Exact operator-authentication client boundary tests.
-use std::sync::{Arc, Mutex};
-use crate::http::{Method as HttpMethod, Response, StatusCode};
 use super::evidence_http_tests::{
     SnapshotStore, base_url, client_with_base_url, respond_with, with_mock_http,
 };
@@ -8,6 +6,8 @@ use super::{
     HEADER_OPERATOR_NONCE, HEADER_OPERATOR_PUBLIC_KEY, HEADER_OPERATOR_SIGNATURE,
     HEADER_OPERATOR_TIMESTAMP_MS, checked_random_keypair,
 };
+use crate::http::{Method as HttpMethod, Response, StatusCode};
+use std::sync::{Arc, Mutex};
 #[test]
 fn operator_endpoint_requires_a_signing_key_before_dispatch() {
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));

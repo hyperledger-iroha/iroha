@@ -3963,11 +3963,11 @@ test("SoraFS reputation witness auth is exact and signed streams do not replay",
   const latest = await witnessClient.getSorafsReputationLatest({
     headers: {
       "X-Iroha-Witness": witness,
-      "X-Iroha-Account": "reputation-reader@sora",
+      "X-Iroha-Account": SAMPLE_ACCOUNT_ID,
     },
   });
   assert.equal(latest, null);
-  assert.equal(witnessCalls[0]?.init?.headers?.["X-Iroha-Witness"], witness);
+  assert.deepEqual([witnessCalls[0]?.init?.headers?.["X-Iroha-Witness"], witnessCalls[0]?.init?.headers?.["X-Iroha-Account"]], [witness, AccountAddress.parseEncoded(SAMPLE_ACCOUNT_ID).address.canonicalHex()]);
 
   await assert.rejects(
     () =>
@@ -21480,8 +21480,8 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
   for (const call of proofCalls) {
     assert.equal(call.init.redirect, "error");
     assert.equal(
-      Buffer.from(call.init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-      SAMPLE_ACCOUNT_ID,
+      call.init.headers["X-Iroha-Account"],
+      AccountAddress.parseEncoded(SAMPLE_ACCOUNT_ID).address.canonicalHex(),
     );
     assert.ok(call.init.headers["X-Iroha-Signature"]);
     assert.ok(call.init.headers["X-Iroha-Nonce"]);

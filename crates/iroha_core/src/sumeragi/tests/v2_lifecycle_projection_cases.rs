@@ -1059,7 +1059,7 @@ fn certified_serve_rejects_a_receipt_for_another_signed_request() {
     let (mut payload_store, _) =
         CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
             .expect("open payload store");
-    payload_store
+    let _ = payload_store
         .persist_pending(&first)
         .expect("persist first request");
     let second_receipt = payload_store
@@ -1269,7 +1269,7 @@ fn durable_open_prunes_authenticated_pending_store_only_orphans() {
     let admitted_receipt = payload_store
         .persist_pending(&admitted_request)
         .expect("persist ledger-backed request");
-    payload_store
+    let _ = payload_store
         .persist_pending(&orphan_request)
         .expect("persist payload-only crash tail");
     drop(payload_store);
@@ -1329,7 +1329,7 @@ fn durable_open_rejects_a_terminal_store_only_payload() {
     let pending = payload_store
         .persist_pending(&request)
         .expect("persist pending orphan");
-    payload_store
+    let _ = payload_store
         .persist_negative(
             pending.id(),
             CertifiedServePayloadNegativeOutcome::Failed(7),
@@ -1369,13 +1369,13 @@ fn durable_open_rejects_a_recovery_cut_from_another_same_context_store() {
     let second = fixture.authenticated_serve_request(3);
     let (mut first_store, _) = CertifiedServePayloadStoreV1::open(&first_root, &fixture.context)
         .expect("open first payload store");
-    first_store
+    let _ = first_store
         .persist_pending(&first)
         .expect("persist first-store payload");
     drop(first_store);
     let (mut second_store, _) = CertifiedServePayloadStoreV1::open(&second_root, &fixture.context)
         .expect("open second payload store");
-    second_store
+    let _ = second_store
         .persist_pending(&second)
         .expect("persist second-store payload");
     let body_store =
@@ -1461,7 +1461,7 @@ fn durable_open_applies_typed_negative_payload_store_ahead_cut() {
         coordinator.admit_certified_serve(&fixture.verified, &request, pending),
         Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
     ));
-    payload_store
+    let _ = payload_store
         .persist_negative(
             pending.id(),
             CertifiedServePayloadNegativeOutcome::Rejected(19),
@@ -1510,7 +1510,7 @@ fn durable_open_applies_completed_payload_store_ahead_cut() {
     let request = fixture.authenticated_serve_request_for(manifest.round, manifest.subject, 3);
     let mut body_store =
         V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
-    body_store
+    let _ = body_store
         .store(manifest.clone(), body.clone())
         .expect("persist canonical response body");
     let (mut payload_store, _) =
@@ -1542,7 +1542,7 @@ fn durable_open_applies_completed_payload_store_ahead_cut() {
     )
     .payload()
     .to_vec();
-    payload_store
+    let _ = payload_store
         .persist_completed(&request, &response)
         .expect("persist completed response metadata");
     drop(payload_store);
@@ -1675,7 +1675,7 @@ fn settled_completed_frame_persists_and_reopens_with_the_exact_replay_pair() {
     let request = fixture.authenticated_serve_request_for(manifest.round, manifest.subject, 3);
     let mut body_store =
         V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
-    body_store
+    let _ = body_store
         .store(manifest.clone(), body.clone())
         .expect("persist canonical response body");
     let (mut payload_store, _) =

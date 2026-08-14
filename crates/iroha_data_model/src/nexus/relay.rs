@@ -5,11 +5,6 @@
 //! relay payloads deterministically. Pending in-memory envelopes omit authority;
 //! authoritative use resolves the compact reference against Kura's verified
 //! Sumeragi-v2 finality artifact and checks the statement inclusion proof.
-use core::cmp::Ordering;
-use iroha_crypto::{Hash, HashOf, MerkleProof};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use crate::{
     asset::AssetDefinitionId,
     block::{
@@ -20,7 +15,12 @@ use crate::{
     peer::PeerId,
     prelude::Metadata,
 };
+use core::cmp::Ordering;
+use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use thiserror::Error;
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
 /// Prefix for contract-visible verified fee sponsor vault-allocation keys.
@@ -1417,10 +1417,6 @@ impl LaneRelayError {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
-    use iroha_primitives::numeric::Quantity;
     use super::*;
     use crate::{
         AccountId, NetworkId,
@@ -1432,6 +1428,10 @@ mod tests {
         },
         nexus::FeeDebitSource,
     };
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
+    use iroha_primitives::numeric::Quantity;
+    use std::collections::BTreeSet;
+    use std::num::NonZeroU64;
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
     }

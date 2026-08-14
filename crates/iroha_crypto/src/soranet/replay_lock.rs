@@ -42,8 +42,8 @@ fn lock_path(ledger_path: &Path) -> PathBuf {
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     #[test]
     fn ledger_lock_excludes_concurrent_owner_and_releases_on_drop() {
         let directory = tempdir().expect("temporary directory");

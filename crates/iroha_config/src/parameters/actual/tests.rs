@@ -6,6 +6,41 @@ mod tests {
     };
     use super::*;
     #[test]
+    fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
+        let lanes = sora_lane_catalog();
+        let lane_bindings: Vec<_> = lanes
+            .lanes()
+            .iter()
+            .map(|lane| (lane.alias.as_str(), lane.dataspace_id))
+            .collect();
+        assert_eq!(
+            lane_bindings,
+            [
+                ("core", DataSpaceId::UNIVERSAL),
+                ("governance", DataSpaceId::UNIVERSAL),
+                ("zk", DataSpaceId::UNIVERSAL),
+            ],
+            "logical governance and zk lanes must not manufacture physical dataspaces"
+        );
+
+        let dataspaces = sora_dataspace_catalog();
+        assert!(
+            matches!(dataspaces.entries(), [entry]
+                if entry.id == DataSpaceId::UNIVERSAL && entry.alias == "universal"),
+            "the shared Sora profile should expose exactly the universal physical dataspace"
+        );
+
+        let routing = sora_routing_policy();
+        assert!(
+            routing.rules.iter().all(|rule| {
+                matches!(rule.lane.as_u32(), 1 | 2)
+                    && rule.dataspace == Some(DataSpaceId::UNIVERSAL)
+            }),
+            "governance and zk routing rules must select lanes within universal"
+        );
+    }
+
+    #[test]
     fn nexus_consensus_policy_digest_is_stable_across_replayed_topology_progress() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");

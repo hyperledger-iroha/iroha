@@ -1354,7 +1354,7 @@ fn payload_store_ahead_terminal_startup_installs_only_the_live_producer() {
     ));
     let ledger = LifecycleLedgerV1::from_coordinator(&coordinator)
         .expect("project Pending store-ahead LedgerV1");
-    payload_store
+    let _ = payload_store
         .persist_negative(
             pending.id(),
             CertifiedServePayloadNegativeOutcome::Rejected(29),

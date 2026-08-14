@@ -20,6 +20,7 @@ from sumeragi_exact_json_test_support import (
 )
 from client_test_support import (
     CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
     app_api_transaction_draft as _app_api_transaction_draft,
     authority_fee_payment as _authority_fee_payment,
     canonical_hash as _canonical_hash,
@@ -197,7 +198,6 @@ def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRe
         timestamp_ms=4_102_444_801_000,
         nonce="low-python-governance-test",
     )
-
 
 
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
@@ -1502,7 +1502,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce=" nonce",
         )
-    with pytest.raises(ValueError, match="ASCII whitespace"):
+    with pytest.raises(ValueError, match="printable ASCII"):
         canonical_network_request_signature_message(
             GOVERNANCE_NETWORK_ID,
             "POST",
@@ -1511,7 +1511,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce="nonce value",
         )
-    with pytest.raises(ValueError, match="ASCII whitespace"):
+    with pytest.raises(ValueError, match="printable ASCII"):
         canonical_network_request_signature_message(
             GOVERNANCE_NETWORK_ID,
             "POST",
@@ -2128,7 +2128,7 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     call = session.calls[0]
     assert call["url"] == "https://node.test/v1/fees/quote"
     assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
-    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
     assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
     assert call["headers"]["X-Iroha-Nonce"] == "fee-quote-nonce"
     assert len(signed_messages) == 1
@@ -2229,7 +2229,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
         "program_id": f"{CANONICAL_OWNER}/retail"
     }
-    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
 
 
 def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:

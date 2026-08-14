@@ -1,7 +1,14 @@
 #[cfg(test)]
 mod recovery_tests {
     #[cfg(feature = "bls")]
-    use std::num::NonZeroU64;
+    use super::super::schema::DurableContinuationEdge;
+    use super::super::schema::{CausalRoot, DurableContinuation, LifecycleStageKind, OwnerId};
+    use super::*;
+    #[cfg(feature = "bls")]
+    use crate::sumeragi::{
+        v2_body_store::{V2BodyStore, ValidatedBodyReceipt},
+        v2_chunks::encode_payload,
+    };
     #[cfg(feature = "bls")]
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     #[cfg(feature = "bls")]
@@ -10,19 +17,9 @@ mod recovery_tests {
         peer::PeerId,
     };
     #[cfg(feature = "bls")]
+    use std::num::NonZeroU64;
+    #[cfg(feature = "bls")]
     use tempfile::TempDir;
-    #[cfg(feature = "bls")]
-    use super::super::schema::DurableContinuationEdge;
-    use super::super::schema::{
-        CausalRoot, DurableContinuation, LifecyclePhase, LifecycleRound, LifecycleStageKind,
-        OwnerId, PredecessorScope,
-    };
-    use super::*;
-    #[cfg(feature = "bls")]
-    use crate::sumeragi::{
-        v2_body_store::{V2BodyStore, ValidatedBodyReceipt},
-        v2_chunks::encode_payload,
-    };
     #[cfg(feature = "bls")]
     struct EmptyAuthenticatedPayloadFixture {
         context: LifecycleContext,

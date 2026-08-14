@@ -17,7 +17,10 @@ use std::{
 };
 mod bounded_stream;
 mod json_preflight;
-use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
+use crate::{
+    client::Client,
+    config::{MusubiFetchConfig, MusubiFetchProviderGatewayConfig},
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -28,6 +31,7 @@ use iroha_data_model::{
     },
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
+use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
 use rand::{TryRngCore, rngs::OsRng};
 use reqwest::{
     StatusCode,
@@ -47,10 +51,6 @@ use sorafs_manifest::{
     validate_manifest, validate_registered_chunker_profile,
 };
 use url::{Host, Url};
-use crate::{
-    client::Client,
-    config::{MusubiFetchConfig, MusubiFetchProviderGatewayConfig},
-};
 const CLIENT_HEADER: &str = "x-sorafs-client";
 const NONCE_HEADER: &str = "x-sorafs-nonce";
 const VERIFYING_KEY_HEADER: &str = "x-sorafs-verifying-key";
@@ -1120,14 +1120,24 @@ fn operator_request_headers(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )
+    .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
     let signature = Signature::try_new(runtime.operator_key_pair.private_key(), &message)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
+    let public_key = runtime
+        .operator_key_pair
+        .public_key()
+        .try_to_multihash_string()
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
+    let timestamp_ms = crate::client::canonical_request_timestamp_header_value(timestamp_ms)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
+    let signature_b64 = crate::client::canonical_request_signature_header_value(&signature)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
     Ok(OperatorRequestHeadersV1 {
-        public_key: runtime.operator_key_pair.public_key().to_string(),
-        timestamp_ms: timestamp_ms.to_string(),
+        public_key,
+        timestamp_ms,
         nonce,
-        signature_b64: STANDARD.encode(signature.payload()),
+        signature_b64,
     })
 }
 fn decode_stream_token_exact(encoded: &str) -> Result<StreamTokenV1, MusubiArchiveRuntimeErrorV1> {
@@ -2148,7 +2158,18 @@ fn random_nonce() -> Result<String, MusubiArchiveRuntimeErrorV1> {
     if bytes.iter().all(|byte| *byte == 0) {
         return Err(permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"));
     }
-    Ok(hex::encode(bytes))
+    let encoded_bytes = bytes
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"))?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(encoded_bytes)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"))?;
+    encoded.resize(encoded_bytes, 0);
+    hex::encode_to_slice(bytes, &mut encoded)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"))?;
+    String::from_utf8(encoded).map_err(|_| permanent("MUSUBI_ARCHIVE_NONCE_UNAVAILABLE"))
 }
 fn header_text<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'headers str> {
     let mut values = headers.get_all(name).iter();
@@ -2275,8 +2296,19 @@ mod tests {
             .expect("operator request headers");
         assert_eq!(
             headers.public_key,
-            operator_key_pair.public_key().to_string()
+            operator_key_pair
+                .public_key()
+                .try_to_multihash_string()
+                .expect("canonical operator public key")
         );
+        assert!(is_lower_hex(&headers.nonce, 32));
+        assert!(
+            headers
+                .timestamp_ms
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        assert!(!headers.timestamp_ms.starts_with('0') || headers.timestamp_ms == "0");
         let timestamp_ms = headers
             .timestamp_ms
             .parse::<u64>()
@@ -2293,7 +2325,8 @@ mod tests {
             body,
             timestamp_ms,
             &headers.nonce,
-        );
+        )
+        .expect("bounded exact operator message");
         signature
             .verify(operator_key_pair.public_key(), &exact_message)
             .expect("signature must bind the exact request");
@@ -2312,7 +2345,8 @@ mod tests {
                 body,
                 timestamp_ms,
                 &headers.nonce,
-            ),
+            )
+            .expect("bounded foreign-network operator message"),
             Client::operator_network_request_message(
                 &network_id,
                 &crate::http::Method::POST,
@@ -2320,7 +2354,8 @@ mod tests {
                 body,
                 timestamp_ms,
                 &headers.nonce,
-            ),
+            )
+            .expect("bounded altered-path operator message"),
             Client::operator_network_request_message(
                 &network_id,
                 &crate::http::Method::POST,
@@ -2328,7 +2363,8 @@ mod tests {
                 br#"{"manifest_id_hex":"22"}"#,
                 timestamp_ms,
                 &headers.nonce,
-            ),
+            )
+            .expect("bounded altered-body operator message"),
             Client::operator_network_request_message(
                 &network_id,
                 &crate::http::Method::POST,
@@ -2336,7 +2372,8 @@ mod tests {
                 body,
                 timestamp_ms,
                 "replayed-with-another-nonce",
-            ),
+            )
+            .expect("bounded altered-nonce operator message"),
         ] {
             assert!(
                 signature

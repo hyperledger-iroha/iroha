@@ -161,6 +161,11 @@ export {
   sm2FixtureFromSeed,
 } from "./crypto.js";
 export {
+  CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+  CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+  CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+  CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+  CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
   canonicalQueryString,
   canonicalRequestMessage,
   canonicalRequestSignatureMessage,

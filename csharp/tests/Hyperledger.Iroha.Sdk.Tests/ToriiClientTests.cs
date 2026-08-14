@@ -244,7 +244,6 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent("{\"ok\":true}"),
         });
-
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
@@ -253,7 +252,6 @@ public sealed partial class ToriiClientTests
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
         };
-
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100&cursor_mode=stored", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -262,7 +260,9 @@ public sealed partial class ToriiClientTests
         Assert.Equal("dev-token", handler.LastRequest.Headers.Authorization?.Parameter);
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
-        Assert.Equal(CanonicalAccountId, Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Account")));
+        Assert.Equal(
+            AccountAddress.Parse(CanonicalAccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+            Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Account")));
         Assert.All(
             Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Nonce")),
             character => Assert.False(char.IsWhiteSpace(character)));

@@ -6,13 +6,6 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "recovered-apply witnesses remain test-sealed until cutover"
-    )
-)]
 use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
@@ -3273,27 +3266,6 @@ impl RecoveredDecisionApplyWorkerResultV1 {
         match self {
             Self::Applied(completion) => completion.dispatch_key(),
             Self::Deferred { task, .. } => task.dispatch_key(),
-        }
-    }
-    /// Return the exact decided subject retained by either result branch.
-    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
-        match self {
-            Self::Applied(completion) => completion.subject(),
-            Self::Deferred { task, .. } => task.subject(),
-        }
-    }
-    /// Return the complete CommitQC retained by either result branch.
-    pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
-        match self {
-            Self::Applied(completion) => completion.certificate(),
-            Self::Deferred { task, .. } => task.certificate(),
-        }
-    }
-    /// Return the exact durable validated body retained by either result branch.
-    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
-        match self {
-            Self::Applied(completion) => completion.validated_receipt(),
-            Self::Deferred { task, .. } => task.validated_receipt(),
         }
     }
 }

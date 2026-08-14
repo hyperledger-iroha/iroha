@@ -3,12 +3,8 @@
 //! Provides capability TLV parsing, transcript hashing, a deterministic Noise XX
 //! handshake simulation (with ML-KEM material, authenticated relay identity, and padded
 //! frames), plus helpers for salt/telemetry fixture generation.
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt, fs,
-    ops::Deref,
-    path::{Path, PathBuf},
-    str::FromStr,
+use crate::{
+    Algorithm, KeyPair, PublicKey, SessionKey, Signature, kex::is_x25519_low_order_public_key,
 };
 use base64::{
     Engine as _, encoded_len as base64_encoded_len, engine::general_purpose::STANDARD as Base64,
@@ -31,12 +27,18 @@ use soranet_pq::{
     generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata, validate_mlkem_ciphertext,
     validate_mlkem_public_key,
 };
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt, fs,
+    ops::Deref,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use tempfile::TempDir;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-use crate::{Algorithm, KeyPair, PublicKey, SessionKey, Signature, kex::is_x25519_low_order_public_key};
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";

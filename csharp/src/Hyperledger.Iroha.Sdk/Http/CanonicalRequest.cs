@@ -8,6 +8,21 @@ namespace Hyperledger.Iroha.Http;
 
 public static partial class CanonicalRequest
 {
+    /// <summary>Maximum decoded non-empty form pairs in a canonical V1 request.</summary>
+    public const int MaxQueryPairsV1 = 64;
+
+    /// <summary>Maximum UTF-8 bytes in the raw canonical V1 query.</summary>
+    public const int MaxRawQueryBytesV1 = 64 * 1024;
+
+    /// <summary>Maximum UTF-8 bytes in the canonical V1 HTTP method token.</summary>
+    public const int MaxMethodBytesV1 = 32;
+
+    /// <summary>Maximum UTF-8 bytes in the percent-encoded canonical V1 path.</summary>
+    public const int MaxPathBytesV1 = 64 * 1024;
+
+    /// <summary>Maximum UTF-8 bytes in a canonical V1 account identity or alias.</summary>
+    public const int MaxAccountLiteralBytesV1 = 36 * 1024;
+
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     private static readonly byte[] NetworkDomain = Encoding.UTF8.GetBytes("iroha.app.request.network.v1\0");
 
@@ -52,6 +67,12 @@ public static partial class CanonicalRequest
 
         var hasQueryPrefix = rawQuery[0] == '?';
         var query = hasQueryPrefix ? rawQuery[1..] : rawQuery;
+        if (Encoding.UTF8.GetByteCount(query) > MaxRawQueryBytesV1)
+        {
+            throw new ArgumentException(
+                $"query must not exceed {MaxRawQueryBytesV1} raw UTF-8 bytes.",
+                nameof(rawQuery));
+        }
         if (query.Length == 0)
         {
             if (hasQueryPrefix)
@@ -68,6 +89,12 @@ public static partial class CanonicalRequest
             if (part.Length == 0)
             {
                 throw new ArgumentException("query must not contain empty query segments.", nameof(rawQuery));
+            }
+            if (pairs.Count >= MaxQueryPairsV1)
+            {
+                throw new ArgumentException(
+                    $"query must not contain more than {MaxQueryPairsV1} non-empty pairs.",
+                    nameof(rawQuery));
             }
 
             var components = part.Split('=', 2, StringSplitOptions.None);
@@ -195,6 +222,12 @@ public static partial class CanonicalRequest
     private static string RequireHttpMethodToken(string? value, string paramName)
     {
         var exact = RequireExactNonBlank(value, paramName);
+        if (Encoding.UTF8.GetByteCount(exact) > MaxMethodBytesV1)
+        {
+            throw new ArgumentException(
+                $"{paramName} must not exceed {MaxMethodBytesV1} UTF-8 bytes.",
+                paramName);
+        }
         if (!exact.All(IsHttpTokenCharacter))
         {
             throw new ArgumentException($"{paramName} must be an HTTP token.", paramName);
@@ -213,6 +246,7 @@ public static partial class CanonicalRequest
     internal static string RequireRootRelativePath(string? value, string paramName)
     {
         var exact = RequireExactNonBlank(value, paramName);
+        RequireCanonicalPathByteLength(exact, paramName);
         if (exact[0] != '/')
         {
             throw new ArgumentException($"{paramName} must be a root-relative path.", paramName);
@@ -235,6 +269,12 @@ public static partial class CanonicalRequest
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
         var exact = RequireExactNonBlank(value, paramName);
+        if (Encoding.UTF8.GetByteCount(exact) > MaxAccountLiteralBytesV1)
+        {
+            throw new ArgumentException(
+                $"{paramName} must not exceed {MaxAccountLiteralBytesV1} UTF-8 bytes.",
+                paramName);
+        }
         try
         {
             return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
@@ -292,6 +332,16 @@ public static partial class CanonicalRequest
         }
 
         return leftBytes.Length - rightBytes.Length;
+    }
+
+    internal static void RequireCanonicalPathByteLength(string value, string paramName)
+    {
+        if (Encoding.UTF8.GetByteCount(value) > MaxPathBytesV1)
+        {
+            throw new ArgumentException(
+                $"{paramName} must not exceed {MaxPathBytesV1} UTF-8 bytes.",
+                paramName);
+        }
     }
 
     private static string DecodeQueryComponent(string value)
@@ -471,7 +521,7 @@ public static partial class CanonicalRequest
         var builder = new StringBuilder(bytes.Length);
         foreach (var b in bytes)
         {
-            if (IsUnreserved(b))
+            if (IsFormUrlEncodedSafe(b))
             {
                 builder.Append((char)b);
             }
@@ -489,14 +539,14 @@ public static partial class CanonicalRequest
         return builder.ToString();
     }
 
-    private static bool IsUnreserved(byte value)
+    private static bool IsFormUrlEncodedSafe(byte value)
     {
         return value switch
         {
             >= (byte)'A' and <= (byte)'Z' => true,
             >= (byte)'a' and <= (byte)'z' => true,
             >= (byte)'0' and <= (byte)'9' => true,
-            (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~' => true,
+            (byte)'*' or (byte)'-' or (byte)'.' or (byte)'_' => true,
             _ => false,
         };
     }

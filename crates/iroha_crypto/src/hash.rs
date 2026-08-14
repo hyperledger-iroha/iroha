@@ -1,4 +1,4 @@
-use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
+use crate::{ParseError, hex_decode};
 #[cfg(not(feature = "ffi_import"))]
 use blake2::{
     Blake2b,
@@ -16,7 +16,7 @@ use norito::literal;
 use sha2::Sha256;
 #[cfg(not(feature = "ffi_import"))]
 use sha3::Keccak256;
-use crate::{ParseError, hex_decode};
+use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
 /// Hash of Iroha entities. Currently supports only blake2b-32.
 /// The least significant bit of hash is set to 1.
 ///
@@ -745,8 +745,8 @@ mod tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use norito::{json::FastJsonWrite, literal};
     use super::*;
+    use norito::{json::FastJsonWrite, literal};
     #[test]
     fn hash_json_roundtrip() {
         let hash = Hash::new(b"hash-json-roundtrip");

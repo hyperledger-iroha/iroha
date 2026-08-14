@@ -915,8 +915,8 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
   assert.equal(capturedInit.redirect, "error");
   assert.equal(capturedInit.headers.Authorization, "Bearer jwt");
   assert.equal(
-    Buffer.from(capturedInit.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-    FIXTURE_ALICE_ID,
+    capturedInit.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(FIXTURE_ALICE_ID).address.canonicalHex(),
   );
   assert.deepEqual(JSON.parse(capturedInit.body), {
     pagination: { limit: 25 },

@@ -14,32 +14,45 @@ description: Logical lane taxonomy, lane configuration geometry, and world-state
 
 This document captures the production architecture for Nexus’ multilane
 consensus layer. It produces one deterministic world state while allowing
-internal execution lanes, grouped by governance-scoped dataspaces, to run
-public or private validator sets with isolated workloads.
+logical execution lanes inside physically distinct dataspaces to isolate
+workloads without treating workload names as validator or storage topology.
 
 > **Cross-lane proofs:** This note focuses on geometry and storage. The per-lane settlement commitments, relay pipeline, and merge-ledger proofs required for roadmap **NX-4** are spelled out in [nexus_cross_lane.md](nexus_cross_lane.md).
 
 ## Concepts
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share compliance, routing, and settlement policies. Each dataspace also declares `fault_tolerance (f)` used to size lane-relay committees (`3f+1`).
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA policy, gas token, settlement rules, and routing permissions.
+- **Lane:** Logical execution shard and backlog assigned to exactly one data
+  space. A lane has a stable `LaneId`, but does not create a physical
+  server/validator boundary. One data space may contain several lanes.
+- **Data Space:** Physical execution, storage, privacy, and security boundary
+  backed by a distinct server/validator cohort. It groups one or more lanes
+  that share that physical boundary and declares `fault_tolerance (f)` used to
+  size its consensus and relay committees (`3f+1`).
+- **Namespace:** Independently governed naming scope bound explicitly to a
+  data space. A namespace is neither a lane nor a data space, even when an
+  alias happens to reuse the same text.
+- **Lane Manifest:** Governance-controlled lane policy describing workload
+  routing, gas, and settlement rules. The V1 file layout also projects
+  validator and DA fields through lane manifests; those fields describe the
+  owning data space and must be identical for every lane in that data space.
 - **Global Commitment:** Proof emitted by a lane summarising new state roots, settlement data, and optional cross-lane transfers. The global NPoS ring orders commitments.
 
 ## Lane Taxonomy
 
 Lane types canonically describe their visibility, governance surface, and settlement hooks. The configuration geometry (`LaneConfig`) captures these attributes so nodes, SDKs, and tooling can reason about the layout without bespoke logic.
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Lane type | Visibility | Owning dataspace cohort | WSV exposure | Default governance | Settlement policy | Typical use |
+|-----------|------------|---------------------------|--------------|--------------------|-------------------|-------------|
+| `default_public` | public | Global staked cohort | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
+| `public_custom` | public | Public or stake-gated cohort | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
+| `private_permissioned` | restricted | Fixed physical cohort (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
+| `hybrid_confidential` | restricted | Mixed physical cohort; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
 
 All lane types must declare:
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
+- Dataspace alias — explicit binding to the physical cohort that owns the
+  lane. A namespace, governance module, or workload alias must not be inferred
+  as a dataspace from matching text.
 - Governance handle — identifier resolved through `Nexus.governance.modules`.
 - Settlement handle — identifier consumed by the settlement router to debit XOR buffers.
 - Optional telemetry metadata (description, contact, business domain) surfaced
@@ -74,9 +87,15 @@ LaneConfigEntry {
 
 ## World-State Partitioning
 
-- The logical Nexus world state is the union of per-lane state spaces. Public lanes persist full state; private/confidential lanes export Merkle/commitment roots to the merge ledger.
+- The logical Nexus world state is the union of per-dataspace state spaces,
+  with lane prefixes providing logical workload subdivisions inside each data
+  space. Public data spaces persist full state; private/confidential data
+  spaces export Merkle/commitment roots to the merge ledger.
 - MV storage prefixes every key with the 4-byte lane prefix from `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++ PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store entries grouped by lane prefix, keeping range scans deterministic.
+- Shared tables (accounts, assets, triggers, governance records) therefore
+  store entries grouped by lane prefix, keeping range scans deterministic.
+  This is a logical subdivision within the owning dataspace and does not imply
+  a distinct validator/server set.
 - Merge-ledger metadata mirrors the same layout: each lane writes merge-hint roots and reduced global state roots to `lane_{id:03}_merge`, allowing targeted retention or eviction when a lane retires.
 - Cross-lane indexes (account aliases, asset registries, governance manifests) store explicit `(LaneId, DataSpaceId)` pairs. These indexes live in shared column families but use the lane prefix and explicit dataspace ids to keep lookups deterministic.
 - The merge workflow combines public data with private commitments using `(lane_id, dataspace_id, height, state_root, settlement_root, proof_root)` tuples derived from merge-ledger entries.

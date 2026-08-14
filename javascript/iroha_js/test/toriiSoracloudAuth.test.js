@@ -56,8 +56,8 @@ test("Soracloud app infra mutations require one-shot canonical auth", async () =
     assert.equal(init.redirect, "error");
     assert.deepEqual(JSON.parse(init.body), REQUEST);
     assert.equal(
-      Buffer.from(init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-      ACCOUNT_ID,
+      init.headers["X-Iroha-Account"],
+      AccountAddress.parseEncoded(ACCOUNT_ID).address.canonicalHex(),
     );
   }
 });

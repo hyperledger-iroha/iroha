@@ -641,8 +641,8 @@ mod static_tests {
             .find("reduce_admit")
             .expect("staged transition admits its child");
         assert!(
-            settlement < admission,
-            "the same-class Effect branch must release capacity before child admission"
+            staging < settlement && settlement < admission,
+            "the same-class Effect branch must stage first, release capacity, then admit its child"
         );
         for required in [
             "candidate.replay_authority_is_exact(coordinator.active_context)",
