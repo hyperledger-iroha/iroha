@@ -1195,11 +1195,9 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         assert!(!output_guard.restart_required());
         planner_io.detach(&mut services);
     }
-    assert_eq!(
-        crate::sumeragi::status::v2_status()
-            .expect("Decision Fetch status follows complete owner publication")
-            .height,
-        wire_context.height
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "Decision Fetch owner construction must remain unpublished"
     );
     crate::sumeragi::status::clear_v2_status();
 }

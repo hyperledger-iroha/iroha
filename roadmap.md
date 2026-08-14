@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-14
+Last updated: 2026-08-15
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -20,9 +20,10 @@ Completed history lives in [`status.md`](./status.md).
   from that clean exact commit with truthful provenance, and commit the
   generated outputs in a descendant. Refresh SF1 rows and projections only
   with an authorized council re-sign over the current manifest digest.
-- Reconcile the merged Cargo manifests with the immutable lock policy before
-  authoritative workspace validation. Keep `Cargo.lock` unchanged unless a
-  reviewed lockfile update is supplied through the release process.
+- Preserve the lock-compatible parking of the private confidential-spool ZKP
+  prototypes during authoritative workspace validation. Reconnect those roots
+  only with a reviewed lock-graph update supplied through the release process;
+  keep the current `Cargo.lock` byte-identical for this release.
 - Finish borrowed, cache-/scratch-audited admission verification for default
   w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
   Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
@@ -53,17 +54,17 @@ Completed history lives in [`status.md`](./status.md).
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,014,603-line ratchet leaves
-  a 454,067-line gap; do not redefine the baseline, count moved test code as a
+  4,560,536-line ten-percent ceiling. The current 5,017,049-line count leaves
+  a 456,513-line gap; do not redefine the baseline, count moved test code as a
   physical reduction, or weaken required runtime, security, consensus, SDK, or
   release-evidence behavior to close it.
 - Add the new source and fixture files to the eventual signed commit, then rerun
   the strict SDK source-closure guard from the tracked candidate. Keep the
-  staged merge-resolution layer and unstaged optimization layer reviewable
-  until that signed commit is prepared.
-- Obtain the reviewed workspace lockfile that matches the merged manifests
-  without locally regenerating `Cargo.lock`. From that immutable candidate, run
-  the full locked workspace build and tests, strict all-target/all-feature
+  staged merge-resolution and optimization changes reviewable until that
+  signed commit is prepared.
+- Use the unchanged protected workspace lockfile now that the incompatible
+  prototype manifest edge is withdrawn. From that immutable candidate, run the
+  full locked workspace build and tests, strict all-target/all-feature
   Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
   and representative four-validator deterministic consensus tests.
 - Capture comparable `valid: true` cold/warm and compiler-work reports for the
@@ -141,8 +142,9 @@ to:
   output, and parks only volatile state; finality must retire the still-live
   durable output debt. The Broadcast-plus-next-Sign prerequisite now has one
   affine body/WAL authority, an executable standalone next-Vote candidate, and
-  exact two-child coordinator/registry staging. The WAL-ahead Proposal path now
-  consumes the shared output reservation across one LedgerV1 fsync, installs
+  exact two-child coordinator/registry staging. The source-only WAL-ahead
+  Proposal transaction consumes the shared output reservation across one
+  LedgerV1 fsync, installs
   both children, parks the Broadcast only in volatile state, leaves the next
   Sign Ready, and commits control plus chunks atomically. Recovered Prepare
   votes use the same two-child fsync without Proposal output ownership, leaving
@@ -165,8 +167,9 @@ to:
   capacity/abort. The initial `ProposalPrepareWal` transaction now holds that
   reservation across exact PrepareIntent WAL fsync and the adjacent
   Broadcast/Prepare-Sign LedgerV1 fsync; post-WAL failures are restart-only.
-  Keep both recovered Proposal shapes inside the runner activation transaction;
-  do not route either shape through the bounded single-Broadcast cut. The
+  The unified lifecycle Completion-turn driver keeps both recovered Proposal
+  shapes inside the production runner activation transaction; neither shape
+  routes through the bounded single-Broadcast cut. The
   recovered Decision-Fetch ingress prerequisite now removes caller-selected
   physical ordinals: ordinary dequeue and lifecycle discovery share the same
   ready-source/lane, strict-before-dependency selector, and the lifecycle path
@@ -1070,6 +1073,14 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
+A fresh source-budget run over the merged development tree inspected 7,979
+paths with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
+findings and remains below the 5,254,807 ratchet ceiling; another 454,211 lines
+would be required to reach the 4,560,536 objective. The separate generic
+lifecycle-coordinator cutover receives no multilane credit toward that
+reduction. The static source-budget guard passes; the reduction objective and
+immutable-candidate evidence remain open.
+
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
 reconstruction. It identity-binds the exact nested directory and its records,
@@ -1088,7 +1099,7 @@ modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`327e13cc5b9853ec8a36d3c0e8b1805bb3c33ebe0dc923be87ffd502859b3a21`;
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -1117,17 +1128,33 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-its grouped and diagnostics suite-source manifests hash to
-`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
+its staged grouped and diagnostics suite-source manifests each contain 1,386
+records and hash respectively to
+`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
 and
-`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`;
+`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
-remains open under `G-SDK`.
+remains open under `G-SDK`. The release receipt must reproduce the exact staged
+record totals and suite-source SHA-256 values above from its immutable
+candidate; the staged values are not execution evidence. The
+diagnostics runner inventories Rust `14`, Python `121`, JavaScript
+source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
+Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
+consumer is bound directly by the release runner and receipt. The
+receipt-required legacy-version-before-signing regression preserves the exact
+856-production-test and 525-G-UNIT-test counts. Rust's separated client test
+module covers both complete endpoint-payload swaps while retaining its
+14-test count, so the API-separation source gap is closed. This is
+mutable-source inventory consistency, not deterministic regeneration, SDK
+execution, or immutable-candidate evidence. The five checked-in OpenAPI
+artifacts remain dirty and unsigned. Exact-five replay is source- and
+receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
+candidate execution remains unclaimed.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
@@ -1173,10 +1200,10 @@ The remaining work is evidence-driven and must stay in order:
   same-roster table rejects without mutation. The responder geometry now
   reserves the current roster plus one complete historical committee, caps
   identities outside the live roster to that separate corridor, and retains a
-  body-eviction-safe compact carrier witness in Kura. Legacy version-2 retained
-  records remain readable and are atomically promoted from an exact local body
-  before eviction; validation must cover both that migration and the combined
-  archive/reference byte ceiling. The focused
+  body-eviction-safe compact carrier witness in Kura. Only the current compact
+  carrier record is accepted; every other version fails closed before mutation.
+  Validation must cover that rejection and the combined archive/reference byte
+  ceiling. The focused
   route and pipeline generation/epoch TLC traces are
   wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
   fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
@@ -1198,16 +1225,23 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  grouped/diagnostics suite-source manifest SHA-256 values
-  `2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
+  staged grouped/diagnostics suite-source manifests at exactly 1,386 records
+  each with SHA-256 values
+  `1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
   and
-  `d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`,
-  and wire-TSV SHA-256
+  `1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`,
+  to be regenerated and receipt-bound from the exact immutable candidate, and
+  wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
-  Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
-  subset results are not an archived all-surface replay and do not attest this
-  corpus; the aggregate source/distribution harness remains required.
+  Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
+  not an archived all-surface replay and do not attest this
+  corpus; the aggregate source/distribution harness remains required. The
+  separate diagnostics harness inventories Rust `14`, Python `121`, JavaScript
+  `88`, Swift `33`, Kotlin `42`, and Java `41`; these mutable source counts are
+  not receipts. Exact-five replay is source- and receipt-bound to the protected
+  schema-v3 OpenAPI Node closure, but do not promote this gate from the dirty
+  unsigned artifacts without immutable-candidate execution.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating

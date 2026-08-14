@@ -1651,7 +1651,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`327e13cc5b9853ec8a36d3c0e8b1805bb3c33ebe0dc923be87ffd502859b3a21`.
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
@@ -1768,10 +1768,13 @@ the control branch reconstructs Proposal chunks from the exact body-store
 owner. The initial `ProposalPrepareWal` transaction now reserves the same
 batch, preflights `PrepareIntent -> Sign(Prepare)`, fsyncs that frame, and then
 uses the same two-child LedgerV1 publication. Capacity is retryable only before
-the WAL append; every later ambiguity is restart-only.
-These are source-bound
-production-refinement contracts; the existing deductive asynchronous proof
-does not by itself prove their Rust persistence ordering. The executor then retries the
+the WAL append; every later ambiguity is restart-only. The unified lifecycle
+Completion-turn driver classifies both recovered Proposal settlement shapes,
+but the live production runner does not yet invoke that driver, so the cold
+Proposal path remains unreachable from the production loop. These are
+source-bound production-refinement contracts; the existing deductive
+asynchronous proof does not by itself prove their Rust persistence ordering,
+and no theorem or evidence status is promoted. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The

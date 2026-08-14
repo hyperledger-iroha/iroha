@@ -170,7 +170,7 @@ fn executable_coordinate_manifest_has_exact_ordinals_and_predicates() {
         let expected = match ordinal { 0 => ChallengePredicateV1::OutsideLookupTable, 47 | 48 => ChallengePredicateV1::OutsideBooleanSet, _ => ChallengePredicateV1::Nonzero };
         assert_eq!(coordinate.predicate, expected);
     }
-    assert_eq!(challenge_coordinate_v1(COMPLETE_CHALLENGE_ORDINAL_V1).unwrap_err(), GlobalLookupErrorV1::Order);
+    assert_eq!(challenge_coordinate_v1(COMPLETE_CHALLENGE_ORDINAL_V1).err(), Some(GlobalLookupErrorV1::Order));
     let mu = challenge_coordinate_v1(32).unwrap().purpose;
     let tau_first = challenge_coordinate_v1(33).unwrap().purpose;
     let first_round = challenge_coordinate_v1(49).unwrap().purpose;

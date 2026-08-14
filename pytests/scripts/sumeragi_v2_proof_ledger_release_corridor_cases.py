@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 856
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "327e13cc5b9853ec8a36d3c0e8b1805bb3c33ebe0dc923be87ffd502859b3a21"
+        "58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "2d28e8534542516af51faf4f1ade8ecbf1c0489212e5403cbdec02c61ad8cdbd"
+        "b91f42798377695a51ecfbc3b52e45f93e80f2aa943b57ea62cce5f4d86e5e94"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3391,6 +3391,11 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         / "scripts"
         / "write_sumeragi_v2_release_receipt_corridor_log.py"
     ).read_text(encoding="utf-8")
+    receipt_publication_source = (
+        ROOT_DIR
+        / "scripts"
+        / "write_sumeragi_v2_release_receipt_publication.py"
+    ).read_text(encoding="utf-8")
     process_policy_source = (
         ROOT_DIR / "scripts" / "sumeragi_v2_release_process_policy.sh"
     ).read_text(encoding="utf-8")
@@ -3440,16 +3445,25 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
     assert 'fields["cargo_target_root_path"] != str(cargo_target_root)' in (
         receipt_corridor_source
     )
-    assert 'bootstrap_evidence_dir_path / "release-runner" / "output"' in (
-        receipt_source
+    assert receipt_publication_source.count(
+        'release_root_path.parent / "output"'
+    ) == 2
+    assert receipt_publication_source.count(
+        'release_root_path.parent / "target"'
+    ) == 2
+    assert "expected_artifact_root=(" in receipt_publication_source
+    assert "expected_cargo_target_root=(" in receipt_publication_source
+    assert (
+        'prebuilt_artifact_root = release_root_path.parent / "output"'
+        in receipt_publication_source
     )
-    assert 'bootstrap_evidence_dir_path / "release-runner" / "target"' in (
-        receipt_source
+    assert (
+        'prebuilt_cargo_target_root = release_root_path.parent / "target"'
+        in receipt_publication_source
     )
-    assert 'Path(prebuilt_binary_bundle["cargo_target_root"])' in receipt_source
-    assert 'Path(prebuilt_binary_bundle["artifact_root"])' in receipt_source
     assert 'repo_root / "target"' not in receipt_source
     assert 'repo_root / "target"' not in receipt_corridor_source
+    assert 'repo_root / "target"' not in receipt_publication_source
     assert 'readonly release_target_root="${release_invocation_root}/target"' in (
         release_source
     )
@@ -3645,7 +3659,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "327e13cc5b9853ec8a36d3c0e8b1805b"',
+            '    "58a7316ef7991977ab2a414ec89fa19c1"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

@@ -600,7 +600,10 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     )
     .expect("capacity-two executor");
     executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm source-faithful timeout");
     assert!(
         executor
@@ -735,7 +738,7 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     ));
     assert!(!executor.status().fail_closed);
 }
- #[test]
+#[test]
 fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
@@ -822,7 +825,10 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
     let started = Instant::now();
     fixture
         .executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm source-faithful timeout/retransmission clocks");
     let mut services = FakeServices {
         requester_key: Some(fixture.requester_key.clone()),
@@ -958,7 +964,10 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     let started = Instant::now();
     fixture
         .executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm production retransmission clocks");
     let mut services = FakeServices {
         requester_key: Some(fixture.requester_key.clone()),

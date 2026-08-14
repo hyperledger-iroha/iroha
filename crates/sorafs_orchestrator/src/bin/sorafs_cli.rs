@@ -1,5 +1,6 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/pdp.rs"]
 mod pdp;
 use base64::{
     Engine,

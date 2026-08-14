@@ -20,16 +20,9 @@
 //!   (for reference, see [Registry - Elixir](https://hexdocs.pm/elixir/1.17.0-rc.1/Registry.html)).
 use error_stack::Report;
 use iroha_logger::{InstrumentFutures, prelude::Span};
-use std::{
-    future::Future,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{future::Future, time::Duration};
 use tokio::{
-    sync::{Notify, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::{JoinHandle, JoinSet},
     time::timeout,
 };
@@ -130,26 +123,19 @@ fn setup_shutdown_on_os_signals(_supervisor: &mut Supervisor) -> Result<()> {
     iroha_logger::warn!("OS signal shutdown handling is not supported on this platform");
     Ok(())
 }
+// A cancellation token is sticky, so notification cannot be lost between a
+// waiter's state check and its registration.
 #[derive(Clone, Debug, Default)]
-struct NotifyOnce {
-    notify: Arc<Notify>,
-    is_notified: Arc<AtomicBool>,
-}
+struct NotifyOnce(CancellationToken);
 impl NotifyOnce {
     fn new() -> Self {
-        Self {
-            notify: Arc::new(Notify::new()),
-            is_notified: Arc::new(AtomicBool::new(false)),
-        }
+        Self::default()
     }
     fn notify(&self) {
-        self.is_notified.store(true, Ordering::Release);
-        self.notify.notify_waiters();
+        self.0.cancel();
     }
     async fn notified(&self) {
-        if !self.is_notified.load(Ordering::Acquire) {
-            self.notify.notified().await;
-        }
+        self.0.cancelled().await;
     }
 }
 struct LoopBuilder {
@@ -499,6 +485,25 @@ mod tests {
     /// than just [`TICK_TIMEOUT`]
     const OS_THREAD_SPAWN_TICK: Duration = Duration::from_millis(500);
     const SHUTDOWN_WITHIN_TICK: OnShutdown = OnShutdown::Wait(TICK_TIMEOUT);
+    #[tokio::test]
+    async fn notify_once_wakes_existing_and_future_waiters() {
+        let notification = NotifyOnce::new();
+        let existing_waiter = tokio::spawn({
+            let notification = notification.clone();
+            async move { notification.notified().await }
+        });
+        tokio::task::yield_now().await;
+
+        notification.notify();
+
+        timeout(TICK_TIMEOUT * 10, existing_waiter)
+            .await
+            .expect("existing waiter should be notified")
+            .expect("existing waiter should not panic");
+        timeout(TICK_TIMEOUT * 10, notification.notified())
+            .await
+            .expect("notification should remain visible to future waiters");
+    }
     #[tokio::test]
     async fn empty_supervisor_just_exits() {
         timeout(TICK_TIMEOUT, Supervisor::new().start())

@@ -6,13 +6,6 @@
 //! completions. Control messages use the bounded committee topology: proposal
 //! manifests and phase votes reach the full committee, first-send body chunks
 //! reach Set A, and timeout/QC recovery remains committee-wide.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "worker completion seams remain test-sealed until cutover"
-    )
-)]
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
@@ -1234,6 +1227,7 @@ pub(crate) struct CertifiedServeBarrier {
 }
 impl CertifiedServeBarrier {
     /// Exact request selected for the dedicated ingress turn.
+    #[cfg(test)]
     pub(crate) const fn request_hash(self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash
     }
@@ -17923,6 +17917,7 @@ impl ProductionV2Services {
         ))
     }
     /// Start the ordered I/O adapter for one immutable height context.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         context: wire::HeightContext,

@@ -175,6 +175,17 @@ PROFILE_CATALOG_RE = re.compile(
     r':\s*&str\s*=\s*r(?P<hashes>#*)"(?P<body>.*?)"(?P=hashes)\s*;',
     re.M | re.S,
 )
+PROFILE_CATALOG_INCLUDE_RE = re.compile(
+    r'^[ \t]*(?:pub(?:\s*\([^\)\n]*\))?\s+)?const\s+DEFAULT_PROFILES_JSON\s*'
+    r':\s*&str\s*=\s*include_str!\(\s*'
+    r'"(?P<path>[A-Za-z0-9][A-Za-z0-9_.-]*\.json)"\s*\)\s*;',
+    re.M,
+)
+PROFILE_CATALOG_DECL_RE = re.compile(r"\bconst\s+DEFAULT_PROFILES_JSON\b")
+PROFILE_CATALOG_IDENTIFIER_RE = re.compile(r"\bDEFAULT_PROFILES_JSON\b")
+PROFILE_CATALOG_RUNTIME_READ_RE = re.compile(
+    r"\bjson\s*::\s*from_json\s*\(\s*(?P<identifier>DEFAULT_PROFILES_JSON)\s*\)"
+)
 RESTRICTED_SCHEMA_TEXT_MARKERS = (
     "may only be redistributed upon agreement",
     "no right, or right to authorise others",
@@ -1444,13 +1455,57 @@ def _rust_raw_string_end(text: str, start: int) -> int | None:
     return end + len(delimiter)
 
 
-def _rust_offset_is_ignored_span(text: str, offset: int) -> bool:
+def _rust_char_literal_end(text: str, start: int) -> int | None:
+    """Return the end of a Rust char literal, without mistaking lifetimes for one."""
+
+    if start >= len(text) or text[start] != "'" or start + 2 >= len(text):
+        return None
+    cursor = start + 1
+    value = text[cursor]
+    if value in {"\n", "\r", "'"}:
+        return None
+    if value != "\\":
+        cursor += 1
+    else:
+        cursor += 1
+        if cursor >= len(text):
+            return None
+        escape = text[cursor]
+        if escape in {"n", "r", "t", "0", "\\", "'", '"'}:
+            cursor += 1
+        elif escape == "x":
+            digits = text[cursor + 1 : cursor + 3]
+            if len(digits) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in digits):
+                return None
+            cursor += 3
+        elif escape == "u" and cursor + 1 < len(text) and text[cursor + 1] == "{":
+            close = text.find("}", cursor + 2)
+            if close < 0:
+                return None
+            digits = text[cursor + 2 : close].replace("_", "")
+            if not digits or len(digits) > 6 or any(
+                ch not in "0123456789abcdefABCDEF" for ch in digits
+            ):
+                return None
+            cursor = close + 1
+        else:
+            return None
+    if cursor >= len(text) or text[cursor] != "'":
+        return None
+    return cursor + 1
+
+
+def _rust_code_mask(text: str) -> str:
+    """Return Rust code with comments and literal contents replaced by spaces."""
+
+    masked = [" "] * len(text)
     index = 0
     block_depth = 0
     line_comment = False
-    while index < offset:
+    while index < len(text):
         if line_comment:
             if text[index] == "\n":
+                masked[index] = "\n"
                 line_comment = False
             index += 1
             continue
@@ -1463,13 +1518,17 @@ def _rust_offset_is_ignored_span(text: str, offset: int) -> bool:
                 block_depth -= 1
                 index += 2
                 continue
+            if text[index] == "\n":
+                masked[index] = "\n"
             index += 1
             continue
         raw_end = _rust_raw_string_end(text, index)
         if raw_end is not None:
-            if offset < raw_end:
-                return True
             index = raw_end
+            continue
+        char_end = _rust_char_literal_end(text, index)
+        if char_end is not None:
+            index = char_end
             continue
         if text.startswith("//", index):
             line_comment = True
@@ -1480,51 +1539,92 @@ def _rust_offset_is_ignored_span(text: str, offset: int) -> bool:
             index += 2
             continue
         if text[index] == '"':
-            quote = text[index]
             index += 1
             while index < len(text):
-                if index >= offset:
-                    return True
                 if text[index] == "\\":
                     index += 2
                     continue
-                if text[index] == quote:
-                    index += 1
-                    break
                 index += 1
+                if text[index - 1] == '"':
+                    break
             continue
+        masked[index] = text[index]
         index += 1
-    return line_comment or bool(block_depth)
+    return "".join(masked)
 
 
-def _profile_catalog_match(
+def _rust_match_starts_in_code(mask: str, match: re.Match[str]) -> bool:
+    relative_const = match.group(0).find("const")
+    if relative_const < 0:
+        return False
+    const_start = match.start() + relative_const
+    return mask[const_start : const_start + len("const")] == "const"
+
+
+def _profile_catalog_has_unqualified_identifier_use(
+    code_mask: str,
+    canonical_identifier_start: int,
+) -> bool:
+    allowed_starts = {canonical_identifier_start}
+    allowed_starts.update(
+        match.start("identifier")
+        for match in PROFILE_CATALOG_RUNTIME_READ_RE.finditer(code_mask)
+    )
+    return any(
+        match.start() not in allowed_starts
+        for match in PROFILE_CATALOG_IDENTIFIER_RE.finditer(code_mask)
+    )
+
+
+def _profile_catalog_source(
     text: str,
     path: Path,
     *,
     display_label: str | None = None,
-) -> re.Match[str]:
+) -> tuple[re.Match[str], bool]:
     label = display_label or str(path)
+    code_mask = _rust_code_mask(text)
+    declaration_count = len(PROFILE_CATALOG_DECL_RE.findall(code_mask))
+    if declaration_count != 1:
+        raise FixtureManifestError(
+            f"{label} must contain exactly one active DEFAULT_PROFILES_JSON declaration"
+        )
     matches = [
-        match
+        (match, False)
         for match in PROFILE_CATALOG_RE.finditer(text)
-        if not _rust_offset_is_ignored_span(text, match.start())
+        if _rust_match_starts_in_code(code_mask, match)
+    ] + [
+        (match, True)
+        for match in PROFILE_CATALOG_INCLUDE_RE.finditer(text)
+        if _rust_match_starts_in_code(code_mask, match)
     ]
     if not matches:
         raise FixtureManifestError(
-            f"{label} does not contain DEFAULT_PROFILES_JSON raw string"
+            f"{label} DEFAULT_PROFILES_JSON declaration must use one raw string "
+            "or one canonical relative JSON include"
         )
     if len(matches) > 1:
         raise FixtureManifestError(
-            f"{label} must contain exactly one DEFAULT_PROFILES_JSON raw string"
+            f"{label} must contain exactly one active DEFAULT_PROFILES_JSON declaration"
         )
-    return matches[0]
+    selected = matches[0]
+    relative_identifier = selected[0].group(0).find("DEFAULT_PROFILES_JSON")
+    canonical_identifier_start = selected[0].start() + relative_identifier
+    if _profile_catalog_has_unqualified_identifier_use(
+        code_mask, canonical_identifier_start
+    ):
+        raise FixtureManifestError(
+            f"{label} may use DEFAULT_PROFILES_JSON only in its canonical declaration "
+            "and exact json::from_json runtime read"
+        )
+    return selected
 
 
 def _load_profile_catalog(
     path: Path,
     *,
     display_label: str | None = None,
-) -> tuple[list[Any], str, str]:
+) -> tuple[list[Any], str, str, Path]:
     label = display_label or str(path)
     raw = _read_regular_file(
         path,
@@ -1535,8 +1635,34 @@ def _load_profile_catalog(
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise FixtureManifestError(f"{label} is not valid UTF-8") from error
-    match = _profile_catalog_match(text, path, display_label=label)
-    catalog_json = match.group("body")
+    match, is_include = _profile_catalog_source(text, path, display_label=label)
+    material_path = path
+    if is_include:
+        include_text = match.group("path")
+        include_path = Path(include_text)
+        if (
+            include_path.is_absolute()
+            or len(include_path.parts) != 1
+            or include_path.name != include_text
+            or include_path.suffix != ".json"
+        ):
+            raise FixtureManifestError(
+                f"{label} DEFAULT_PROFILES_JSON include must be one relative JSON filename"
+            )
+        material_path = path.parent / include_path
+        catalog_raw = _read_regular_file(
+            material_path,
+            max_bytes=MAX_PROFILE_CATALOG_BYTES,
+            display_label=f"{label} JSON include",
+        )
+        try:
+            catalog_json = catalog_raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise FixtureManifestError(
+                f"{label} DEFAULT_PROFILES_JSON include is not valid UTF-8"
+            ) from error
+    else:
+        catalog_json = match.group("body")
     try:
         catalog = json.loads(
             catalog_json,
@@ -1558,6 +1684,7 @@ def _load_profile_catalog(
         _require_array(catalog, f"{label}.DEFAULT_PROFILES_JSON"),
         sha256_hex(raw),
         sha256_hex(catalog_json.encode("utf-8")),
+        material_path,
     )
 
 
@@ -3395,10 +3522,12 @@ def verify_profile_catalog(
     """Verify profile catalog versions against schema-backed XML fixtures."""
 
     label = display_label or "profile catalog"
-    profiles, profile_catalog_sha256, profile_catalog_json_sha256 = _load_profile_catalog(
-        path,
-        display_label=label,
-    )
+    (
+        profiles,
+        profile_catalog_sha256,
+        profile_catalog_json_sha256,
+        profile_catalog_material_path,
+    ) = _load_profile_catalog(path, display_label=label)
     versions: list[dict[str, Any]] = []
     missing_schema_versions: list[dict[str, str]] = []
     skipped_family_versions: list[dict[str, str]] = []
@@ -3521,6 +3650,7 @@ def verify_profile_catalog(
 
     return {
         "path": str(path),
+        "_material_path": profile_catalog_material_path,
         "sha256": profile_catalog_sha256,
         "catalog_json_sha256": profile_catalog_json_sha256,
         "profiles": len(profiles),
@@ -3891,6 +4021,11 @@ def verify_manifest(
         else None
     )
     if profile_catalog is not None:
+        profile_catalog_material_path = profile_catalog.pop("_material_path")
+        _reject_summary_output_input_alias(
+            args.summary_out,
+            (("profile catalog JSON include", profile_catalog_material_path),),
+        )
         profile_catalog["versions"] = sorted(
             profile_catalog["versions"],
             key=_profile_catalog_version_order_key,
@@ -4139,7 +4274,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Optional Rust profile catalog file containing DEFAULT_PROFILES_JSON "
+            "Optional Rust profile catalog declaring DEFAULT_PROFILES_JSON "
             f"(default catalog: {DEFAULT_PROFILE_CATALOG})."
         ),
     )

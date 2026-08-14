@@ -52,6 +52,7 @@ def load_checker():
 
 
 PROOF_LEDGER_TEST_COMPONENT_FILES = (
+    "sumeragi_v2_proof_ledger_liveness_configuration_cases.py",
     "sumeragi_v2_proof_ledger_status_cases.py",
     "sumeragi_v2_proof_ledger_trace_dependency_cases.py",
     "sumeragi_v2_proof_ledger_liveness_cases.py",
@@ -74,6 +75,8 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_causal_fifo_cases.py",
     "sumeragi_v2_proof_ledger_post_component_cases.py",
 )
+assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == 22
+assert len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -178,7 +181,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 34
+    assert len(filenames) == len(set(filenames)) == 35
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -343,6 +346,7 @@ def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_config/src/parameters/user.rs"),
         Path("crates/iroha_core/src/merge_sidecar.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs"),
         Path("crates/iroha_p2p/src/network.rs"),
     ):
         destination = tmp_path / relative
@@ -414,18 +418,6 @@ def copy_liveness_ownership_mutation_fixture(
     ci_gate.parent.mkdir(parents=True)
     shutil.copy2(ROOT_DIR / "ci" / "check_sumeragi_formal.sh", ci_gate)
     return repo_root, formal_dir
-
-
-def copy_shared_tlc_result_contract_fixture(
-    tmp_path: Path, module
-) -> Path:
-    """Copy the shared strict TLC result helper and every sealed caller."""
-
-    for relative in module.SHARED_TLC_RESULT_CONTRACT_SHA256:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
-    return tmp_path
 
 
 def copy_serve_scheduler_ordinal_mutation_fixture(
@@ -705,64 +697,6 @@ def mutate_tla_theorem(
     position = source.find(old, declaration.end(), theorem_end)
     assert position >= 0, (symbol, old)
     return source[:position] + new + source[position + len(old) :]
-
-
-def wrap_tla_theorem_proof_step(
-    source: str,
-    symbol: str,
-    anchor: str,
-) -> str:
-    """Wrap one anchored structured proof step in an invalid temporal box."""
-
-    declaration = re.search(
-        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
-        source,
-    )
-    assert declaration is not None, symbol
-    next_declaration = re.search(
-        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
-        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
-        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
-        source[declaration.end() :],
-    )
-    theorem_end = (
-        len(source)
-        if next_declaration is None
-        else declaration.end() + next_declaration.start()
-    )
-    theorem = source[declaration.end() : theorem_end]
-    assert theorem.count(anchor) == 1, (symbol, anchor)
-    anchor_offset = theorem.index(anchor)
-    labels = [
-        match
-        for match in re.finditer(r"(?m)^[ \t]*<\d+>\d+\.[ \t]*", theorem)
-        if match.end() <= anchor_offset
-    ]
-    assert labels, (symbol, anchor)
-    label = labels[-1]
-    proof_marker = re.search(
-        r"(?m)^[ \t]*BY\b",
-        theorem[label.end() :],
-    )
-    assert proof_marker is not None, (symbol, anchor)
-    step_end = label.end() + proof_marker.start()
-    assert anchor_offset < step_end, (symbol, anchor)
-    step = theorem[label.end() : step_end]
-    formula = step.rstrip()
-    trailing = step[len(formula) :]
-    mutated_theorem = (
-        theorem[: label.end()]
-        + "[]("
-        + formula
-        + ")"
-        + trailing
-        + theorem[step_end:]
-    )
-    return (
-        source[: declaration.end()]
-        + mutated_theorem
-        + source[theorem_end:]
-    )
 
 
 def delete_tla_theorem_token(source: str, symbol: str, token: str) -> str:
@@ -9080,7 +9014,7 @@ def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path,
     """Copy the effect-capacity corpus and its persistent recovery seam."""
 
     repo_root = tmp_path / "repo"
-    formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = repo_root / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
     for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS:
         shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
@@ -9321,11 +9255,9 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         ),
         (
             "retained_candidate_owners",
-            """        if let Some(finality) = &self.finality_completion {
-            insert(&finality.ownership)?;
-        }""",
-            "",
-            "durable Apply tombstone must retain the same candidate owner",
+            "                FinalityCompletionOwner::Runtime(ownership) => insert(ownership)?,",
+            "                FinalityCompletionOwner::Runtime(_) => {},",
+            "pending and durable Apply ownership must retain the exact runtime owner",
         ),
         (
             "retain_effect_batch_at_frontier",
@@ -9335,16 +9267,19 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         ),
         (
             "begin_apply",
-            "                && existing.task.ownership() == &ownership\n",
+            "                && existing.ownership == ownership\n",
             "",
             "in-flight Apply retry must retain the incumbent owner",
         ),
         (
             "complete_application",
             """            artifact: completion.artifact,
-            ownership,
+            ownership: FinalityCompletionOwner::Runtime(ownership),
         });""",
             """            artifact: completion.artifact,
+            ownership: FinalityCompletionOwner::RecoveredDecisionApply(
+                RecoveredDecisionApplyDispatchKeyV1::new_for_test(),
+            ),
         });""",
             "durable finality tombstone must retain the completed Apply owner",
         ),
@@ -10463,7 +10398,17 @@ def test_restart_retirement_semantics_reject_digest_independent_mutants(
     )
     assert not any(diagnostic in error for error in baseline_errors), baseline_errors
 
-    adapter_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    adapter_relative = (
+        "crates/iroha_core/src/sumeragi/"
+        "v2_adapter_inline_producer_recovery_02_tests.rs"
+        if item_name
+        in {
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            "restored_body_available_terminal_retirement_is_persistent_before_token_release",
+        }
+        else "crates/iroha_core/src/sumeragi/v2.rs"
+    )
+    adapter_path = repo_root / adapter_relative
     mutate_rust_item_source(module, adapter_path, item_name, old, new)
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
 
@@ -28193,7 +28138,10 @@ def test_serve_ingress_gate_contract_rejects_implementation_mutations(
             "fair_v2_ingress_required_serve_gate_precedes_open",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_worker_selected_serve_cases_02_tests.rs"
+            ),
             (
                 "fair_ingress_exact_ticket_coalesces_and_commits_before_"
                 "later_io_producers"
@@ -28214,7 +28162,10 @@ def test_serve_ingress_gate_contract_rejects_implementation_mutations(
             ),
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_worker_selected_serve_cases_02_tests.rs"
+            ),
             (
                 "selected_serve_physical_carrier_precedes_reactivated_"
                 "older_leader_lifecycle"
@@ -28466,6 +28417,41 @@ def test_serviced_candidate_production_contract_is_complete(
         "read_bounded; found 0" in error
         for error in errors
     ), errors
+    safety_path.write_text(canonical_safety, encoding="utf-8")
+
+    for old, new, expected_error in (
+        (
+            "fs::create_dir_all(&parent).map_err(|source| SafetyWalError::Io {",
+            "fs::create_dir(&parent).map_err(|source| SafetyWalError::Io {",
+            "test-path SafetyWal recovery must bind its directory before delegating",
+        ),
+        (
+            "let read_metadata_before = file.metadata()",
+            "let read_metadata_before = fs::metadata(&path)",
+            "bound SafetyWal recovery must open through its retained directory",
+        ),
+        (
+            "if !wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "if wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "WAL recovery must reject opened-file revision drift",
+        ),
+        (
+            "file.set_len(valid_prefix_len)\n"
+            "                .and_then(|()| file.sync_data())",
+            "file.set_len(valid_prefix_len)\n"
+            "                .and_then(|()| file.flush())",
+            "crash-tail truncation must synchronize before reopening append state",
+        ),
+    ):
+        assert canonical_safety.count(old) == 1
+        safety_path.write_text(
+            canonical_safety.replace(old, new, 1),
+            encoding="utf-8",
+        )
+        errors = module._serviced_candidate_production_source_fidelity_errors(
+            tmp_path
+        )
+        assert any(expected_error in error for error in errors), errors
     safety_path.write_text(canonical_safety, encoding="utf-8")
 
 

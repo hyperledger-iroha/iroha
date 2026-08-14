@@ -476,26 +476,6 @@ macro_rules! define_cycle_point {
                 }
                 Some((self.x * inverse, self.y * inverse))
             }
-            /// Convert a secret-derived owned projective point to the two
-            /// intentional witness coordinates while erasing both the point
-            /// slot and its projective inverse on every exit path.
-            pub(super) fn secret_coordinates_v1(
-                mut self,
-            ) -> Option<SecretCycleCoordinatesV1<$field>> {
-                let point = BorrowedZeroizingCopySlot(&mut self);
-                let (mut inverse, is_some) = point.as_ref().z.invert();
-                let inverse = BorrowedZeroizingCopySlot(&mut inverse);
-                if !bool::from(is_some) {
-                    return None;
-                }
-                let coordinates = SecretCycleCoordinatesV1(SecretCopyValueV1::new((
-                    point.as_ref().x.mul_ref(inverse.as_ref()),
-                    point.as_ref().y.mul_ref(inverse.as_ref()),
-                )));
-                drop(inverse);
-                drop(point);
-                Some(coordinates)
-            }
             /// Borrowed counterpart used while an upstream secret-point owner
             /// remains live. Only the returned coordinate owners escape; the
             /// inverse and all arithmetic scratch are erased locally.
@@ -687,6 +667,28 @@ define_cycle_point!(
     helioselene_is_odd,
     SELENE_B
 );
+#[cfg(test)]
+impl SelenePoint {
+    /// Convert an owned secret-derived Selene point to its two intentional
+    /// witness coordinates, erasing the point and inverse on every exit path.
+    pub(super) fn secret_coordinates_v1(
+        mut self,
+    ) -> Option<SecretCycleCoordinatesV1<HelioseleneField>> {
+        let point = BorrowedZeroizingCopySlot(&mut self);
+        let (mut inverse, is_some) = point.as_ref().z.invert();
+        let inverse = BorrowedZeroizingCopySlot(&mut inverse);
+        if !bool::from(is_some) {
+            return None;
+        }
+        let coordinates = SecretCycleCoordinatesV1(SecretCopyValueV1::new((
+            point.as_ref().x.mul_ref(inverse.as_ref()),
+            point.as_ref().y.mul_ref(inverse.as_ref()),
+        )));
+        drop(inverse);
+        drop(point);
+        Some(coordinates)
+    }
+}
 /// Lend a borrowed Selene point's owner-confined canonical encoding to one
 /// publication boundary. Projective, affine, integer, and byte scratch are
 /// erased after success, returned error, or unwind.

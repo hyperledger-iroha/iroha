@@ -1,6 +1,5 @@
 //! Miscellaneous config-reading tests for `iroha_config_base`.
 #![allow(clippy::needless_raw_string_hashes)]
-
 use std::{
     backtrace::Backtrace,
     fs,

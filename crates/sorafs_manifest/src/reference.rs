@@ -6575,80 +6575,350 @@ fn replication_order_signature_verification_category(
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repair::QueuedRepairStateV1;
-    use crate::{
-        AdvertEndpoint, AdvertSignature, AvailabilityTier, CapabilityTlv, CapabilityType,
-        CapacityMetadataEntry, EndpointKind, EndpointMetadata, EndpointMetadataKey,
-        POTR_RECEIPT_VERSION_V1, PathDiversityPolicy, PotrSignatureAlgorithm, PotrSignatureV1,
-        PotrStatus, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
-        REFRESH_RECOMMENDATION_SECS, REPAIR_EVIDENCE_VERSION_V1, REPAIR_TASK_VERSION_V1,
-        REPLICATION_ORDER_VERSION_V1, RendezvousTopic, RepairCauseV1, RepairEvidenceV1,
-        RepairPdpFailureCauseV1, RepairPdpFailureKindV1, RepairPorFailureCauseV1,
-        RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId, ReplicationAssignmentV1,
-        ReplicationOrderSlaV1, SignatureAlgorithm, StakePointer,
-    };
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
-    use norito::{decode_from_bytes, to_bytes};
+    use norito::{
+        NoritoDeserialize as Deserialize, NoritoSerialize as Serialize, decode_from_bytes, to_bytes,
+    };
     use std::{fs, path::PathBuf};
-    fn workspace_fixture(path: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+
+    use super::*;
+    use crate::{
+        AdvertEndpoint, AdvertSignature, AvailabilityTier, CapabilityTlv, CapabilityType,
+        EndpointKind, EndpointMetadata, EndpointMetadataKey, PathDiversityPolicy,
+        PotrSignatureAlgorithm, PotrSignatureV1, ProviderAdvertBodyV1, ProviderCapabilityRangeV1,
+        QosHints, REFRESH_RECOMMENDATION_SECS, REPAIR_EVIDENCE_VERSION_V1, RendezvousTopic,
+        RepairCauseV1, RepairEvidenceV1, RepairPdpFailureCauseV1, RepairPdpFailureKindV1,
+        RepairPorFailureCauseV1, RepairTaskRecordV1, SignatureAlgorithm, StakePointer,
+    };
+    use FixtureBundlePayloadKindV1 as BundleKind;
+    use HedgingValidationPayloadKindV1 as HedgingKind;
+    use OrderbookValidationPayloadKindV1 as OrderbookKind;
+    use PopValidationPayloadKindV1 as PopKind;
+    use RepairValidationPayloadKindV1 as RepairKind;
+    type Outcome = ValidationOutcomeV1;
+
+    fn encoded(value: &impl Serialize) -> Vec<u8> {
+        to_bytes(value).expect("encode reference-test payload")
+    }
+
+    fn fixture_bytes(path: &str) -> Vec<u8> {
+        let absolute = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
-            .join(path)
+            .join(path);
+        fs::read(absolute).unwrap_or_else(|error| panic!("read `{path}`: {error}"))
+    }
+
+    fn fixture<T>(path: &str) -> T
+    where
+        for<'de> T: Deserialize<'de>,
+    {
+        decode_from_bytes(&fixture_bytes(path))
+            .unwrap_or_else(|error| panic!("decode `{path}`: {error}"))
+    }
+
+    fn governance_fixture_bytes(name: &str) -> Vec<u8> {
+        fixture_bytes(&format!("fixtures/sorafs_manifest/governance/{name}"))
+    }
+
+    fn committed_governance_chain_outcome(head_name: &str, block_names: &[&str]) -> Outcome {
+        let head = governance_fixture_bytes(head_name);
+        let blocks = block_names
+            .iter()
+            .map(|name| governance_fixture_bytes(name))
+            .collect::<Vec<_>>();
+        let inputs = blocks
+            .iter()
+            .zip(block_names)
+            .map(|(bytes, name)| (bytes.as_slice(), (*name).to_owned()))
+            .collect::<Vec<_>>();
+        validate_governance_dag_head_chain_bytes(&head, head_name, &inputs, 123)
+    }
+
+    fn assert_committed_governance_outcome(outcome: &Outcome, expected_name: &str) {
+        let actual = format!(
+            "{}\n",
+            norito::json::to_string_pretty(outcome).expect("encode outcome JSON")
+        );
+        let expected = String::from_utf8(governance_fixture_bytes(expected_name))
+            .expect("outcome fixture is UTF-8");
+        assert_eq!(actual, expected);
+    }
+
+    fn assert_success(outcome: &Outcome) {
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000", "{outcome:?}");
+    }
+
+    fn assert_failure(outcome: &Outcome, code: &str, category: &str) {
+        assert!(!outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, code, "{outcome:?}");
+        assert_eq!(outcome.category, category, "{outcome:?}");
+    }
+
+    fn assert_roundtrip(outcome: &Outcome) {
+        let roundtrip: Outcome =
+            decode_from_bytes(&encoded(outcome)).expect("decode validation outcome");
+        assert_eq!(&roundtrip, outcome);
+    }
+
+    fn assert_field(context: &[ValidationContextFieldV1], key: &str, value: impl AsRef<str>) {
+        let value = value.as_ref();
+        assert!(
+            context
+                .iter()
+                .any(|field| field.key == key && field.value == value),
+            "missing `{key}={value}` from {context:?}"
+        );
+    }
+
+    fn field<'a>(context: &'a [ValidationContextFieldV1], key: &str) -> Option<&'a str> {
+        context
+            .iter()
+            .find(|field| field.key == key)
+            .map(|field| field.value.as_str())
+    }
+
+    fn assert_context(outcome: &Outcome, key: &str, value: impl AsRef<str>) {
+        assert_field(&outcome.context, key, value);
+    }
+
+    fn fixture_bundle_outcome(
+        payloads: &[(BundleKind, &str, Vec<u8>)],
+        now: u64,
+        generated_at: u64,
+    ) -> Outcome {
+        let inputs = payloads
+            .iter()
+            .map(|(kind, label, bytes)| FixtureBundlePayloadV1::new(*kind, *label, bytes))
+            .collect::<Vec<_>>();
+        validate_fixture_bundle_payloads(&inputs, now, generated_at)
+    }
+
+    fn governance_chain_outcome(
+        blocks: &[GovernanceDagBlockV1],
+        head: &GovernanceDagHeadV1,
+        generated_at: u64,
+    ) -> Outcome {
+        let head_bytes = encoded(head);
+        let block_bytes = blocks.iter().map(encoded).collect::<Vec<_>>();
+        let block_inputs = block_bytes
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
+            .collect::<Vec<_>>();
+        validate_governance_dag_head_chain_bytes(
+            &head_bytes,
+            "governance-head.to",
+            &block_inputs,
+            generated_at,
+        )
+    }
+
+    fn advert_outcome(
+        advert: &ProviderAdvertV1,
+        path: &str,
+        now: u64,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_provider_advert_bytes(&encoded(advert), path, now, generated_at)
+    }
+
+    fn admission_outcome(
+        envelope: &ProviderAdmissionEnvelopeV1,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_provider_admission_envelope_bytes(&encoded(envelope), path, generated_at)
+    }
+
+    fn por_outcome(
+        challenge: &PorChallengeV1,
+        proof: &PorProofV1,
+        challenge_path: &str,
+        proof_path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_por_challenge_proof_bytes(
+            &encoded(challenge),
+            &encoded(proof),
+            challenge_path,
+            proof_path,
+            generated_at,
+        )
+    }
+
+    fn potr_outcome(
+        receipt: &PotrReceiptV1,
+        path: &str,
+        expected_tier: Option<ProofStreamTier>,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_potr_receipt_bytes(&encoded(receipt), path, expected_tier, generated_at)
+    }
+
+    fn repair_outcome(
+        kind: RepairKind,
+        payload: &impl Serialize,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_repair_payload_bytes(kind, &encoded(payload), path, generated_at)
+    }
+
+    fn hedging_outcome(
+        kind: HedgingKind,
+        payload: &impl Serialize,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_hedging_payload_bytes(kind, &encoded(payload), path, generated_at)
+    }
+
+    fn pop_outcome(
+        kind: PopKind,
+        payload: &impl Serialize,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_pop_payload_bytes(kind, &encoded(payload), path, generated_at)
+    }
+
+    fn orderbook_outcome(
+        kind: OrderbookKind,
+        payload: &impl Serialize,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_orderbook_payload_bytes(kind, &encoded(payload), path, generated_at)
+    }
+
+    fn assert_signed_order_request(bytes: &[u8], public_key: &[u8]) {
+        let order: OrderRequestV1 = decode_from_bytes(bytes).expect("decode signed order request");
+        assert_eq!(order.signature.public_key, public_key);
+        crate::verify_order_request_signature_v1(&order).expect("valid order signature");
+    }
+
+    fn assert_signed_order_cancel(bytes: &[u8], public_key: &[u8]) {
+        let cancel: OrderCancelV1 = decode_from_bytes(bytes).expect("decode signed order cancel");
+        assert_eq!(cancel.signature.public_key, public_key);
+        crate::verify_order_cancel_signature_v1(&cancel).expect("valid cancel signature");
+    }
+
+    fn assert_signed_settlement_receipt(bytes: &[u8], public_key: &[u8]) {
+        let receipt: SettlementReceiptV1 =
+            decode_from_bytes(bytes).expect("decode signed settlement receipt");
+        assert_eq!(receipt.settlement_signature.public_key, public_key);
+        crate::verify_settlement_receipt_signature_v1(&receipt).expect("valid receipt signature");
+    }
+
+    fn verifying_key(seed: &[u8; 32]) -> Vec<u8> {
+        SigningKey::from_bytes(seed)
+            .verifying_key()
+            .to_bytes()
+            .to_vec()
+    }
+
+    fn micro_xor(value: u128) -> crate::XorQuantity {
+        crate::XorQuantity::try_from_micro(value).expect("legacy micro-XOR value is representable")
+    }
+
+    fn minimal_order_request_fields(owner_account: Vec<u8>) -> OrderbookOrderRequestFieldsV1 {
+        OrderbookOrderRequestFieldsV1 {
+            side: OrderSideV1::Bid,
+            tier: OrderTierV1::Hot,
+            price_per_gib: micro_xor(1),
+            quantity_gib: 1,
+            remaining_gib: 1,
+            owner_account,
+            provider_id: None,
+            expiry_unix: 1,
+            nonce: 1,
+            maker_fee_bps: 0,
+            taker_fee_bps: 0,
+        }
+    }
+
+    fn order_cancel_fields(
+        order_id: [u8; 32],
+        owner_account: Vec<u8>,
+        nonce: u64,
+    ) -> OrderbookOrderCancelFieldsV1 {
+        OrderbookOrderCancelFieldsV1 {
+            order_id,
+            owner_account,
+            reason: OrderCancelReasonV1::OwnerRequested,
+            nonce,
+        }
+    }
+
+    fn settlement_receipt_fields(provider_credit: u128) -> OrderbookSettlementReceiptFieldsV1 {
+        OrderbookSettlementReceiptFieldsV1 {
+            receipt_id: [0x07; 32],
+            channel_id: [0x05; 32],
+            trade_id: [0x04; 32],
+            range_start: 10,
+            range_end: 42,
+            chunk_hash: [0x08; 32],
+            bytes_delivered: 32,
+            xor_debited: micro_xor(100),
+            provider_credit: micro_xor(provider_credit),
+            fee_amount: micro_xor(10),
+            issued_at_unix: 1_800_000_200,
+        }
+    }
+
+    fn replication_order_outcome(
+        order: &ReplicationOrderV1,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_replication_order_bytes(&encoded(order), path, generated_at)
+    }
+
+    fn signed_replication_order_outcome(
+        order: &SignedReplicationOrderV1,
+        path: &str,
+        generated_at: u64,
+    ) -> Outcome {
+        validate_signed_replication_order_bytes(&encoded(order), path, generated_at)
     }
     fn admission_envelope() -> ProviderAdmissionEnvelopeV1 {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/provider_admission/envelope_v1.to",
-        ))
-        .expect("read admission envelope fixture");
-        decode_from_bytes(&bytes).expect("decode admission envelope fixture")
+        fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to")
     }
     fn admission_renewal_bytes() -> Vec<u8> {
-        fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/provider_admission/renewal_v1.to",
-        ))
-        .expect("read admission renewal fixture")
+        fixture_bytes("fixtures/sorafs_manifest/provider_admission/renewal_v1.to")
     }
     fn admission_revocation_bytes() -> Vec<u8> {
-        fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/provider_admission/revocation_v1.to",
-        ))
-        .expect("read admission revocation fixture")
+        fixture_bytes("fixtures/sorafs_manifest/provider_admission/revocation_v1.to")
     }
     fn por_challenge() -> PorChallengeV1 {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/por/challenge_v1.to",
-        ))
-        .expect("read PoR challenge fixture");
-        decode_from_bytes(&bytes).expect("decode PoR challenge fixture")
+        fixture("fixtures/sorafs_manifest/por/challenge_v1.to")
     }
     fn por_proof() -> PorProofV1 {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/por/proof_v1.to",
-        ))
-        .expect("read PoR proof fixture");
-        decode_from_bytes(&bytes).expect("decode PoR proof fixture")
+        fixture("fixtures/sorafs_manifest/por/proof_v1.to")
     }
     fn governance_node() -> GovernanceLogNodeV1 {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/governance/node_v1.to",
-        ))
-        .expect("read governance node fixture");
-        decode_from_bytes(&bytes).expect("decode governance node fixture")
+        fixture("fixtures/sorafs_manifest/governance/node_v1.to")
+    }
+
+    fn ed25519_governance_signature(
+        payload: &[u8],
+        seed: &[u8; 32],
+    ) -> crate::GovernanceLogSignatureV1 {
+        let key = SigningKey::from_bytes(seed);
+        crate::GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            signature: key.sign(payload).to_bytes().to_vec(),
+        }
     }
     fn ed25519_signed_governance_node() -> GovernanceLogNodeV1 {
         let mut node = governance_node();
-        let signing_key = SigningKey::from_bytes(&[0xA6; 32]);
         let payload_bytes = node
             .signature_payload_bytes()
             .expect("encode governance signature payload");
-        let signature = signing_key.sign(&payload_bytes);
-        node.publisher_signature = crate::GovernanceLogSignatureV1 {
-            algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
-        };
+        node.publisher_signature = ed25519_governance_signature(&payload_bytes, &[0xA6; 32]);
         node
     }
     fn dilithium3_signed_governance_node() -> GovernanceLogNodeV1 {
@@ -6680,28 +6950,16 @@ mod tests {
         }
     }
     fn sign_governance_dag_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
-        let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = block
             .signature_payload_bytes()
             .expect("encode governance DAG block signing payload");
-        let signature = signing_key.sign(&payload_bytes);
-        block.block_signature = crate::GovernanceLogSignatureV1 {
-            algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
-        };
+        block.block_signature = ed25519_governance_signature(&payload_bytes, seed);
     }
     fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
-        let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = head
             .signature_payload_bytes()
             .expect("encode governance DAG head signing payload");
-        let signature = signing_key.sign(&payload_bytes);
-        head.head_signature = crate::GovernanceLogSignatureV1 {
-            algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
-        };
+        head.head_signature = ed25519_governance_signature(&payload_bytes, seed);
     }
     fn signed_governance_dag_block(
         prev_block_cid: Option<Vec<u8>>,
@@ -6717,16 +6975,11 @@ mod tests {
         node.node_cid = node
             .recompute_node_cid()
             .expect("derive governance DAG node CID");
-        let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
         let node_payload = node
             .signature_payload_bytes()
             .expect("encode governance node signing payload");
-        let node_signature = signing_key.sign(&node_payload);
-        node.publisher_signature = crate::GovernanceLogSignatureV1 {
-            algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: node_signature.to_bytes().to_vec(),
-        };
+        node.publisher_signature = ed25519_governance_signature(&node_payload, &[0xC7; 32]);
+
         let block_cid = crate::governance_dag_block_cid_v1(
             prev_block_cid.as_deref(),
             sequence,
@@ -6774,6 +7027,7 @@ mod tests {
         (blocks, head)
     }
     fn assert_bounded_governance_outcome(outcome: &ValidationOutcomeV1) {
+        assert!(!outcome.is_ok(), "{outcome:?}");
         let json = norito::json::to_string(outcome).expect("encode validation outcome JSON");
         assert!(
             json.len() < 16 * 1024,
@@ -6781,104 +7035,39 @@ mod tests {
             json.len()
         );
     }
-    fn empty_orderbook_signature(signing_key: &SigningKey) -> crate::OrderbookSignatureV1 {
-        crate::OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: signing_key.verifying_key().to_bytes().to_vec(),
-            signature: Vec::new(),
-        }
-    }
+
     fn orderbook_order_request() -> OrderRequestV1 {
-        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
-        let owner_account = b"buyer@sora".to_vec();
-        let nonce = 7;
-        sign_order_request_ed25519_v1(
-            OrderRequestV1 {
-                version: crate::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
-                side: OrderSideV1::Bid,
-                tier: OrderTierV1::Hot,
-                price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
-                    .expect("legacy micro-XOR value is representable"),
-                quantity_gib: 64,
-                remaining_gib: 64,
-                owner_account,
-                provider_id: None,
-                expiry_unix: 1_800_000_000,
-                nonce,
-                maker_fee_bps: 10,
-                taker_fee_bps: 15,
-                signature: empty_orderbook_signature(&signing_key),
-            },
-            &signing_key,
-        )
-        .expect("sign orderbook order request fixture")
+        fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to")
     }
     fn orderbook_order_cancel() -> OrderCancelV1 {
-        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
+        let mut cancel: OrderCancelV1 =
+            fixture("fixtures/sorafs_manifest/orderbook/order_cancel_v1.to");
         let order = orderbook_order_request();
-        sign_order_cancel_ed25519_v1(
-            OrderCancelV1 {
-                version: crate::ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: order.order_id,
-                owner_account: order.owner_account,
-                reason: OrderCancelReasonV1::OwnerRequested,
-                nonce: 9,
-                signature: empty_orderbook_signature(&signing_key),
-            },
-            &signing_key,
-        )
-        .expect("sign orderbook cancel fixture")
+        cancel.order_id = order.order_id;
+        cancel.owner_account = order.owner_account;
+        cancel.nonce = 9;
+        sign_order_cancel_ed25519_v1(cancel, &SigningKey::from_bytes(&[0xB7; 32]))
+            .expect("sign orderbook cancel fixture")
     }
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
-        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
-        sign_settlement_receipt_ed25519_v1(
-            SettlementReceiptV1 {
-                version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
-                receipt_id: [0x81; 32],
-                channel_id: [0x82; 32],
-                trade_id: [0x83; 32],
-                range: crate::ByteRangeV1 {
-                    start: 128,
-                    end: 384,
-                },
-                chunk_hash: [0x84; 32],
-                bytes_delivered: 256,
-                xor_debited: crate::XorQuantity::try_from_micro(100)
-                    .expect("legacy micro-XOR value is representable"),
-                provider_credit: crate::XorQuantity::try_from_micro(90)
-                    .expect("legacy micro-XOR value is representable"),
-                fee_amount: crate::XorQuantity::try_from_micro(10)
-                    .expect("legacy micro-XOR value is representable"),
-                issued_at_unix: 1_800_000_010,
-                settlement_signature: empty_orderbook_signature(&signing_key),
-            },
-            &signing_key,
-        )
-        .expect("sign orderbook settlement receipt fixture")
+        let mut receipt: SettlementReceiptV1 =
+            fixture("fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to");
+        receipt.issued_at_unix = 1_800_000_010;
+        sign_settlement_receipt_ed25519_v1(receipt, &SigningKey::from_bytes(&[0xB7; 32]))
+            .expect("sign orderbook settlement receipt fixture")
     }
     fn orderbook_trade_event() -> TradeEventV1 {
-        TradeEventV1 {
-            version: crate::ORDERBOOK_TRADE_EVENT_VERSION_V1,
-            trade_id: [0x83; 32],
-            maker_order_id: [0x71; 32],
-            taker_order_id: [0x72; 32],
-            tier: OrderTierV1::Hot,
-            price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            filled_gib: 2,
-            maker_fee: crate::XorQuantity::try_from_micro(2_500)
-                .expect("legacy micro-XOR value is representable"),
-            taker_fee: crate::XorQuantity::try_from_micro(3_750)
-                .expect("legacy micro-XOR value is representable"),
-            timestamp_unix: 1_800_000_005,
-        }
+        let mut trade: TradeEventV1 =
+            fixture("fixtures/sorafs_manifest/orderbook/trade_event_v1.to");
+        trade.maker_order_id = [0x71; 32];
+        trade.filled_gib = 2;
+        trade.maker_fee = micro_xor(2_500);
+        trade.taker_fee = micro_xor(3_750);
+        trade.timestamp_unix = 1_800_000_005;
+        trade
     }
     fn hedging_digest(label: &str) -> [u8; 32] {
-        let hash = blake3::hash(label.as_bytes());
-        let mut out = [0_u8; 32];
-        out.copy_from_slice(hash.as_bytes());
-        out
+        *blake3::hash(label.as_bytes()).as_bytes()
     }
     fn hedging_feed(feed_id: &str, price: &str, observed_at_unix: u64) -> HedgingPriceFeedV1 {
         HedgingPriceFeedV1 {
@@ -7081,31 +7270,12 @@ mod tests {
         .expect("issue PoP bundle")
     }
     fn potr_receipt() -> PotrReceiptV1 {
-        let receipt = PotrReceiptV1 {
-            version: POTR_RECEIPT_VERSION_V1,
-            manifest_digest: [0x11; 32],
-            provider_id: [0x22; 32],
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 90_000,
-            latency_ms: 42_000,
-            status: PotrStatus::Success,
-            requested_at_ms: 1_700_000_000_000,
-            responded_at_ms: 1_700_000_042_000,
-            recorded_at_ms: 1_700_000_042_100,
-            range_start: 0,
-            range_end: 1_048_575,
-            request_id: Some([0x44; 16]),
-            trace_id: Some([0x33; 16]),
-            note: Some("ok".to_owned()),
-            gateway_signature: None,
-            provider_signature: None,
-        };
-        let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
-            .expect("fixture gateway key");
-        let provider_key =
-            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa).expect("fixture provider key");
-        crate::sign_potr_receipt_v1(receipt, &gateway_key, &provider_key)
-            .expect("sign PoTR fixture")
+        let mut receipt: PotrReceiptV1 = fixture("fixtures/sorafs_manifest/potr/receipt_v1.to");
+        receipt.manifest_digest = [0x11; 32];
+        receipt.provider_id = [0x22; 32];
+        receipt.note = Some("ok".to_owned());
+        resign_potr_receipt(&mut receipt);
+        receipt
     }
     fn resign_potr_receipt(receipt: &mut PotrReceiptV1) {
         let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
@@ -7131,21 +7301,12 @@ mod tests {
         }
     }
     fn repair_task_record() -> RepairTaskRecordV1 {
-        RepairTaskRecordV1 {
-            version: REPAIR_TASK_VERSION_V1,
-            ticket_id: RepairTicketId("REP-351".to_owned()),
-            manifest_digest: [0x31; 32],
-            provider_id: [0x32; 32],
-            auditor_account: "auditor@sora".to_owned(),
-            state: RepairTaskStateV1::Queued(QueuedRepairStateV1 {
-                queued_at_unix: 1_700_000_060,
-                sla_deadline_unix: Some(1_700_086_400),
-            }),
-            por_history_id: Some(7),
-            sla_deadline_unix: Some(1_700_086_400),
-            scheduler_notes: Some("waiting for worker claim".to_owned()),
-            slash_proposal_digest: None,
-        }
+        let mut task: RepairTaskRecordV1 = fixture("fixtures/sorafs_manifest/repair/task_v1.to");
+        task.ticket_id = crate::RepairTicketId("REP-351".to_owned());
+        task.manifest_digest = [0x31; 32];
+        task.provider_id = [0x32; 32];
+        task.por_history_id = Some(7);
+        task
     }
     fn signed_advert(now: u64) -> ProviderAdvertV1 {
         let body = ProviderAdvertBodyV1 {
@@ -7154,8 +7315,7 @@ mod tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: crate::deal::XorQuantity::try_from_micro(1_000_000)
-                    .expect("fixture stake is representable"),
+                stake_amount: micro_xor(1_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -7222,37 +7382,7 @@ mod tests {
         advert
     }
     fn replication_order() -> ReplicationOrderV1 {
-        ReplicationOrderV1 {
-            version: REPLICATION_ORDER_VERSION_V1,
-            order_id: [0xAB; 32],
-            manifest_cid: crate::canonical_manifest_root_cid([0x41; 32]),
-            manifest_digest: [0x42; 32],
-            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
-            target_replicas: 2,
-            assignments: vec![
-                ReplicationAssignmentV1 {
-                    provider_id: [0x10; 32],
-                    slice_gib: 512,
-                    lane: Some("lane-primary".to_owned()),
-                },
-                ReplicationAssignmentV1 {
-                    provider_id: [0x11; 32],
-                    slice_gib: 512,
-                    lane: Some("lane-secondary".to_owned()),
-                },
-            ],
-            issued_at: 1_700_000_000,
-            deadline_at: 1_700_086_400,
-            sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 86_400,
-                min_availability_percent_milli: 99_500,
-                min_por_success_percent_milli: 98_000,
-            },
-            metadata: vec![CapacityMetadataEntry {
-                key: "governance.ticket".to_owned(),
-                value: "ticket-sorafs-0001".to_owned(),
-            }],
-        }
+        fixture("fixtures/sorafs_manifest/replication_order/order_v1.to")
     }
     fn signed_replication_order() -> SignedReplicationOrderV1 {
         let signing_key = SigningKey::from_bytes(&[0xA7; 32]);
@@ -7315,7 +7445,7 @@ mod tests {
     }
     #[test]
     fn pdp_reference_context_and_categories_match_fixed_signature_model() {
-        let proof = PdpProofV1 {
+        let context = pdp_proof_context(&PdpProofV1 {
             version: crate::PDP_PROOF_VERSION_V1,
             commitment_digest: [0x11; 32],
             challenge_id: [0x22; 32],
@@ -7328,11 +7458,9 @@ mod tests {
                 public_key: [0x55; PUBLIC_KEY_LENGTH],
                 signature: [0x66; SIGNATURE_LENGTH],
             },
-        };
-        let context = pdp_proof_context(&proof);
-        assert!(context.iter().any(|field| {
-            field.key == "signature_len" && field.value == SIGNATURE_LENGTH.to_string()
-        }));
+        });
+        assert_field(&context, "signature_len", SIGNATURE_LENGTH.to_string());
+
         assert_eq!(
             pdp_challenge_validation_category(&PdpChallengeValidationError::InvalidDeadline {
                 issued_at: 2,
@@ -7364,103 +7492,68 @@ mod tests {
     }
     #[test]
     fn validate_fixture_bundle_payloads_accepts_linked_advert_and_order() {
-        let advert = signed_advert(1_700_000_000);
-        let order = replication_order();
-        let advert_bytes = to_bytes(&advert).expect("encode advert");
-        let order_bytes = to_bytes(&order).expect("encode order");
         let payloads = [
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ProviderAdvert,
+            (
+                BundleKind::ProviderAdvert,
                 "advert.to",
-                &advert_bytes,
+                encoded(&signed_advert(1_700_000_000)),
             ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ReplicationOrder,
+            (
+                BundleKind::ReplicationOrder,
                 "order.to",
-                &order_bytes,
+                encoded(&replication_order()),
             ),
         ];
-        let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 42);
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "linkable_artifacts" && field.value == "2"),
-            "{outcome:?}"
-        );
+        let outcome = fixture_bundle_outcome(&payloads, 1_700_000_001, 42);
+        assert_success(&outcome);
+        assert_context(&outcome, "linkable_artifacts", "2");
     }
     #[test]
     fn validate_fixture_bundle_payloads_accepts_orderbook_payloads_with_linked_artifacts() {
-        let advert = signed_advert(1_700_000_000);
-        let order = replication_order();
-        let orderbook_order = orderbook_order_request();
-        let receipt = orderbook_settlement_receipt();
-        let advert_bytes = to_bytes(&advert).expect("encode advert");
-        let order_bytes = to_bytes(&order).expect("encode order");
-        let orderbook_order_bytes =
-            to_bytes(&orderbook_order).expect("encode orderbook order request");
-        let receipt_bytes = to_bytes(&receipt).expect("encode settlement receipt");
         let payloads = [
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ProviderAdvert,
+            (
+                BundleKind::ProviderAdvert,
                 "advert.to",
-                &advert_bytes,
+                encoded(&signed_advert(1_700_000_000)),
             ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ReplicationOrder,
+            (
+                BundleKind::ReplicationOrder,
                 "order.to",
-                &order_bytes,
+                encoded(&replication_order()),
             ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::OrderbookOrderRequest,
+            (
+                BundleKind::OrderbookOrderRequest,
                 "orderbook/order_request_v1.to",
-                &orderbook_order_bytes,
+                encoded(&orderbook_order_request()),
             ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::OrderbookSettlementReceipt,
+            (
+                BundleKind::OrderbookSettlementReceipt,
                 "orderbook/settlement_receipt_v1.to",
-                &receipt_bytes,
+                encoded(&orderbook_settlement_receipt()),
             ),
         ];
-        let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 46);
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert!(
+        let outcome = fixture_bundle_outcome(&payloads, 1_700_000_001, 46);
+        assert_success(&outcome);
+        assert_context(&outcome, "artifact_count", "4");
+        assert_context(&outcome, "linkable_artifacts", "2");
+        assert_eq!(
             outcome
-                .context
+                .inputs
                 .iter()
-                .any(|field| field.key == "artifact_count" && field.value == "4"),
-            "{outcome:?}"
-        );
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "linkable_artifacts" && field.value == "2"),
-            "{outcome:?}"
-        );
-        assert!(
-            outcome.inputs.iter().any(|input| {
-                input.kind == "settlement_receipt"
-                    && input.path == "orderbook/settlement_receipt_v1.to"
-            }),
-            "{outcome:?}"
+                .find(|input| input.kind == "settlement_receipt")
+                .map(|input| input.path.as_str()),
+            Some("orderbook/settlement_receipt_v1.to")
         );
     }
     #[test]
     fn validate_fixture_bundle_payloads_rejects_single_linkable_artifact() {
-        let order = replication_order();
-        let order_bytes = to_bytes(&order).expect("encode order");
-        let payloads = [FixtureBundlePayloadV1::new(
-            FixtureBundlePayloadKindV1::ReplicationOrder,
+        let payloads = [(
+            BundleKind::ReplicationOrder,
             "order.to",
-            &order_bytes,
+            encoded(&replication_order()),
         )];
-        let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 43);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-BND-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = fixture_bundle_outcome(&payloads, 1_700_000_001, 43);
+        assert_failure(&outcome, "SFS-BND-001", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_fixture_bundle_payloads_rejects_manifest_digest_mismatch() {
@@ -7469,24 +7562,12 @@ mod tests {
         receipt.manifest_digest = [0x99; 32];
         receipt.provider_id = [0x10; 32];
         resign_potr_receipt(&mut receipt);
-        let order_bytes = to_bytes(&order).expect("encode order");
-        let receipt_bytes = to_bytes(&receipt).expect("encode receipt");
         let payloads = [
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ReplicationOrder,
-                "order.to",
-                &order_bytes,
-            ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::PotrReceipt,
-                "receipt.to",
-                &receipt_bytes,
-            ),
+            (BundleKind::ReplicationOrder, "order.to", encoded(&order)),
+            (BundleKind::PotrReceipt, "receipt.to", encoded(&receipt)),
         ];
-        let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 44);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-BND-002");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = fixture_bundle_outcome(&payloads, 1_700_000_001, 44);
+        assert_failure(&outcome, "SFS-BND-002", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_fixture_bundle_payloads_rejects_provider_assignment_mismatch() {
@@ -7495,44 +7576,24 @@ mod tests {
         receipt.manifest_digest = order.manifest_digest;
         receipt.provider_id = [0x99; 32];
         resign_potr_receipt(&mut receipt);
-        let order_bytes = to_bytes(&order).expect("encode order");
-        let receipt_bytes = to_bytes(&receipt).expect("encode receipt");
         let payloads = [
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::ReplicationOrder,
-                "order.to",
-                &order_bytes,
-            ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::PotrReceipt,
-                "receipt.to",
-                &receipt_bytes,
-            ),
+            (BundleKind::ReplicationOrder, "order.to", encoded(&order)),
+            (BundleKind::PotrReceipt, "receipt.to", encoded(&receipt)),
         ];
-        let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 45);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-BND-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = fixture_bundle_outcome(&payloads, 1_700_000_001, 45);
+        assert_failure(&outcome, "SFS-BND-003", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_governance_log_node_bytes_accepts_fixture() {
         let node = governance_node();
-        let bytes = to_bytes(&node).expect("encode governance node");
         let outcome = validate_governance_log_node_bytes(
-            &bytes,
+            &encoded(&node),
             "governance-node.to",
             Some(node.node_cid.as_slice()),
             46,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "payload_kind" && field.value == "por_proof"),
-            "{outcome:?}"
-        );
+        assert_success(&outcome);
+        assert_context(&outcome, "payload_kind", "por_proof");
     }
     #[test]
     fn governance_log_node_context_exposes_signed_submission_provenance() {
@@ -7544,108 +7605,95 @@ mod tests {
             origin: crate::GovernanceDagSubmissionOriginV1::AppealFinanceReport,
         });
         let context = governance_log_node_context(&node);
-        assert!(context.iter().any(|field| {
-            field.key == "submission_publisher_account_digest_hex"
-                && field.value
-                    == hex::encode(crate::governance_dag_submission_account_digest_v1(
-                        b"canonical-norito-reference-publisher",
-                    ))
-        }));
-        assert!(context.iter().any(|field| {
-            field.key == "submission_origin" && field.value == "appeal_finance_report"
-        }));
+        assert_field(
+            &context,
+            "submission_publisher_account_digest_hex",
+            hex::encode(crate::governance_dag_submission_account_digest_v1(
+                b"canonical-norito-reference-publisher",
+            )),
+        );
+        assert_field(&context, "submission_origin", "appeal_finance_report");
     }
     #[test]
     fn validate_governance_log_node_bytes_verifies_ed25519_publisher_signature() {
         let node = ed25519_signed_governance_node();
-        let bytes = to_bytes(&node).expect("encode governance node");
-        let outcome = validate_governance_log_node_bytes(&bytes, "governance-node.to", None, 47);
-        assert!(outcome.is_ok(), "{outcome:?}");
+        let outcome =
+            validate_governance_log_node_bytes(&encoded(&node), "governance-node.to", None, 47);
+        assert_success(&outcome);
+
         let mut tampered = node;
         tampered.publisher_peer_id.extend_from_slice(b"-tampered");
         tampered.node_cid = tampered
             .recompute_node_cid()
             .expect("recompute tampered governance node CID");
-        let bytes = to_bytes(&tampered).expect("encode tampered governance node");
-        let outcome =
-            validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-005");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = validate_governance_log_node_bytes(
+            &encoded(&tampered),
+            "tampered-governance-node.to",
+            None,
+            48,
+        );
+        assert_failure(&outcome, "SFS-SIG-005", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_governance_log_node_bytes_verifies_dilithium3_publisher_signature() {
         let node = dilithium3_signed_governance_node();
-        let bytes = to_bytes(&node).expect("encode governance node");
-        let outcome = validate_governance_log_node_bytes(&bytes, "governance-node.to", None, 47);
-        assert!(outcome.is_ok(), "{outcome:?}");
+        let outcome =
+            validate_governance_log_node_bytes(&encoded(&node), "governance-node.to", None, 47);
+        assert_success(&outcome);
+
         let mut tampered = node;
         tampered.timestamp += 1;
         tampered.node_cid = tampered
             .recompute_node_cid()
             .expect("recompute tampered governance node CID");
-        let bytes = to_bytes(&tampered).expect("encode tampered governance node");
-        let outcome =
-            validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-005");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = validate_governance_log_node_bytes(
+            &encoded(&tampered),
+            "tampered-governance-node.to",
+            None,
+            48,
+        );
+        assert_failure(&outcome, "SFS-SIG-005", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_governance_log_node_bytes_rejects_malformed_norito() {
         let outcome = validate_governance_log_node_bytes(b"not norito", "bad-node.to", None, 47);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_governance_log_node_bytes_rejects_cid_mismatch() {
         let node = governance_node();
-        let bytes = to_bytes(&node).expect("encode governance node");
         let outcome = validate_governance_log_node_bytes(
-            &bytes,
+            &encoded(&node),
             "governance-node.to",
             Some(b"bafywronggovernancenode"),
             48,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        assert_failure(&outcome, "SFS-GOV-003", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_governance_log_node_bytes_rejects_structural_failure() {
         let mut node = governance_node();
         node.node_cid.clear();
-        let bytes = to_bytes(&node).expect("encode governance node");
-        let outcome = validate_governance_log_node_bytes(&bytes, "bad-node.to", None, 49);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = validate_governance_log_node_bytes(&encoded(&node), "bad-node.to", None, 49);
+        assert_failure(&outcome, "SFS-GOV-001", CATEGORY_VALIDATION);
     }
     #[test]
     fn governance_reference_outcomes_bound_malformed_cid_and_peer_context() {
         const ADVERSARIAL_BYTES: usize = 256 * 1024;
         let mut node = governance_node();
         node.node_cid = vec![0xA5; ADVERSARIAL_BYTES];
-        let node_bytes = to_bytes(&node).expect("encode oversized governance node");
         let outcome =
-            validate_governance_log_node_bytes(&node_bytes, "oversized-node.to", None, 49);
-        assert!(!outcome.is_ok());
+            validate_governance_log_node_bytes(&encoded(&node), "oversized-node.to", None, 49);
         assert_bounded_governance_outcome(&outcome);
         let mut block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
         block.publisher_peer_id = vec![0x5A; ADVERSARIAL_BYTES];
-        let block_bytes = to_bytes(&block).expect("encode oversized governance block");
         let outcome =
-            validate_governance_dag_block_bytes(&block_bytes, "oversized-block.to", None, 49);
-        assert!(!outcome.is_ok());
+            validate_governance_dag_block_bytes(&encoded(&block), "oversized-block.to", None, 49);
         assert_bounded_governance_outcome(&outcome);
         let (blocks, mut head) = signed_governance_dag_chain();
         head.checkpoint_cid = Some(vec![0xC3; ADVERSARIAL_BYTES]);
-        let head_bytes = to_bytes(&head).expect("encode oversized governance head");
-        let block_bytes = blocks
-            .iter()
-            .map(|block| to_bytes(block).expect("encode governance block"))
-            .collect::<Vec<_>>();
+        let head_bytes = encoded(&head);
+        let block_bytes = blocks.iter().map(encoded).collect::<Vec<_>>();
         let block_inputs = block_bytes
             .iter()
             .enumerate()
@@ -7657,7 +7705,6 @@ mod tests {
             &block_inputs,
             49,
         );
-        assert!(!outcome.is_ok());
         assert_bounded_governance_outcome(&outcome);
     }
     #[test]
@@ -7705,83 +7752,38 @@ mod tests {
     #[test]
     fn validate_governance_dag_block_bytes_accepts_signed_block() {
         let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
-        let bytes = to_bytes(&block).expect("encode governance DAG block");
         let outcome = validate_governance_dag_block_bytes(
-            &bytes,
+            &encoded(&block),
             "governance-block.to",
             Some(&block.block_cid),
             50,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "schema" && field.value == "GovernanceDagBlockV1"),
-            "{outcome:?}"
-        );
+        assert_success(&outcome);
+        assert_context(&outcome, "schema", "GovernanceDagBlockV1");
     }
     #[test]
     fn validate_governance_dag_block_bytes_rejects_cid_mismatch() {
         let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
-        let bytes = to_bytes(&block).expect("encode governance DAG block");
         let outcome = validate_governance_dag_block_bytes(
-            &bytes,
+            &encoded(&block),
             "governance-block.to",
             Some(&[0xFF; 32]),
             51,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-004");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        assert_failure(&outcome, "SFS-GOV-004", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_governance_dag_head_chain_bytes_accepts_signed_head() {
         let (blocks, head) = signed_governance_dag_chain();
-        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
-        let block_bytes: Vec<Vec<u8>> = blocks
-            .iter()
-            .map(|block| to_bytes(block).expect("encode governance DAG block"))
-            .collect();
-        let block_refs: Vec<(&[u8], String)> = block_bytes
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
-            .collect();
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &head_bytes,
-            "governance-head.to",
-            &block_refs,
-            52,
-        );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
+        assert_success(&governance_chain_outcome(&blocks, &head, 52));
     }
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_block_count_mismatch() {
         let (blocks, mut head) = signed_governance_dag_chain();
         head.block_count += 1;
         sign_governance_dag_head(&mut head, &[0xC7; 32]);
-        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
-        let block_bytes: Vec<Vec<u8>> = blocks
-            .iter()
-            .map(|block| to_bytes(block).expect("encode governance DAG block"))
-            .collect();
-        let block_refs: Vec<(&[u8], String)> = block_bytes
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
-            .collect();
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &head_bytes,
-            "governance-head.to",
-            &block_refs,
-            53,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-008");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = governance_chain_outcome(&blocks, &head, 53);
+        assert_failure(&outcome, "SFS-GOV-008", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_head_before_tip() {
@@ -7793,557 +7795,309 @@ mod tests {
             .checked_sub(1)
             .expect("fixture tip timestamp is positive");
         sign_governance_dag_head(&mut head, &[0xC7; 32]);
-        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
-        let block_bytes = blocks
-            .iter()
-            .map(|block| to_bytes(block).expect("encode governance DAG block"))
-            .collect::<Vec<_>>();
-        let block_refs = block_bytes
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
-            .collect::<Vec<_>>();
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &head_bytes,
-            "governance-head.to",
-            &block_refs,
-            53,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-008");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = governance_chain_outcome(&blocks, &head, 53);
+        assert_failure(&outcome, "SFS-GOV-008", CATEGORY_VALIDATION);
     }
     #[test]
     fn committed_governance_dag_outcome_matches_reference_validator() {
-        let head_bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/governance/dag_head_v1.to",
-        ))
-        .expect("read governance DAG head fixture");
-        let block_bytes = (0..2)
-            .map(|index| {
-                fs::read(workspace_fixture(&format!(
-                    "fixtures/sorafs_manifest/governance/dag_block_{index}_v1.to"
-                )))
-                .expect("read governance DAG block fixture")
-            })
-            .collect::<Vec<_>>();
-        let block_inputs = block_bytes
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.as_slice(), format!("dag_block_{index}_v1.to")))
-            .collect::<Vec<_>>();
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &head_bytes,
+        let outcome = committed_governance_chain_outcome(
             "dag_head_v1.to",
-            &block_inputs,
-            123,
+            &["dag_block_0_v1.to", "dag_block_1_v1.to"],
         );
-        let actual = format!(
-            "{}\n",
-            norito::json::to_string_pretty(&outcome).expect("encode outcome JSON")
-        );
-        let expected = fs::read_to_string(workspace_fixture(
-            "fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json",
-        ))
-        .expect("read governance DAG outcome fixture");
-        assert_eq!(actual, expected);
+        assert_committed_governance_outcome(&outcome, "dag_head_validation_outcome_v1.json");
     }
     #[test]
     fn committed_governance_dag_negative_outcomes_match_reference_validator() {
-        let read_fixture = |name: &str| {
-            fs::read(workspace_fixture(&format!(
-                "fixtures/sorafs_manifest/governance/{name}"
-            )))
-            .unwrap_or_else(|error| panic!("read governance DAG fixture `{name}`: {error}"))
-        };
-        let assert_outcome =
-            |outcome: &ValidationOutcomeV1, expected_name: &str, expected_code: &str| {
-                assert!(!outcome.is_ok(), "{outcome:?}");
-                assert_eq!(outcome.code, expected_code);
-                let actual = format!(
-                    "{}\n",
-                    norito::json::to_string_pretty(outcome).expect("encode outcome JSON")
-                );
-                let expected = String::from_utf8(read_fixture(expected_name))
-                    .expect("outcome fixture is UTF-8");
-                assert_eq!(actual, expected);
-            };
-        let bad_block_signature = read_fixture("dag_block_bad_signature_v1.to");
+        let bad_block_signature = governance_fixture_bytes("dag_block_bad_signature_v1.to");
         let outcome = validate_governance_dag_block_bytes(
             &bad_block_signature,
             "dag_block_bad_signature_v1.to",
             None,
             123,
         );
-        assert_outcome(
+        assert_failure(&outcome, "SFS-SIG-006", CATEGORY_SIGNATURE);
+        assert_committed_governance_outcome(
             &outcome,
             "dag_block_bad_signature_validation_outcome_v1.json",
-            "SFS-SIG-006",
         );
-        let trailing_bytes = read_fixture("dag_block_trailing_bytes_v1.to");
+
+        let trailing_bytes = governance_fixture_bytes("dag_block_trailing_bytes_v1.to");
         let outcome = validate_governance_dag_block_bytes(
             &trailing_bytes,
             "dag_block_trailing_bytes_v1.to",
             None,
             123,
         );
-        assert_outcome(
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
+        assert_committed_governance_outcome(
             &outcome,
             "dag_block_trailing_bytes_validation_outcome_v1.json",
-            "SFS-NORITO-001",
         );
-        let root = read_fixture("dag_block_0_v1.to");
-        let child = read_fixture("dag_block_1_v1.to");
-        let canonical_blocks = [
-            (root.as_slice(), "dag_block_0_v1.to".to_owned()),
-            (child.as_slice(), "dag_block_1_v1.to".to_owned()),
-        ];
-        let bad_head_signature = read_fixture("dag_head_bad_signature_v1.to");
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &bad_head_signature,
+
+        let outcome = committed_governance_chain_outcome(
             "dag_head_bad_signature_v1.to",
-            &canonical_blocks,
-            123,
+            &["dag_block_0_v1.to", "dag_block_1_v1.to"],
         );
-        assert_outcome(
+        assert_failure(&outcome, "SFS-SIG-007", CATEGORY_SIGNATURE);
+        assert_committed_governance_outcome(
             &outcome,
             "dag_head_bad_signature_validation_outcome_v1.json",
-            "SFS-SIG-007",
         );
-        let bad_predecessor_child = read_fixture("dag_block_1_bad_predecessor_v1.to");
-        let bad_predecessor_blocks = [
-            (root.as_slice(), "dag_block_0_v1.to".to_owned()),
-            (
-                bad_predecessor_child.as_slice(),
-                "dag_block_1_bad_predecessor_v1.to".to_owned(),
-            ),
-        ];
-        let bad_predecessor_head = read_fixture("dag_head_bad_predecessor_v1.to");
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &bad_predecessor_head,
+
+        let outcome = committed_governance_chain_outcome(
             "dag_head_bad_predecessor_v1.to",
-            &bad_predecessor_blocks,
-            123,
+            &["dag_block_0_v1.to", "dag_block_1_bad_predecessor_v1.to"],
         );
-        assert_outcome(
+        assert_failure(&outcome, "SFS-GOV-006", CATEGORY_VALIDATION);
+        assert_committed_governance_outcome(
             &outcome,
             "dag_head_bad_predecessor_validation_outcome_v1.json",
-            "SFS-GOV-006",
         );
     }
     #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_noncanonical_order() {
         let (blocks, head) = signed_governance_dag_chain();
-        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
-        let block_bytes: Vec<Vec<u8>> = blocks
-            .iter()
-            .rev()
-            .map(|block| to_bytes(block).expect("encode governance DAG block"))
-            .collect();
-        let block_refs: Vec<(&[u8], String)> = block_bytes
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
-            .collect();
-        let outcome = validate_governance_dag_head_chain_bytes(
-            &head_bytes,
-            "governance-head.to",
-            &block_refs,
-            54,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-GOV-006");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let reversed = blocks.into_iter().rev().collect::<Vec<_>>();
+        let outcome = governance_chain_outcome(&reversed, &head, 54);
+        assert_failure(&outcome, "SFS-GOV-006", CATEGORY_VALIDATION);
         assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "validation_error"
-                    && field.value.contains("canonical root-to-head order")),
-            "{outcome:?}"
+            field(&outcome.context, "validation_error")
+                .is_some_and(|value| value.contains("canonical root-to-head order"))
         );
     }
     #[test]
     fn validate_provider_advert_bytes_accepts_signed_advert() {
-        let advert = signed_advert(1_700_000_000);
-        let bytes = to_bytes(&advert).expect("encode advert");
-        let outcome =
-            validate_provider_advert_bytes(&bytes, "advert.to", 1_700_000_001, 1_700_000_002);
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        let outcome = advert_outcome(
+            &signed_advert(1_700_000_000),
+            "advert.to",
+            1_700_000_001,
+            1_700_000_002,
+        );
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_provider_advert_bytes_rejects_malformed_norito() {
         let outcome = validate_provider_advert_bytes(b"not norito", "bad.to", 1, 2);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_provider_advert_bytes_rejects_policy_failure() {
         let mut advert = signed_advert(1_700_000_000);
         advert.expires_at = advert.issued_at + crate::MAX_ADVERT_TTL_SECS + 1;
-        let bytes = to_bytes(&advert).expect("encode advert");
-        let outcome = validate_provider_advert_bytes(&bytes, "expired.to", 1_700_000_001, 3);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-001");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        let outcome = advert_outcome(&advert, "expired.to", 1_700_000_001, 3);
+        assert_failure(&outcome, "SFS-POL-001", CATEGORY_POLICY);
     }
     #[test]
     fn validate_provider_advert_bytes_rejects_bad_signature() {
         let mut advert = signed_advert(1_700_000_000);
         advert.signature.signature[0] ^= 0x01;
-        let bytes = to_bytes(&advert).expect("encode advert");
-        let outcome = validate_provider_advert_bytes(&bytes, "bad-signature.to", 1_700_000_001, 4);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-001");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = advert_outcome(&advert, "bad-signature.to", 1_700_000_001, 4);
+        assert_failure(&outcome, "SFS-SIG-001", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_accepts_fixture() {
-        let envelope = admission_envelope();
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "envelope.to", 7);
-        assert!(outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        let outcome = admission_outcome(&admission_envelope(), "envelope.to", 7);
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_provider_admission_renewal_bytes_accepts_fixture() {
         let envelope = admission_envelope();
-        let envelope_bytes = to_bytes(&envelope).expect("encode envelope");
         let renewal_bytes = admission_renewal_bytes();
         let outcome = validate_provider_admission_renewal_bytes(
-            &envelope_bytes,
+            &encoded(&envelope),
             &renewal_bytes,
             "envelope.to",
             "renewal.to",
             7,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome.context.iter().any(|field| {
-                field.key == "renewal_envelope_digest_hex" && field.value.len() == 64
-            }),
-            "{outcome:?}"
+        assert_success(&outcome);
+        assert_eq!(
+            field(&outcome.context, "renewal_envelope_digest_hex").map(str::len),
+            Some(64)
         );
     }
     #[test]
     fn validate_provider_admission_renewal_bytes_rejects_malformed_renewal() {
         let envelope = admission_envelope();
-        let envelope_bytes = to_bytes(&envelope).expect("encode envelope");
         let outcome = validate_provider_admission_renewal_bytes(
-            &envelope_bytes,
+            &encoded(&envelope),
             b"not norito",
             "envelope.to",
             "bad-renewal.to",
             8,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_provider_admission_revocation_bytes_accepts_fixture() {
         let envelope = admission_envelope();
-        let envelope_bytes = to_bytes(&envelope).expect("encode envelope");
         let revocation_bytes = admission_revocation_bytes();
         let outcome = validate_provider_admission_revocation_bytes(
-            &envelope_bytes,
+            &encoded(&envelope),
             &revocation_bytes,
             "envelope.to",
             "revocation.to",
             9,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "envelope_digest_hex" && field.value.len() == 64),
-            "{outcome:?}"
+        assert_success(&outcome);
+        assert_eq!(
+            field(&outcome.context, "envelope_digest_hex").map(str::len),
+            Some(64)
         );
     }
     #[test]
     fn validate_provider_admission_revocation_bytes_rejects_malformed_revocation() {
         let envelope = admission_envelope();
-        let envelope_bytes = to_bytes(&envelope).expect("encode envelope");
         let outcome = validate_provider_admission_revocation_bytes(
-            &envelope_bytes,
+            &encoded(&envelope),
             b"not norito",
             "envelope.to",
             "bad-revocation.to",
             10,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_malformed_norito() {
         let outcome =
             validate_provider_admission_envelope_bytes(b"not norito", "bad-envelope.to", 8);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_digest_mismatch() {
         let mut envelope = admission_envelope();
         envelope.proposal_digest[0] ^= 0x01;
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "bad-digest.to", 9);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-007");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = admission_outcome(&envelope, "bad-digest.to", 9);
+        assert_failure(&outcome, "SFS-VAL-007", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_signature_failure() {
         let mut envelope = admission_envelope();
         envelope.council_signatures[0].signature[0] ^= 0x01;
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "bad-signature.to", 10);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-002");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = admission_outcome(&envelope, "bad-signature.to", 10);
+        assert_failure(&outcome, "SFS-SIG-002", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_retention_policy() {
         let mut envelope = admission_envelope();
         envelope.issued_at = envelope.retention_epoch + 1;
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "bad-retention.to", 11);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-004");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        let outcome = admission_outcome(&envelope, "bad-retention.to", 11);
+        assert_failure(&outcome, "SFS-POL-004", CATEGORY_POLICY);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_structural_failure() {
         let mut envelope = admission_envelope();
         envelope.proposal.provider_id = [0; 32];
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "bad-structure.to", 12);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-006");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = admission_outcome(&envelope, "bad-structure.to", 12);
+        assert_failure(&outcome, "SFS-VAL-006", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_provider_admission_envelope_bytes_rejects_chunker_failure() {
         let mut envelope = admission_envelope();
         envelope.proposal.profile_id = "unknown.profile@1.0.0".to_owned();
-        let bytes = to_bytes(&envelope).expect("encode envelope");
-        let outcome = validate_provider_admission_envelope_bytes(&bytes, "bad-chunker.to", 13);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = admission_outcome(&envelope, "bad-chunker.to", 13);
+        assert_failure(&outcome, "SFS-VAL-003", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_accepts_fixtures() {
         let challenge = por_challenge();
-        let proof = por_proof();
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "proof.to",
-            14,
-        );
-        assert!(outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        let outcome = por_outcome(&challenge, &por_proof(), "challenge.to", "proof.to", 14);
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_malformed_challenge() {
         let proof = por_proof();
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
         let outcome = validate_por_challenge_proof_bytes(
             b"not norito",
-            &proof_bytes,
+            &encoded(&proof),
             "bad-challenge.to",
             "proof.to",
             15,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_binding_mismatch() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.challenge_id[0] ^= 0x01;
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "bad-proof.to",
-            16,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POR-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "bad-proof.to", 16);
+        assert_failure(&outcome, "SFS-POR-003", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_late_proof() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.submitted_at = challenge.deadline_at + 1;
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "late-proof.to",
-            17,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-002");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "late-proof.to", 17);
+        assert_failure(&outcome, "SFS-POL-002", CATEGORY_POLICY);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_preissued_proof() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.submitted_at = challenge.issued_at - 1;
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "preissued-proof.to",
-            17,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-002");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "preissued-proof.to", 17);
+        assert_failure(&outcome, "SFS-POL-002", CATEGORY_POLICY);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_sample_coverage_mismatch() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.samples[0].sample_index = challenge.sample_indices[0] + 10_000;
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "bad-coverage.to",
-            18,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POR-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "bad-coverage.to", 18);
+        assert_failure(&outcome, "SFS-POR-001", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_reordered_samples() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.samples.swap(0, 1);
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "reordered-proof.to",
-            18,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POR-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "reordered-proof.to", 18);
+        assert_failure(&outcome, "SFS-POR-001", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_forged_signature() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.signature.signature[0] ^= 0x80;
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "forged-proof.to",
-            18,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-008");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "forged-proof.to", 18);
+        assert_failure(&outcome, "SFS-SIG-008", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_challenge_structure_failure() {
         let mut challenge = por_challenge();
         let proof = por_proof();
         challenge.chunking_profile = "unknown.profile@1.0.0".to_owned();
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "bad-challenge.to",
-            "proof.to",
-            19,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = por_outcome(&challenge, &proof, "bad-challenge.to", "proof.to", 19);
+        assert_failure(&outcome, "SFS-VAL-003", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_por_challenge_proof_bytes_rejects_proof_structure_failure() {
         let challenge = por_challenge();
         let mut proof = por_proof();
         proof.auth_path.clear();
-        let challenge_bytes = to_bytes(&challenge).expect("encode challenge");
-        let proof_bytes = to_bytes(&proof).expect("encode proof");
-        let outcome = validate_por_challenge_proof_bytes(
-            &challenge_bytes,
-            &proof_bytes,
-            "challenge.to",
-            "bad-proof.to",
-            20,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-009");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = por_outcome(&challenge, &proof, "challenge.to", "bad-proof.to", 20);
+        assert_failure(&outcome, "SFS-VAL-009", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_potr_receipt_bytes_accepts_valid_receipt() {
-        let receipt = potr_receipt();
-        let bytes = to_bytes(&receipt).expect("encode receipt");
-        let outcome =
-            validate_potr_receipt_bytes(&bytes, "receipt.to", Some(ProofStreamTier::Hot), 21);
-        assert!(outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        let outcome = potr_outcome(
+            &potr_receipt(),
+            "receipt.to",
+            Some(ProofStreamTier::Hot),
+            21,
+        );
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_potr_receipt_bytes_rejects_malformed_norito() {
         let outcome = validate_potr_receipt_bytes(b"not norito", "bad-receipt.to", None, 22);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_potr_receipt_bytes_rejects_late_success_receipt() {
@@ -8351,11 +8105,8 @@ mod tests {
         receipt.latency_ms = receipt.deadline_ms + 1;
         receipt.responded_at_ms = receipt.requested_at_ms + u64::from(receipt.latency_ms);
         receipt.recorded_at_ms = receipt.responded_at_ms + 100;
-        let bytes = to_bytes(&receipt).expect("encode receipt");
-        let outcome = validate_potr_receipt_bytes(&bytes, "late-receipt.to", None, 23);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POTR-001");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        let outcome = potr_outcome(&receipt, "late-receipt.to", None, 23);
+        assert_failure(&outcome, "SFS-POTR-001", CATEGORY_POLICY);
     }
     #[test]
     fn validate_potr_receipt_bytes_rejects_invalid_signature() {
@@ -8365,73 +8116,58 @@ mod tests {
             public_key: vec![0u8; 16],
             signature: vec![0u8; 32],
         });
-        let bytes = to_bytes(&receipt).expect("encode receipt");
-        let outcome = validate_potr_receipt_bytes(&bytes, "bad-signature.to", None, 24);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-003");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        let outcome = potr_outcome(&receipt, "bad-signature.to", None, 24);
+        assert_failure(&outcome, "SFS-SIG-003", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_potr_receipt_bytes_rejects_tier_mismatch() {
-        let receipt = potr_receipt();
-        let bytes = to_bytes(&receipt).expect("encode receipt");
-        let outcome =
-            validate_potr_receipt_bytes(&bytes, "wrong-tier.to", Some(ProofStreamTier::Warm), 25);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POTR-002");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = potr_outcome(
+            &potr_receipt(),
+            "wrong-tier.to",
+            Some(ProofStreamTier::Warm),
+            25,
+        );
+        assert_failure(&outcome, "SFS-POTR-002", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_potr_receipt_bytes_rejects_structural_failure() {
         let mut receipt = potr_receipt();
         receipt.range_start = receipt.range_end + 1;
-        let bytes = to_bytes(&receipt).expect("encode receipt");
-        let outcome = validate_potr_receipt_bytes(&bytes, "bad-range.to", None, 26);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-010");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = potr_outcome(&receipt, "bad-range.to", None, 26);
+        assert_failure(&outcome, "SFS-VAL-010", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_repair_payload_bytes_accepts_task_record() {
-        let task = repair_task_record();
-        let bytes = to_bytes(&task).expect("encode task");
-        let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::TaskRecord,
-            &bytes,
+        let outcome = repair_outcome(
+            RepairKind::TaskRecord,
+            &repair_task_record(),
             "repair-task.to",
             27,
         );
-        assert!(outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_repair_payload_bytes_rejects_alternate_norito_layout() {
         let task = repair_task_record();
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let bytes = {
-            let _flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            to_bytes(&task).expect("encode task with alternate layout")
+            let _flags = norito::core::DecodeFlagsGuard::enter(
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+            );
+            encoded(&task)
         };
-        let canonical = to_bytes(&task).expect("encode canonical task");
-        assert_ne!(bytes, canonical, "fixture must distinguish layouts");
+        assert_ne!(bytes, encoded(&task), "fixture must distinguish layouts");
         assert!(matches!(
             decode_repair_archive_payload::<RepairTaskRecordV1>(&bytes),
             Err(norito::Error::NonCanonicalEncoding)
         ));
         let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::TaskRecord,
+            RepairKind::TaskRecord,
             &bytes,
             "alternate-layout-repair-task.to",
             28,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_repair_payload_bytes_uses_stable_pdp_failure_label() {
@@ -8443,33 +8179,24 @@ mod tests {
             proof_digest: Some([0x42; 32]),
             failure_kind: RepairPdpFailureKindV1::InvalidProof,
         });
-        let bytes = to_bytes(&evidence).expect("encode PDP repair evidence");
-        let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::Evidence,
-            &bytes,
+        let outcome = repair_outcome(
+            RepairKind::Evidence,
+            &evidence,
             "pdp-repair-evidence.to",
             28,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "cause" && field.value == "pdp_failure"),
-            "PDP repair evidence must retain its stable reference label"
-        );
+        assert_success(&outcome);
+        assert_context(&outcome, "cause", "pdp_failure");
     }
     #[test]
     fn validate_repair_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::TaskRecord,
+            RepairKind::TaskRecord,
             b"not norito",
             "bad-repair-task.to",
             29,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_repair_payload_bytes_rejects_evidence_failure() {
@@ -8479,32 +8206,24 @@ mod tests {
             failed_samples: 0,
             proof_digest: None,
         });
-        let bytes = to_bytes(&evidence).expect("encode evidence");
-        let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::Evidence,
-            &bytes,
-            "bad-evidence.to",
-            30,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-REP-001", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        let outcome = repair_outcome(RepairKind::Evidence, &evidence, "bad-evidence.to", 30);
+        assert_failure(&outcome, "SFS-REP-001", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_hedging_payload_bytes_accepts_billing_statement() {
         let statement = billing_statement();
-        let bytes = to_bytes(&statement).expect("encode billing statement");
-        let outcome = validate_hedging_payload_bytes(
-            HedgingValidationPayloadKindV1::BillingStatement,
-            &bytes,
+        let outcome = hedging_outcome(
+            HedgingKind::BillingStatement,
+            &statement,
             "billing-statement.to",
             31,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(outcome.context.iter().any(|field| {
-            field.key == "statement_id_hex" && field.value == hex::encode(statement.statement_id)
-        }));
+        assert_success(&outcome);
+        assert_context(
+            &outcome,
+            "statement_id_hex",
+            hex::encode(statement.statement_id),
+        );
     }
     #[test]
     fn billing_context_preserves_exact_sub_micro_xor_values() {
@@ -8515,60 +8234,47 @@ mod tests {
         let mut line = statement.lines[0].clone();
         line.xor_amount = exact.clone();
         let line_context = billing_line_item_context(&line);
-        assert!(
-            line_context
-                .iter()
-                .any(|field| { field.key == "xor_amount" && field.value == "0.0000001" })
-        );
+        assert_field(&line_context, "xor_amount", "0.0000001");
+
         statement.total_debit_xor = exact.clone();
         statement.total_credit_xor = exact.clone();
         statement.net_due_xor = exact;
         let statement_context = billing_statement_context(&statement);
         for key in ["total_debit_xor", "total_credit_xor", "net_due_xor"] {
-            assert!(
-                statement_context
-                    .iter()
-                    .any(|field| { field.key == key && field.value == "0.0000001" })
-            );
+            assert_field(&statement_context, key, "0.0000001");
         }
     }
     #[test]
     fn validate_hedging_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_hedging_payload_bytes(
-            HedgingValidationPayloadKindV1::BillingStatement,
+            HedgingKind::BillingStatement,
             b"not norito",
             "bad-billing-statement.to",
             32,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_hedging_payload_bytes_rejects_oversized_and_noncanonical_archives() {
         let oversized = vec![0_u8; crate::HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
         let outcome = validate_hedging_payload_bytes(
-            HedgingValidationPayloadKindV1::PriceFeed,
+            HedgingKind::PriceFeed,
             &oversized,
             "oversized-feed.to",
             32,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
-        let mut noncanonical =
-            to_bytes(&hedging_feed("primary", "1", 1_790)).expect("encode canonical hedging feed");
+
+        let mut noncanonical = encoded(&hedging_feed("primary", "1", 1_790));
         noncanonical.push(0);
         let outcome = validate_hedging_payload_bytes(
-            HedgingValidationPayloadKindV1::PriceFeed,
+            HedgingKind::PriceFeed,
             &noncanonical,
             "noncanonical-feed.to",
             32,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn validate_hedging_payload_bytes_rejects_stale_decision_feed() {
@@ -8576,117 +8282,82 @@ mod tests {
         decision.feeds[0].observed_at_unix = 1_000;
         decision.decision_id =
             crate::reference_price_decision_id_v1(&decision).expect("derive tampered decision id");
-        let bytes = to_bytes(&decision).expect("encode stale decision");
-        let outcome = validate_hedging_payload_bytes(
-            HedgingValidationPayloadKindV1::ReferencePriceDecision,
-            &bytes,
+        let outcome = hedging_outcome(
+            HedgingKind::ReferencePriceDecision,
+            &decision,
             "stale-decision.to",
             33,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-020", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        assert_failure(&outcome, "SFS-POL-020", CATEGORY_POLICY);
     }
     // Textual inclusion preserves the original reference test-module paths.
     include!("reference/tests/pop_validation.rs");
     #[test]
     fn validate_orderbook_payload_bytes_accepts_order_request() {
         let order = orderbook_order_request();
-        let bytes = to_bytes(&order).expect("encode orderbook order request");
-        let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderRequest,
-            &bytes,
+        let outcome = orderbook_outcome(
+            OrderbookKind::OrderRequest,
+            &order,
             "orderbook-order.to",
             32,
         );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome.context.iter().any(|field| {
-                field.key == "order_id_hex" && field.value == hex::encode(order.order_id)
-            }),
-            "{outcome:?}"
-        );
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        assert_success(&outcome);
+        assert_context(&outcome, "order_id_hex", hex::encode(order.order_id));
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_orderbook_payload_bytes_accepts_signed_cancel_and_receipt() {
         let cases = [
             (
-                OrderbookValidationPayloadKindV1::OrderCancel,
-                to_bytes(&orderbook_order_cancel()).expect("encode signed order cancellation"),
+                OrderbookKind::OrderCancel,
+                encoded(&orderbook_order_cancel()),
                 "orderbook-cancel.to",
             ),
             (
-                OrderbookValidationPayloadKindV1::SettlementReceipt,
-                to_bytes(&orderbook_settlement_receipt())
-                    .expect("encode signed settlement receipt"),
+                OrderbookKind::SettlementReceipt,
+                encoded(&orderbook_settlement_receipt()),
                 "settlement-receipt.to",
             ),
         ];
         for (kind, bytes, label) in cases {
             let outcome = validate_orderbook_payload_bytes(kind, &bytes, label, 32);
-            assert!(outcome.is_ok(), "{kind:?}: {outcome:?}");
-            assert_eq!(outcome.code, "SFS-OK-000", "{kind:?}: {outcome:?}");
+            assert_success(&outcome);
         }
     }
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_signs_mutable_payloads() {
         let seed = [0xB7; 32];
-        let expected_public_key = SigningKey::from_bytes(&seed)
-            .verifying_key()
-            .to_bytes()
-            .to_vec();
-        let order_bytes =
-            to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
+        let expected_public_key = verifying_key(&seed);
+
         let signed_order_bytes = sign_orderbook_payload_bytes_ed25519_v1(
-            OrderbookValidationPayloadKindV1::OrderRequest,
-            &order_bytes,
+            OrderbookKind::OrderRequest,
+            &encoded(&orderbook_order_request()),
             &seed,
         )
         .expect("sign order request bytes");
-        let signed_order: OrderRequestV1 =
-            decode_from_bytes(&signed_order_bytes).expect("decode signed order request");
-        assert_eq!(signed_order.signature.public_key, expected_public_key);
-        crate::verify_order_request_signature_v1(&signed_order).expect("valid order signature");
-        let cancel_bytes = to_bytes(&orderbook_order_cancel()).expect("encode orderbook cancel");
+        assert_signed_order_request(&signed_order_bytes, &expected_public_key);
+
         let signed_cancel_bytes = sign_orderbook_payload_bytes_ed25519_v1(
-            OrderbookValidationPayloadKindV1::OrderCancel,
-            &cancel_bytes,
+            OrderbookKind::OrderCancel,
+            &encoded(&orderbook_order_cancel()),
             &seed,
         )
         .expect("sign order cancel bytes");
-        let signed_cancel: OrderCancelV1 =
-            decode_from_bytes(&signed_cancel_bytes).expect("decode signed order cancel");
-        assert_eq!(signed_cancel.signature.public_key, expected_public_key);
-        crate::verify_order_cancel_signature_v1(&signed_cancel).expect("valid cancel signature");
-        let receipt_bytes =
-            to_bytes(&orderbook_settlement_receipt()).expect("encode settlement receipt");
+        assert_signed_order_cancel(&signed_cancel_bytes, &expected_public_key);
+
         let signed_receipt_bytes = sign_orderbook_payload_bytes_ed25519_v1(
-            OrderbookValidationPayloadKindV1::SettlementReceipt,
-            &receipt_bytes,
+            OrderbookKind::SettlementReceipt,
+            &encoded(&orderbook_settlement_receipt()),
             &seed,
         )
         .expect("sign settlement receipt bytes");
-        let signed_receipt: SettlementReceiptV1 =
-            decode_from_bytes(&signed_receipt_bytes).expect("decode signed settlement receipt");
-        assert_eq!(
-            signed_receipt.settlement_signature.public_key,
-            expected_public_key
-        );
-        crate::verify_settlement_receipt_signature_v1(&signed_receipt)
-            .expect("valid receipt signature");
+        assert_signed_settlement_receipt(&signed_receipt_bytes, &expected_public_key);
     }
     #[test]
     fn build_signed_orderbook_payload_bytes_ed25519_v1_builds_field_level_payloads() {
         let seed = [0xB7; 32];
-        let expected_public_key = SigningKey::from_bytes(&seed)
-            .verifying_key()
-            .to_bytes()
-            .to_vec();
+        let expected_public_key = verifying_key(&seed);
+
         let owner_account = vec![0x03; 32];
         let order_nonce = 1;
         let order_id = crate::derive_orderbook_order_id_v1(&owner_account, order_nonce);
@@ -8707,46 +8378,21 @@ mod tests {
             &seed,
         )
         .expect("build signed order request");
-        let order: OrderRequestV1 =
-            decode_from_bytes(&order_bytes).expect("decode built order request");
-        assert_eq!(order.signature.public_key, expected_public_key);
-        crate::verify_order_request_signature_v1(&order).expect("valid built order request");
+        assert_signed_order_request(&order_bytes, &expected_public_key);
+
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
-            OrderbookOrderCancelFieldsV1 {
-                order_id,
-                owner_account,
-                reason: OrderCancelReasonV1::OwnerRequested,
-                nonce: 2,
-            },
+            order_cancel_fields(order_id, owner_account, 2),
             &seed,
         )
         .expect("build signed order cancel");
-        let cancel: OrderCancelV1 =
-            decode_from_bytes(&cancel_bytes).expect("decode built order cancel");
-        assert_eq!(cancel.signature.public_key, expected_public_key);
-        crate::verify_order_cancel_signature_v1(&cancel).expect("valid built order cancel");
+        assert_signed_order_cancel(&cancel_bytes, &expected_public_key);
+
         let receipt_bytes = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
-            OrderbookSettlementReceiptFieldsV1 {
-                receipt_id: [0x07; 32],
-                channel_id: [0x05; 32],
-                trade_id: [0x04; 32],
-                range_start: 10,
-                range_end: 42,
-                chunk_hash: [0x08; 32],
-                bytes_delivered: 32,
-                xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
-                provider_credit: "0.00009".parse().expect("canonical XOR quantity"),
-                fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
-                issued_at_unix: 1_800_000_200,
-            },
+            settlement_receipt_fields(90),
             &seed,
         )
         .expect("build signed settlement receipt");
-        let receipt: SettlementReceiptV1 =
-            decode_from_bytes(&receipt_bytes).expect("decode built settlement receipt");
-        assert_eq!(receipt.settlement_signature.public_key, expected_public_key);
-        crate::verify_settlement_receipt_signature_v1(&receipt)
-            .expect("valid built settlement receipt");
+        assert_signed_settlement_receipt(&receipt_bytes, &expected_public_key);
     }
     #[test]
     fn field_level_orderbook_builders_accept_owner_account_at_v1_byte_ceiling() {
@@ -8754,21 +8400,7 @@ mod tests {
         let owner_account = vec![0x44; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
         let order_id = crate::derive_orderbook_order_id_v1(&owner_account, 1);
         let order_bytes = build_signed_orderbook_order_request_bytes_ed25519_v1(
-            OrderbookOrderRequestFieldsV1 {
-                side: OrderSideV1::Bid,
-                tier: OrderTierV1::Hot,
-                price_per_gib: "0.000001"
-                    .parse()
-                    .expect("legacy micro-XOR price is representable"),
-                quantity_gib: 1,
-                remaining_gib: 1,
-                owner_account: owner_account.clone(),
-                provider_id: None,
-                expiry_unix: 1,
-                nonce: 1,
-                maker_fee_bps: 0,
-                taker_fee_bps: 0,
-            },
+            minimal_order_request_fields(owner_account.clone()),
             &seed,
         )
         .expect("maximum-length owner request must build");
@@ -8776,12 +8408,7 @@ mod tests {
             decode_from_bytes(&order_bytes).expect("decode maximum-length owner request");
         assert_eq!(order.owner_account, owner_account);
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
-            OrderbookOrderCancelFieldsV1 {
-                order_id,
-                owner_account: order.owner_account,
-                reason: OrderCancelReasonV1::OwnerRequested,
-                nonce: 2,
-            },
+            order_cancel_fields(order_id, order.owner_account, 2),
             &seed,
         )
         .expect("maximum-length owner cancel must build");
@@ -8796,21 +8423,7 @@ mod tests {
     fn field_level_orderbook_builders_reject_oversized_owner_before_key_or_id_use() {
         let owner_account = vec![0x44; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
         let request_err = build_signed_orderbook_order_request_bytes_ed25519_v1(
-            OrderbookOrderRequestFieldsV1 {
-                side: OrderSideV1::Bid,
-                tier: OrderTierV1::Hot,
-                price_per_gib: "0.000001"
-                    .parse()
-                    .expect("legacy micro-XOR price is representable"),
-                quantity_gib: 1,
-                remaining_gib: 1,
-                owner_account: owner_account.clone(),
-                provider_id: None,
-                expiry_unix: 1,
-                nonce: 1,
-                maker_fee_bps: 0,
-                taker_fee_bps: 0,
-            },
+            minimal_order_request_fields(owner_account.clone()),
             &[0xB7; 31],
         )
         .expect_err("oversized request owner must fail before signing-key parsing");
@@ -8819,12 +8432,7 @@ mod tests {
             if reason.contains("exceeds maximum 256 bytes"))
         );
         let cancel_err = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
-            OrderbookOrderCancelFieldsV1 {
-                order_id: [0x11; 32],
-                owner_account,
-                reason: OrderCancelReasonV1::OwnerRequested,
-                nonce: 1,
-            },
+            order_cancel_fields([0x11; 32], owner_account, 1),
             &[0xB7; 31],
         )
         .expect_err("oversized cancel owner must fail before signing-key parsing");
@@ -8836,19 +8444,7 @@ mod tests {
     #[test]
     fn build_signed_orderbook_payload_bytes_ed25519_v1_rejects_invalid_fields() {
         let err = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
-            OrderbookSettlementReceiptFieldsV1 {
-                receipt_id: [0x07; 32],
-                channel_id: [0x05; 32],
-                trade_id: [0x04; 32],
-                range_start: 10,
-                range_end: 42,
-                chunk_hash: [0x08; 32],
-                bytes_delivered: 32,
-                xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
-                provider_credit: "0.000091".parse().expect("canonical XOR quantity"),
-                fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
-                issued_at_unix: 1_800_000_200,
-            },
+            settlement_receipt_fields(91),
             &[0xB7; 32],
         )
         .expect_err("imbalanced settlement receipt must fail");
@@ -8856,20 +8452,18 @@ mod tests {
     }
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_rejects_bad_key_material() {
-        let order_bytes =
-            to_bytes(&orderbook_order_request()).expect("encode orderbook order request");
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
-                OrderbookValidationPayloadKindV1::OrderRequest,
-                &order_bytes,
+                OrderbookKind::OrderRequest,
+                &encoded(&orderbook_order_request()),
                 &[0xB7; 31],
             ),
             Err(OrderbookPayloadSigningError::InvalidSigningKeyLength { length: 31 })
         );
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
-                OrderbookValidationPayloadKindV1::OrderRequest,
-                &order_bytes,
+                OrderbookKind::OrderRequest,
+                &encoded(&orderbook_order_request()),
                 &[0; 32],
             ),
             Err(OrderbookPayloadSigningError::InvalidSigningKeyMaterial)
@@ -8877,46 +8471,41 @@ mod tests {
     }
     #[test]
     fn sign_orderbook_payload_bytes_ed25519_v1_rejects_runtime_generated_payloads() {
-        let trade_bytes = to_bytes(&orderbook_trade_event()).expect("encode orderbook trade event");
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
-                OrderbookValidationPayloadKindV1::TradeEvent,
-                &trade_bytes,
+                OrderbookKind::TradeEvent,
+                &encoded(&orderbook_trade_event()),
                 &[0xB7; 32],
             ),
             Err(OrderbookPayloadSigningError::UnsupportedPayloadKind {
-                kind: OrderbookValidationPayloadKindV1::TradeEvent
+                kind: OrderbookKind::TradeEvent
             })
         );
     }
     #[test]
     fn validate_orderbook_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::SettlementReceipt,
+            OrderbookKind::SettlementReceipt,
             b"not norito",
             "bad-receipt.to",
             33,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
     }
     #[test]
     fn orderbook_reference_and_signing_paths_reject_oversized_archive() {
         let archive = vec![0_u8; crate::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
         let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderRequest,
+            OrderbookKind::OrderRequest,
             &archive,
             "oversized-order.to",
             33,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
         assert!(matches!(
             sign_orderbook_payload_bytes_ed25519_v1(
-                OrderbookValidationPayloadKindV1::OrderRequest,
+                OrderbookKind::OrderRequest,
                 &archive,
                 &[0xB7; 32],
             ),
@@ -8928,16 +8517,13 @@ mod tests {
     fn validate_orderbook_payload_bytes_rejects_policy_failure() {
         let mut order = orderbook_order_request();
         order.nonce = 0;
-        let bytes = to_bytes(&order).expect("encode orderbook order request");
-        let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderRequest,
-            &bytes,
+        let outcome = orderbook_outcome(
+            OrderbookKind::OrderRequest,
+            &order,
             "bad-orderbook-order.to",
             34,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-007", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
+        assert_failure(&outcome, "SFS-POL-007", CATEGORY_POLICY);
     }
     #[test]
     fn validate_orderbook_payload_bytes_rejects_oversized_request_and_cancel_owners() {
@@ -8945,45 +8531,36 @@ mod tests {
         let mut order = orderbook_order_request();
         order.owner_account.clone_from(&owner_account);
         order.order_id = crate::derive_orderbook_order_id_v1(&owner_account, order.nonce);
-        let order_bytes = to_bytes(&order).expect("encode oversized-owner request");
-        let order_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderRequest,
-            &order_bytes,
+        let order_outcome = orderbook_outcome(
+            OrderbookKind::OrderRequest,
+            &order,
             "oversized-owner-order.to",
             34,
         );
-        assert!(!order_outcome.is_ok());
-        assert_eq!(order_outcome.code, "SFS-VAL-001", "{order_outcome:?}");
-        assert_eq!(order_outcome.category, CATEGORY_VALIDATION);
+        assert_failure(&order_outcome, "SFS-VAL-001", CATEGORY_VALIDATION);
         assert!(order_outcome.message.contains("exceeds maximum 256 bytes"));
         let mut cancel = orderbook_order_cancel();
         cancel.owner_account = owner_account;
-        let cancel_bytes = to_bytes(&cancel).expect("encode oversized-owner cancel");
-        let cancel_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderCancel,
-            &cancel_bytes,
+        let cancel_outcome = orderbook_outcome(
+            OrderbookKind::OrderCancel,
+            &cancel,
             "oversized-owner-cancel.to",
             34,
         );
-        assert!(!cancel_outcome.is_ok());
-        assert_eq!(cancel_outcome.code, "SFS-VAL-001", "{cancel_outcome:?}");
-        assert_eq!(cancel_outcome.category, CATEGORY_VALIDATION);
+        assert_failure(&cancel_outcome, "SFS-VAL-001", CATEGORY_VALIDATION);
         assert!(cancel_outcome.message.contains("exceeds maximum 256 bytes"));
     }
     #[test]
     fn validate_orderbook_payload_bytes_rejects_signature_failure() {
         let mut order = orderbook_order_request();
         order.signature.signature[0] ^= 1;
-        let bytes = to_bytes(&order).expect("encode orderbook order request");
-        let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderRequest,
-            &bytes,
+        let outcome = orderbook_outcome(
+            OrderbookKind::OrderRequest,
+            &order,
             "bad-orderbook-signature.to",
             35,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-007", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+        assert_failure(&outcome, "SFS-SIG-007", CATEGORY_SIGNATURE);
     }
     #[test]
     fn orderbook_signature_errors_share_the_canonical_outcome_mapping() {
@@ -9017,75 +8594,50 @@ mod tests {
     fn validate_orderbook_payload_bytes_rejects_cancel_and_receipt_signature_failures() {
         let mut cancel = orderbook_order_cancel();
         cancel.signature.signature[0] ^= 1;
-        let cancel_bytes = to_bytes(&cancel).expect("encode forged order cancellation");
-        let cancel_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::OrderCancel,
-            &cancel_bytes,
+        let cancel_outcome = orderbook_outcome(
+            OrderbookKind::OrderCancel,
+            &cancel,
             "bad-orderbook-cancel-signature.to",
             35,
         );
-        assert!(!cancel_outcome.is_ok());
-        assert_eq!(cancel_outcome.code, "SFS-SIG-007", "{cancel_outcome:?}");
-        assert_eq!(cancel_outcome.category, CATEGORY_SIGNATURE);
+        assert_failure(&cancel_outcome, "SFS-SIG-007", CATEGORY_SIGNATURE);
+
         let mut receipt = orderbook_settlement_receipt();
         receipt.settlement_signature.signature[0] ^= 1;
-        let receipt_bytes = to_bytes(&receipt).expect("encode forged settlement receipt");
-        let receipt_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::SettlementReceipt,
-            &receipt_bytes,
+        let receipt_outcome = orderbook_outcome(
+            OrderbookKind::SettlementReceipt,
+            &receipt,
             "bad-orderbook-receipt-signature.to",
             35,
         );
-        assert!(!receipt_outcome.is_ok());
-        assert_eq!(receipt_outcome.code, "SFS-SIG-007", "{receipt_outcome:?}");
-        assert_eq!(receipt_outcome.category, CATEGORY_SIGNATURE);
+        assert_failure(&receipt_outcome, "SFS-SIG-007", CATEGORY_SIGNATURE);
     }
     #[test]
     fn validate_orderbook_payload_bytes_rejects_settlement_imbalance() {
         let mut receipt = orderbook_settlement_receipt();
-        receipt.provider_credit = crate::XorQuantity::try_from_micro(91)
-            .expect("legacy micro-XOR value is representable");
-        let bytes = to_bytes(&receipt).expect("encode orderbook settlement receipt");
-        let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::SettlementReceipt,
-            &bytes,
+        receipt.provider_credit = micro_xor(91);
+        let outcome = orderbook_outcome(
+            OrderbookKind::SettlementReceipt,
+            &receipt,
             "bad-orderbook-receipt.to",
             36,
         );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OBK-002", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        assert_failure(&outcome, "SFS-OBK-002", CATEGORY_VALIDATION);
     }
     #[test]
     fn validate_replication_order_bytes_accepts_valid_order() {
-        let order = replication_order();
-        let bytes = to_bytes(&order).expect("encode order");
-        let outcome = validate_replication_order_bytes(&bytes, "order.to", 1_700_000_002);
-        assert!(outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-OK-000");
-        let roundtrip: ValidationOutcomeV1 =
-            decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
-                .expect("decode outcome");
-        assert_eq!(roundtrip, outcome);
+        let outcome = replication_order_outcome(&replication_order(), "order.to", 1_700_000_002);
+        assert_success(&outcome);
+        assert_roundtrip(&outcome);
     }
     #[test]
     fn validate_appeal_finance_cancel_asset_lock_bytes_accepts_canonical_fixture() {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
-        ))
-        .expect("read canonical CancelAssetLock fixture");
+        let bytes =
+            fixture_bytes("fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to");
         let outcome =
             validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "cancel_asset_lock_v1.to", 41);
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert_eq!(
-            outcome
-                .context
-                .iter()
-                .find(|field| field.key == "canonical_bytes")
-                .map(|field| field.value.as_str()),
-            Some("85")
-        );
+        assert_success(&outcome);
+        assert_eq!(field(&outcome.context, "canonical_bytes"), Some("85"));
     }
     include!("reference/tests/replication_and_cancel_validation.rs");
 }

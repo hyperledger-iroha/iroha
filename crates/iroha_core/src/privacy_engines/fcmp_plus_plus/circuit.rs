@@ -16,8 +16,8 @@ use super::{
     },
     divisor::NormalizedDivisor,
     proof_math::{
-        ProofGeneratorView, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
-        SecretMultiexpBuilder, SecretPoint, VerifierTranscript,
+        ProofGeneratorView, ProofScalar, ProofSuite, ProverTranscript, SecretMultiexpBuilder,
+        SecretPoint, VerifierTranscript,
     },
 };
 const COMMITMENT_WORD_LEN: usize = 128;

@@ -45,6 +45,7 @@ pub enum BackendPreference {
 #[derive(Clone, Copy, Debug)]
 pub struct EncoderConfig {
     pub sample_rate: u32,
+    /// Number of samples per channel in each frame. Must be non-zero.
     pub frame_samples: u16,
     pub layout: ChannelLayout,
     /// In-band FEC aggressiveness requested by the caller (`0 = disabled`).
@@ -111,6 +112,7 @@ pub struct Encoder {
 impl Encoder {
     /// Construct a new encoder using the preferred backend.
     pub fn new(config: EncoderConfig) -> Result<Self, CodecError> {
+        validate_config(&config)?;
         let backend = select_encoder_backend(&config)?;
         Ok(Self { config, backend })
     }
@@ -139,6 +141,7 @@ pub struct Decoder {
 impl Decoder {
     /// Construct a new decoder mirroring the encoder configuration.
     pub fn new(config: EncoderConfig) -> Result<Self, CodecError> {
+        validate_config(&config)?;
         let backend = select_decoder_backend(&config)?;
         Ok(Self { backend })
     }
@@ -151,6 +154,15 @@ impl Decoder {
             DecoderBackend::Libopus(inner) => inner.decode(payload),
         }
     }
+}
+fn validate_config(config: &EncoderConfig) -> Result<(), CodecError> {
+    if config.frame_samples == 0 {
+        return Err(CodecError::InvalidSampleCount {
+            expected: 1,
+            found: 0,
+        });
+    }
+    Ok(())
 }
 fn select_encoder_backend(config: &EncoderConfig) -> Result<EncoderBackend, CodecError> {
     match config.backend {
@@ -283,6 +295,43 @@ mod tests {
         let mut encoder = Encoder::new(config).expect("encoder");
         let err = encoder.encode(&[0i16; 10]).expect_err("length mismatch");
         assert!(matches!(err, CodecError::InvalidPcmLength { .. }));
+    }
+    #[test]
+    fn encoder_and_decoder_reject_zero_length_frames_for_every_backend() {
+        for backend in [
+            BackendPreference::Auto,
+            BackendPreference::Adpcm,
+            BackendPreference::Native,
+            BackendPreference::Libopus,
+        ] {
+            let config = EncoderConfig {
+                frame_samples: 0,
+                backend,
+                ..EncoderConfig::default()
+            };
+            let encoder_err = match Encoder::new(config) {
+                Ok(_) => panic!("{backend:?} encoder accepted a zero-length frame"),
+                Err(err) => err,
+            };
+            let decoder_err = match Decoder::new(config) {
+                Ok(_) => panic!("{backend:?} decoder accepted a zero-length frame"),
+                Err(err) => err,
+            };
+            assert!(matches!(
+                encoder_err,
+                CodecError::InvalidSampleCount {
+                    expected: 1,
+                    found: 0
+                }
+            ));
+            assert!(matches!(
+                decoder_err,
+                CodecError::InvalidSampleCount {
+                    expected: 1,
+                    found: 0
+                }
+            ));
+        }
     }
     #[test]
     fn adpcm_decoder_rejects_bad_header() {

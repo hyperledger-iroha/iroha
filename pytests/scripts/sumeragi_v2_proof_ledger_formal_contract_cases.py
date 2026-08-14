@@ -329,6 +329,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_runner/height_ingress_bindings.rs'),
         Path('v2_runner/lifecycle_terminal_recovery.rs'),
         Path('v2_runner/decided_lane_recovery.rs'),
+        Path('v2_runner/outer_ingress_cursor.rs'),
         Path('v2_runner/finalized_output_rollover.rs'),
         Path('v2_runner/canonical_recovery_ingress.rs'),
         Path('v2_runner/reply_route_retention.rs'),
@@ -354,6 +355,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('reducer/counterfeit_boundary_capability_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
+        Path('refinement/first_release_witness.rs'),
         Path('refinement_constructor_test_helpers.rs'),
         Path('refinement/transition_gate_tail.rs'),
     ),
@@ -4919,8 +4921,6 @@ def _assert_commit_import_release_or_stale_artifact(
             f"Commit-import release theorem {symbol} must state only" in error
             for error in errors
         ), errors
-
-
 
 
 @pytest.mark.parametrize(

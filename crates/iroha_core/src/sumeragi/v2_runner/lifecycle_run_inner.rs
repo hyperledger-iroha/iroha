@@ -12,7 +12,8 @@ use crate::sumeragi::v2_lifecycle_coordinator::{
 ///
 /// Construction failure simply drops this token, leaving the predecessor's
 /// `Running` work stage visible. The outer runner failure guard then closes
-/// output and requires restart; only [`Self::publish`] can claim activation.
+/// output and requires restart; only the lifecycle activation authority can
+/// claim activation.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(super) enum PendingSuccessorActivation {
@@ -107,6 +108,7 @@ impl PendingSuccessorActivation {
     }
 
     /// Bind the prepared status to its retained restart authority before ingress opens.
+    #[cfg(test)]
     pub(super) fn preflight_ingress_open(
         &self,
         successor: &wire::SumeragiV2Status,
@@ -126,6 +128,7 @@ impl PendingSuccessorActivation {
     }
 
     /// Publish one authenticated successor status through its exact retained authority.
+    #[cfg(test)]
     pub(super) fn publish(self, successor: wire::SumeragiV2Status) -> Result<(), V2RunnerError> {
         match self {
             Self::Applied {
@@ -1512,13 +1515,23 @@ pub(super) fn run_non_pending_lifecycle_loop(
                             &common_config.key_pair,
                         )
                         .map_err(V2RunnerError::Service)?;
-                        plan_lane_reservation_ownership(
+                        let completed_bootstraps = lifecycle.completed_bootstraps();
+                        let recovered_attempts = lifecycle.recovered_attempts();
+                        let replanned = plan_lane_reservation_ownership(
                             state.as_ref(),
                             queue.as_ref(),
                             kura.as_ref(),
                             &verified_context,
                             Some(lifecycle),
-                        )?
+                        )?;
+                        if completed_bootstraps != 0 || recovered_attempts != 0 {
+                            iroha_logger::info!(
+                                completed_bootstraps,
+                                recovered_attempts,
+                                "reconciled signed autonomous lifecycle custody before Queue publication"
+                            );
+                        }
+                        replanned
                     }
                     pending => pending,
                 };

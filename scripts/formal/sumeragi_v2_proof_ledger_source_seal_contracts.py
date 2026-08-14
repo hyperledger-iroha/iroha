@@ -616,6 +616,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_runner/height_ingress_bindings.rs',
         'v2_runner/lifecycle_terminal_recovery.rs',
         'v2_runner/decided_lane_recovery.rs',
+        'v2_runner/outer_ingress_cursor.rs',
         'v2_runner/finalized_output_rollover.rs',
         'v2_runner/canonical_recovery_ingress.rs',
         'v2_runner/reply_route_retention.rs',
@@ -641,6 +642,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
+        'refinement/first_release_witness.rs',
         'refinement_constructor_test_helpers.rs',
         'refinement/transition_gate_tail.rs',
     ),
@@ -1375,7 +1377,9 @@ _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256 = (
 _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
     "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
 )
-_RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = "23050ec2d1e3e1d563f29fd6ed4a9113e1ed94adc152082154f117d44c001a29"
+_RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
+    "23050ec2d1e3e1d563f29fd6ed4a9113e1ed94adc152082154f117d44c001a29"
+)
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
 )
@@ -1538,6 +1542,9 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
         "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
     ),
+    "ingress::select_fair_v2_ingress_candidate": (
+        "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
+    ),
     "ingress::try_recv_if_checked": (
         "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
     ),
@@ -1553,7 +1560,6 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::try_recv_if_at_checked_classified": (
         "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
     ),
-    "ingress::select_fair_v2_ingress_candidate": "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068",
     "lifecycle_runner::service_retained_certified_response": "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960",
     "lifecycle_runner::service_certified_serve_barrier": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
     "pending_runner::service_pending_certified_serve_barrier": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
@@ -2101,10 +2107,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 856
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "327e13cc5b9853ec8a36d3c0e8b1805bb3c33ebe0dc923be87ffd502859b3a21"
+    "58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "2d28e8534542516af51faf4f1ade8ecbf1c0489212e5403cbdec02c61ad8cdbd"
+    "b91f42798377695a51ecfbc3b52e45f93e80f2aa943b57ea62cce5f4d86e5e94"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3378,6 +3384,7 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     "pending::run_pending_active_height": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276",
     "pending::run_pending_kura_lifecycle_height": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2",
     "worker::ProductionV2Services::drain_completions": "36d4eaf5b185f8f5a24d9b9ad5167667bb9e6f1031291ec7583c617cc73022b4",
+    "worker::ProductionV2Services::drain_completions_with_lifecycle": "6ed10fa2b93d0396d8ee8d8107f5b44aa3164ba5cf0de7f3e97c7580334b9b04",
 }
 
 # Exact comment/literal-free source seals for the production-shaped selected
@@ -3760,7 +3767,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
-    "drain_v2_ingress": "23050ec2d1e3e1d563f29fd6ed4a9113e1ed94adc152082154f117d44c001a29",
+    "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
@@ -3769,6 +3776,15 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "dispatch_lane_work_effects": "c021ad8d6bf2d5afbb08b4eef00104159427f99c92e7717e6016dce81b90c6db",
     "dispatch_lane_work_effect": (
         "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c"
+    ),
+}
+
+# Canonical post-dequeue ownership moved into one first-release module shared
+# by the outer batch cursor and lifecycle turn driver. Bind the complete tail,
+# rather than retaining stale duplicate route/terminal assertions in callers.
+_PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
+    "consume_prepared_dequeued_v2_ingress": (
+        "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
     ),
 }
 

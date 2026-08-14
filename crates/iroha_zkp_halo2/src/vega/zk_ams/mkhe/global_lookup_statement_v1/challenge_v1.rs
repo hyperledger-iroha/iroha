@@ -3,6 +3,14 @@
 //! The schedule is deliberately private and move-only. It fixes every frame,
 //! coordinate, challenge ordinal, retry rule, mask segment, and terminal
 //! opening relation, but cannot mint any production proof or release receipt.
+#![cfg_attr(
+    not(test),
+    allow(
+        unreachable_code,
+        reason = "production transcript transition seals are intentionally uninhabited"
+    )
+)]
+
 use super::*;
 use crate::vega::{VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, sponge::Keccak256};
 use core::{marker::PhantomData, ops::Range};

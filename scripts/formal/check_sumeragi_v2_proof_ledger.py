@@ -65,13 +65,21 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
 # promoted to a complete trace theorem.
 
 _CHECKER_COMPONENT_FILES = (
-    "sumeragi_v2_proof_ledger_async_contracts.py", "sumeragi_v2_proof_ledger_contract_types.py",
-    "sumeragi_v2_proof_ledger_cross_tool_contracts.py", "sumeragi_v2_proof_ledger_proof_inventory.py",
-    "sumeragi_v2_proof_ledger_serve_contracts.py", "sumeragi_v2_proof_ledger_historical_contracts.py",
-    "sumeragi_v2_proof_ledger_quantitative_contracts.py", "sumeragi_v2_proof_ledger_exact_property_contracts.py",
-    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py", "sumeragi_v2_proof_ledger_proof_token_contracts.py",
-    "sumeragi_v2_proof_ledger_source_seal_contracts.py", "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_production_trace_contracts.py", "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
+    "sumeragi_v2_proof_ledger_async_contracts.py",
+    "sumeragi_v2_proof_ledger_contract_types.py",
+    "sumeragi_v2_proof_ledger_cross_tool_contracts.py",
+    "sumeragi_v2_proof_ledger_proof_inventory.py",
+    "sumeragi_v2_proof_ledger_serve_contracts.py",
+    "sumeragi_v2_proof_ledger_historical_contracts.py",
+    "sumeragi_v2_proof_ledger_quantitative_contracts.py",
+    "sumeragi_v2_proof_ledger_exact_property_contracts.py",
+    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
+    "sumeragi_v2_proof_ledger_proof_token_contracts.py",
+    "sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py",
+    "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_production_trace_contracts.py",
+    "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
     "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py",
@@ -1828,7 +1836,6 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
 
 _execute_checker_component("sumeragi_v2_proof_ledger_serve_contracts.py")
 
-
 _execute_checker_component("sumeragi_v2_proof_ledger_historical_contracts.py")
 
 
@@ -2189,9 +2196,9 @@ _TLA_TOKEN_RE = re.compile(
     r"<=>|=>|~>|/\\|\\/|<<|>>|\[\]|==|/=|<=|>=|\.\.|[^\s]"
 )
 
+_execute_checker_component("sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_source_seal_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py")
-
 
 @lru_cache(maxsize=512)
 def rust_code_tokens(source: str) -> tuple[str, ...]:
@@ -3277,31 +3284,6 @@ def _tlapm_obligation_count(
     if completion is None:
         return None
     return int(completion.group(1))
-
-
-def _promotion_target_invocation(
-    contract: PromotionProofTargetContract, start_line: int, end_line: int
-) -> list[str]:
-    """Return the exact code-owned TLAPM argument vector for one target."""
-
-    # Pinned tlapm_args.ml defines --toolbox START END as an inclusive locus
-    # selection.  Pinned tlapm_lib.ml retains an obligation only when its whole
-    # start/stop locus lies inside that interval; --strict exits 12 when an
-    # explicit selection contains no obligations.
-    return [
-        "--toolbox",
-        str(start_line),
-        str(end_line),
-        "--strict",
-        "--nofp",
-        "--threads",
-        "1",
-        "--cache-dir",
-        _formal_evidence_logical_path(
-            "tlaps-cache", "targets", contract.obligation_id
-        ),
-        f"{contract.provider_module}.tla",
-    ]
 
 
 def _resolve_promotion_target(
@@ -15968,6 +15950,12 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             tokens,
             rust_code_tokens("let candidates = ready_sources"),
         )
+        selector_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                "let selected = select_fair_v2_ingress_candidate"
+            ),
+        )
         predicate_positions = _token_sequence_positions(
             tokens,
             rust_code_tokens("predicate(inbound.as_ref())"),
@@ -15988,6 +15976,7 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             len(serve_projection_positions) != 1
             or len(leader_projection_positions) != 1
             or len(candidate_positions) != 1
+            or len(selector_positions) != 1
             or len(predicate_positions) != 1
             or len(drop_positions) != 1
             or len(relock_positions) != 2
@@ -15996,6 +15985,7 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
                 serve_projection_positions[0]
                 < leader_projection_positions[0]
                 < candidate_positions[0]
+                < selector_positions[0]
                 < min(predicate_positions)
                 <= max(predicate_positions)
                 < drop_positions[0]
@@ -43871,16 +43861,14 @@ def _retained_response_escape_latch_source_fidelity_errors(
         runtime_path,
         lifecycle_runner_path,
     ):
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: retained-response escape-latch source must be a regular file"
-            )
-            continue
-        try:
-            sources[path] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"{path}: cannot read escape-latch source: {error}")
-    if len(sources) != 4:
+        _loaded_path, source = _read_reviewed_rust_source(
+            repo_root,
+            path.relative_to(repo_root).as_posix(),
+            errors,
+            "retained-response escape-latch source",
+        )
+        sources[path] = source
+    if any(not source for source in sources.values()):
         return errors
 
     effects_source = sources[effects_path]
@@ -56203,6 +56191,10 @@ asyncServeProducerEpisodeDue' =
             "AsyncActivateServiceNode(node)",
             "PreGstCrash(node)",
             "AsyncServiceActivationTransition",
+            "PreGstResponsiveCrash(node)",
+            "PreGstResponsiveRestart",
+            "PreGstResponsiveReplay",
+            "AsyncControlServiceSlotTransition",
         ),
         "AsyncSchedulerVars": (
             "asyncNextCommandClass",
@@ -56720,12 +56712,6 @@ asyncServeProducerEpisodeDue' =
             "DriveResponsiveReplayHead",
             "FinishResponsiveReplay",
             "RearmResponsiveRecovery",
-        ),
-        "AsyncNext": (
-            "PreGstResponsiveCrash(node)",
-            "PreGstResponsiveRestart",
-            "PreGstResponsiveReplay",
-            "AsyncControlServiceSlotTransition",
         ),
         "AsyncRecoveryTypeInvariant": (
             "asyncRecoveryPhase \\in AsyncRecoveryPhases",
@@ -57254,11 +57240,33 @@ asyncServeProducerEpisodeDue' =
             errors,
             "production outer-ingress cursor source",
         )
+        outer_ingress_cursor_relative = (
+            "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs"
+        )
+        outer_ingress_cursor_path, outer_ingress_cursor_source = (
+            _read_reviewed_rust_source(
+                repo_root,
+                outer_ingress_cursor_relative,
+                errors,
+                "physical production outer-ingress cursor provider",
+            )
+        )
+        outer_ingress_cursor_include = (
+            'include!("v2_runner/outer_ingress_cursor.rs");'
+        )
+        if runner_source.count(outer_ingress_cursor_include) != 1:
+            errors.append(
+                f"{runner_path}: production runner must compile exactly one "
+                "canonical outer-ingress cursor provider"
+            )
         outer_turns = _require_rust_item(
-            runner_path, runner_source, "outer_ingress_turns", errors
+            outer_ingress_cursor_path,
+            outer_ingress_cursor_source,
+            "outer_ingress_turns",
+            errors,
         )
         errors += _outer_ingress_cursor_source_fidelity_errors(
-            runner_path, runner_source, outer_turns
+            outer_ingress_cursor_path, outer_ingress_cursor_source, outer_turns
         )
 
     adapter_relative = "crates/iroha_core/src/sumeragi/v2.rs"
@@ -60235,6 +60243,10 @@ def _exact_output_production_source_fidelity_errors(
         (embedded_core_path, "production embedded reducer binding source"),
         (ingress_path, "production fair-ingress ownership source"),
         (effects_path, "production ingress-owned effect source"),
+        (
+            ordinary_ingress_consumer_path,
+            "production ordinary ingress post-dequeue owner",
+        ),
     )
     loaded_sources: dict[Path, str] = {}
     for path, description in required_sources:
@@ -60258,6 +60270,7 @@ def _exact_output_production_source_fidelity_errors(
     embedded_core_source = loaded_sources[embedded_core_path]
     ingress_source = loaded_sources[ingress_path]
     effects_source = loaded_sources[effects_path]
+    ordinary_ingress_consumer_source = loaded_sources[ordinary_ingress_consumer_path]
 
     semantic_peer_capacity_tokens = rust_code_tokens(
         """
@@ -60729,7 +60742,7 @@ artifact: wire::finality::V2FinalityArtifact, ownership: FinalityCompletionOwner
 #[derive(Debug)]
 enum FinalityCompletionOwner { Runtime(RuntimeEffectOwnership),
 RecoveredDecisionApply(RecoveredDecisionApplyDispatchKeyV1), }""",
-        "durable finality must distinguish runtime and recovered Decision Apply ownership",
+        "durable finality must retain its exact tag and distinguish runtime from recovered Decision Apply ownership",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -60801,6 +60814,14 @@ self.finality_completion = Some(FinalityCompletion {
         "runtime Apply completion must retain its exact typed owner in the finality terminal",
         errors,
     )
+    _require_rust_source_token_sequence(
+        effects_path,
+        effects_source,
+        "finality_completion",
+        "the durable Apply completion tombstone field must have exactly its thirteen reviewed runtime/recovery uses and no additional mutation surface",
+        errors,
+        count=13,
+    )
     for expected, description in (
         (
             "finality_completion: Option<FinalityCompletion>,",
@@ -60823,6 +60844,10 @@ let finality = self
             "a newly opened height executor must begin without fabricated finality",
         ),
         (
+            "|| self.finality_completion.is_some()",
+            "both runtime and recovered application completion must reject a second terminal installation",
+        ),
+        (
             """
 self.finality_completion
     .as_ref()
@@ -60837,6 +60862,7 @@ self.finality_completion
             expected,
             description,
             errors,
+            count=2 if expected == "|| self.finality_completion.is_some()" else 1,
         )
     prepare_recovered_finality = _require_rust_item(effects_path, effects_source, "prepare_recovered_decision_apply_completion", errors)
     commit_recovered_finality = _require_rust_item(effects_path, effects_source, "commit_recovered_decision_apply_finality", errors)
@@ -60871,9 +60897,13 @@ ownership: FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key), });"""
         "|| self.finality_completion.is_some() || !self.recovered_decision_fetch_request_index_is_exact_and_empty()",
         "runtime Apply completion must reject a second terminal or recovered-Fetch overlap", errors)
     _require_rust_source_token_sequence(
-        effects_path, effects_source, "self.finality_completion = Some(FinalityCompletion",
-        "the executor must have exactly the reviewed runtime and recovered finality constructors",
-        errors, count=2)
+        effects_path,
+        effects_source,
+        "self.finality_completion =",
+        "the durable Apply completion tombstone must have exactly the runtime and recovered authenticated installation paths and must never be cleared or replaced",
+        errors,
+        count=2,
+    )
     _require_rust_token_sequence(
         effects_path,
         ingress_seam_items["effects::begin_apply"][1],
@@ -69460,7 +69490,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                 )
     for path, item, expected, description in (
         (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
-        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind typed runtime ownership, finality decision, and Kura receipt"),
+        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt"),
         (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), "pub ( crate ) fn durable_historical_lane_output_source_hash ( kura : & Kura , message : & BlockMessage , ) -> Result < Option < Hash > , String > { let Some ( ( _ , proposal_hash ) ) = lane_output_identity ( message ) else { return Ok ( None ) ; } ; let ( lane_id , lane_block_height ) = match message { BlockMessage :: LaneBlockProposal ( proposal ) => ( proposal . descriptor . lane_id , proposal . descriptor . lane_block_height , ) , BlockMessage :: LaneBlockVote ( vote ) => ( vote . body . lane_id , vote . body . lane_block_height ) , BlockMessage :: LaneBlockQc ( qc ) => ( qc . body . lane_id , qc . body . lane_block_height ) , BlockMessage :: LaneBlockCertificate ( certificate ) => ( certificate . proposal . descriptor . lane_id , certificate . proposal . descriptor . lane_block_height , ) , _ => return Ok ( None ) , } ; let Some ( durable ) = kura . read_certified_lane_block_artifact ( lane_id , lane_block_height ) else { return Ok ( None ) ; } ; if durable . proposal . proposal_hash != proposal_hash { return Ok ( None ) ; } if let Err ( retained_error ) = validate_winning_lane_output ( message , & durable . proposal , & durable . signer_pops ) { let signer_pops = durable_historical_lane_verification_pops ( kura , & durable ) ? ; if signer_pops == durable . signer_pops { return Err ( retained_error ) ; } validate_winning_lane_output ( message , & durable . proposal , & signer_pops ) ? ; } let durable_hash = HashOf :: new ( & durable ) ; Ok ( Some ( Hash :: new_from_chunks ( & [ , durable_hash . as_ref ( ) , HashOf :: new ( message ) . as_ref ( ) , ] ) ) ) }", "historical lane retirement must authenticate the exact durable proposal and bind its output hash"),
         (lane_path, lane_items.get("durable_historical_lane_verification_pops"), "fn durable_historical_lane_verification_pops ( kura : & Kura , durable : & CertifiedLaneBlockArtifact , ) -> Result < BTreeMap < PublicKey , Vec < u8 > > , String > { let mut pops = durable . signer_pops . clone ( ) ; if let Some ( validator_pops ) = validated_autonomous_validator_pops ( & durable . prepare_qc , & durable . proposal . descriptor . validator_set , ) ? { if durable . commit_qc . validator_set != durable . proposal . descriptor . validator_set { return Err ( . to_owned ( ) ) ; } pops . extend ( validator_pops ) ; return Ok ( pops ) ; } let proposal_height = durable . proposal . descriptor . proposal_height ; let Some ( finality ) = kura . v2_finality_artifact ( proposal_height ) . map_err ( | error | format ! ( ) ) ? else { return Ok ( pops ) ; } ; let hint = durable . proposal . payload_block_hint . ok_or_else ( || . to_owned ( ) ) ? ; if finality . height != proposal_height || finality . height_context . height != proposal_height || hint . proposal_height != proposal_height || hint . proposal_block_hash != finality . block_hash { return Err ( . to_owned ( ) , ) ; } wire :: finality :: verify_validator_roster_pops ( & finality . height_context , & finality . validator_set_pops , ) . map_err ( | error | format ! ( ) ) ? ; for ( entry , pop ) in finality . height_context . roster . iter ( ) . zip ( & finality . validator_set_pops ) { if durable . proposal . descriptor . validator_set . contains ( & entry . validator ) { pops . insert ( entry . validator . public_key ( ) . clone ( ) , pop . clone ( ) ) ; } } Ok ( pops ) }", "historical lane verification must source alternate signer PoPs from the frozen finality roster"),
     ):
@@ -71255,6 +71285,49 @@ if let Err(error) = self.retire() {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+    expected_ordinary_ingress_items = {
+        "consume_prepared_dequeued_v2_ingress",
+    }
+    observed_ordinary_ingress_items = set(
+        _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256
+    )
+    if observed_ordinary_ingress_items != expected_ordinary_ingress_items:
+        errors.append(
+            "exact-output ordinary-ingress source-seal inventory must be exact; "
+            f"missing={sorted(expected_ordinary_ingress_items - observed_ordinary_ingress_items)}, "
+            f"extra={sorted(observed_ordinary_ingress_items - expected_ordinary_ingress_items)}"
+        )
+    ordinary_ingress_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256.items()
+    ):
+        item = _require_rust_item(
+            ordinary_ingress_consumer_path,
+            ordinary_ingress_consumer_source,
+            item_name,
+            errors,
+        )
+        ordinary_ingress_items[item_name] = item
+        _require_rust_item_context(
+            ordinary_ingress_consumer_path,
+            item,
+            (),
+            f"exact-output ordinary-ingress {item_name} owner",
+            errors,
+            expected_attributes=(
+                "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+            ),
+        )
+        _require_rust_item_token_sha256(
+            ordinary_ingress_consumer_path,
+            item,
+            expected_sha256,
+            f"exact-output ordinary-ingress {item_name} owner",
+            errors,
+        )
+    ordinary_ingress_consumer = ordinary_ingress_items.get(
+        "consume_prepared_dequeued_v2_ingress"
+    )
     _require_rust_token_sequence(
         lifecycle_runner_path,
         lifecycle_runner_items["ordinary_finalize"],
@@ -71549,8 +71622,7 @@ if superseded_by_decision {
 }
 match services.prepare_certified_request(authenticated_via, authenticated) {
     Ok(admission) => {
-        prepared_serve =
-            Some(ProductionPreparedCertifiedServeV1::Admitted(admission));
+        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Admitted(admission));
         true
     }
     Err(CertifiedServePrepareError::Backpressure) => {
@@ -71615,7 +71687,8 @@ if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
             )
         ):
             errors.append(
-                f"{ordinary_ingress_consumer_path}:{ordinary_ingress_consumer.line}: KuraReplicaAdvert ingress "
+                f"{ordinary_ingress_consumer_path}:{ordinary_ingress_consumer.line}: "
+                "KuraReplicaAdvert ingress "
                 "must bypass both consensus reducers through its exact durable "
                 "admission seam before lane-local or leader-wire dispatch"
             )
@@ -72099,18 +72172,37 @@ def _local_runner_service_contract_source_fidelity_errors(
             errors.append(
                 f"{path}: local-runner service production source must be a regular file"
             )
-    runner_source = (
-        runner_path.read_text(encoding="utf-8")
-        if runner_path.is_file() and not runner_path.is_symlink()
-        else ""
+    runner_path, runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        errors,
+        "local-runner service runner and reviewed components",
     )
-    ordinary_runner_source = ordinary_runner_path.read_text(encoding="utf-8") if ordinary_runner_path.is_file() and not ordinary_runner_path.is_symlink() else ""
-    pending_runner_source = pending_runner_path.read_text(encoding="utf-8") if pending_runner_path.is_file() and not pending_runner_path.is_symlink() else ""
+    _loaded_ordinary_runner_path, ordinary_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        errors,
+        "ordinary local-runner lifecycle service source",
+    )
+    _loaded_pending_runner_path, pending_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        errors,
+        "pending-Kura local-runner lifecycle service source",
+    )
     _loaded_worker_path, worker_source = _read_reviewed_rust_source(
         repo_root,
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         errors,
         "local-runner service production source",
+    )
+    outer_ingress_cursor_path, outer_ingress_cursor_source = (
+        _read_reviewed_rust_source(
+            repo_root,
+            "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs",
+            errors,
+            "local-runner outer-ingress cursor source",
+        )
     )
     runner_test_path, runner_test_source = _read_reviewed_rust_source(
         repo_root,
@@ -72125,6 +72217,14 @@ def _local_runner_service_contract_source_fidelity_errors(
         errors.append(
             f"{runner_path}: local runner must compile exactly one reviewed "
             "split test module"
+        )
+    outer_ingress_cursor_include = (
+        'include!("v2_runner/outer_ingress_cursor.rs");'
+    )
+    if runner_source.count(outer_ingress_cursor_include) != 1:
+        errors.append(
+            f"{runner_path}: local runner must compile exactly one canonical "
+            "outer-ingress cursor provider"
         )
 
     _require_rust_source_token_sequence(
@@ -72151,10 +72251,15 @@ def _local_runner_service_contract_source_fidelity_errors(
         "drain_lane_relay_ingress",
         "service_certified_serve_barrier_liveness_turn",
     ):
-        item = _require_rust_item(runner_path, runner_source, item_name, errors)
+        item_path, item_source = (
+            (outer_ingress_cursor_path, outer_ingress_cursor_source)
+            if item_name == "outer_ingress_turns"
+            else (runner_path, runner_source)
+        )
+        item = _require_rust_item(item_path, item_source, item_name, errors)
         runner_items[item_name] = item
         _require_rust_item_context(
-            runner_path,
+            item_path,
             item,
             (("impl", "Iterator", "for", "OuterIngressTurns"),)
             if item_name == "next" else (),
@@ -72189,6 +72294,14 @@ def _local_runner_service_contract_source_fidelity_errors(
         errors,
         "bounded local-runner completion service production item",
     )
+    lifecycle_completion_item = _require_qualified_rust_item(
+        worker_path,
+        worker_source,
+        "ProductionV2Services",
+        "drain_completions_with_lifecycle",
+        errors,
+        "typed bounded local-runner completion service production item",
+    )
     sealed_items: dict[str, tuple[Path, RustItem | None]] = {
         **{f"runner::{name}": (runner_path, item) for name, item in runner_items.items()},
         **{
@@ -72202,6 +72315,10 @@ def _local_runner_service_contract_source_fidelity_errors(
         "worker::ProductionV2Services::drain_completions": (
             worker_path,
             completion_item,
+        ),
+        "worker::ProductionV2Services::drain_completions_with_lifecycle": (
+            worker_path,
+            lifecycle_completion_item,
         ),
     }
     for item_name, expected_sha256 in (
@@ -73860,7 +73977,9 @@ CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode
         errors,
     )
     errors += _outer_ingress_cursor_source_fidelity_errors(
-        runner_path, runner_source, runner_items.get("outer_ingress_turns")
+        outer_ingress_cursor_path,
+        outer_ingress_cursor_source,
+        runner_items.get("outer_ingress_turns"),
     )
     _require_rust_token_sequence(
         runner_path,
@@ -73886,13 +74005,19 @@ CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode
         errors,
     )
     _require_rust_token_sequence(
-        worker_path,
-        completion_item,
+        worker_path, completion_item,
         """
 let outcome = self.drain_completions_with_lifecycle(executor)?;
 self.require_no_unowned_lifecycle_completion(executor, outcome)
 """,
         "ordinary completion service must consume the composite lifecycle-aware drain without abandoning recovered ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        lifecycle_completion_item,
+        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH, CompletionDrainPolicy::Fair,)",
+        "typed completion service must delegate to the fixed finite fair-policy scan",
         errors,
     )
     return errors

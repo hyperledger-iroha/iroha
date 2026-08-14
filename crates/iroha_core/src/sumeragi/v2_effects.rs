@@ -299,6 +299,7 @@ pub(crate) struct VerifiedPendingGenesisNexusAmxContext {
 }
 impl VerifiedPendingGenesisNexusAmxContext {
     /// Return the exact projection bound into the replayed height-context id.
+    #[cfg(test)]
     pub(crate) const fn hash(self) -> Hash {
         self.hash
     }
@@ -1738,11 +1739,14 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchRequestRegistrationErrorV1 {
 /// the registry's claimed-carrier arming token and installs both dedicated
 /// indexes in one assertion-only tail.
 #[must_use = "dropping a recovered request reservation leaves executor indexes unchanged"]
-pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<'executor> {
-    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<
+    'executor,
+    R: EffectRuntime,
+> {
+    executor: &'executor mut V2EffectExecutor<R>,
     owner: Option<RecoveredDecisionFetchRequestOwnerV1>,
 }
-impl PreparedRecoveredDecisionFetchRequestRegistrationV1<'_> {
+impl<R: EffectRuntime> PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R> {
     /// Return the reserved exact lifecycle key.
     pub(in crate::sumeragi) fn dispatch_key(
         &self,
@@ -3830,9 +3834,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(true)
     }
-}
 
-impl V2EffectExecutor<SerializedV2Runtime> {
     /// Reserve the sole dedicated recovered Decision Fetch owner position.
     ///
     /// Exact hash, logical request identity, body coordinates, and both ordinary
@@ -3843,7 +3845,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         owner: RecoveredDecisionFetchRequestOwnerV1,
     ) -> Result<
-        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R>,
         RecoveredDecisionFetchRequestRegistrationErrorV1,
     > {
         if !self.recovered_decision_fetch_registration_available(&owner)? {
@@ -3854,6 +3856,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             owner: Some(owner),
         })
     }
+}
+
+impl V2EffectExecutor<SerializedV2Runtime> {
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -9468,6 +9473,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.pending_applications.contains_key(&work_id)
     }
     /// Borrow the durable finality values returned by Kura after application.
+    #[cfg(test)]
     pub(crate) fn durable_finality(
         &self,
     ) -> Option<(&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact)> {

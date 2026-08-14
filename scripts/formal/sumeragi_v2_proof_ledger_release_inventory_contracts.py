@@ -232,9 +232,9 @@ def _production_liveness_release_inventory_errors(
     canonical_sdk_diagnostics_suites = (
         ("python", 121),
         ("javascript", 88),
-        ("swift", 17),
-        ("kotlin", 26),
-        ("java", 24),
+        ("swift", 33),
+        ("kotlin", 42),
+        ("java", 41),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -1610,10 +1610,10 @@ def _production_liveness_release_inventory_errors(
                     "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "f5c4e3bf8d8a86890abba38f559058df676e5a311aacead265ce0f999d6395bd"
+                    "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
+                    "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
@@ -1741,8 +1741,9 @@ def _production_liveness_release_inventory_errors(
                     )
                     continue
                 try:
+                    component_source = component_path.read_text(encoding="utf-8")
                     component_tree = ast.parse(
-                        component_path.read_text(encoding="utf-8"),
+                        component_source,
                         filename=str(component_path),
                     )
                 except (OSError, UnicodeDecodeError, SyntaxError) as error:
@@ -1801,7 +1802,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "a11e17139adf7257126328d7f0c9f2903a6911c9ff4a81e50bb2818362f2b39b"
+            "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
         ),
     }
     expected_bootstrap_component_symbols = {

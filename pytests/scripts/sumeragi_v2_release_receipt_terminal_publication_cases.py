@@ -44,7 +44,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "81f55aaf916b04f9e0c8e165156a63ac3d451fff74fc5959a657e42bce8c9b21"
+        "3e87cffe611d61fb2e9a7a6d921cc263794238c57c3d22121025b74423b6468d"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     bootstrap_completion = evidence["bootstrap_completion"]
@@ -199,6 +199,26 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         ).encode("utf-8")
     ).hexdigest()
     reject_private_manifest(missing_node_member, "retained archive subtree")
+
+    missing_openapi_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
+    openapi_inventory = missing_openapi_member["openapi_node"][
+        "node_modules_inventory"
+    ]
+    openapi_inventory["records"] = [
+        record for record in openapi_inventory["records"]
+        if record["path"] != "fixture/index.js"
+    ]
+    openapi_inventory["record_count"] = len(openapi_inventory["records"])
+    openapi_inventory["file_bytes"] = sum(
+        record.get("size", 0) for record in openapi_inventory["records"]
+    )
+    openapi_inventory["records_sha256"] = hashlib.sha256(
+        json.dumps(
+            openapi_inventory["records"], ensure_ascii=True,
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    reject_private_manifest(missing_openapi_member, "retained archive subtree")
 
     dirty_swift_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
     swift_inventory = dirty_swift_member["swiftpm"]["cache_inventory"]

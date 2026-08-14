@@ -1,0 +1,386 @@
+{
+  "format_version": 1,
+  "source_commit": "a04b145082f006e393a99e70505d52e581d9156a",
+  "source_slice_hash_scope": "line-count-pinned Rust format! template transformed to Soracloud symbolic asset",
+  "asset_inventory_suffix": ".tmpl",
+  "assets": [
+    {
+      "path": "hayahi_app_readme.tmpl",
+      "byte_length": 2273,
+      "sha256": "13c6a424737ce0da7bda33f22ce443bdea0db89b40dfd05573070cb2a47829b7",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18668,
+          "physical_lines": 81,
+          "sha256": "ce520fcd0cb26edacca526ca39040d76d0b00b46b92c9b6f3b252bc9007d941a"
+        }
+      ]
+    },
+    {
+      "path": "hayahi_app_root_package_json.tmpl",
+      "byte_length": 172,
+      "sha256": "314e2f7dbbc78cbe8cfac28c5a7b3519aef5e710bda4d94e7b2b33f9d3f59e44",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16560,
+          "physical_lines": 14,
+          "sha256": "7cc4d669f6f2d7924bb00e5ab45fa7a257be877f9fc95f5fefe33424b3ffa990"
+        }
+      ]
+    },
+    {
+      "path": "http_service_build_and_sync_sh.tmpl",
+      "byte_length": 409,
+      "sha256": "cdee2259b46bfe8546a6bc9cfb8c03549c458106fe21c5340f6799916f8040a4",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16768,
+          "physical_lines": 22,
+          "sha256": "05494394730809a6747695cd709465951240fc4758db7978f4de12b476b25b8a"
+        }
+      ]
+    },
+    {
+      "path": "http_service_build_sh.tmpl",
+      "byte_length": 428,
+      "sha256": "8ee3c4650d8f6bea58c6687dbda776f075bd60ad8f00a667e33f40a81d50b5e3",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16732,
+          "physical_lines": 23,
+          "sha256": "08a9d45cdcaf2c66fbd2df4d13156c650d162c4e10a5c54e2de4b8e365d61897"
+        }
+      ]
+    },
+    {
+      "path": "http_service_readme.tmpl",
+      "byte_length": 6807,
+      "sha256": "773a0fb245c5060da89b30d96324e7ad9551aa13b21c743a7b9ab43474fdc107",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17200,
+          "physical_lines": 166,
+          "sha256": "7cce5dd2223c686aebda24b96224cdd2e51b9537456dfa58094090631e7e9748"
+        }
+      ]
+    },
+    {
+      "path": "http_service_server_mjs.tmpl",
+      "byte_length": 2589,
+      "sha256": "eab5a7be2696ad8ebb8e1da8ae5af45411bd7de3596b1fabab9c220039162540",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16815,
+          "physical_lines": 103,
+          "sha256": "013d558a8ba75667a6720dfa20df35f73603011cd80d20ef2a18116a360ee0dc"
+        }
+      ]
+    },
+    {
+      "path": "pii_app_frontend_package_json.tmpl",
+      "byte_length": 371,
+      "sha256": "d8673432747bbf9687e102fbef1b951ac0eeee9e42d5c7e940a7c0a7cad6f824",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16535,
+          "physical_lines": 24,
+          "sha256": "e053fb94874739934ae93eadc8f64ec0747799f46483f9ee94316733c14574ef"
+        }
+      ]
+    },
+    {
+      "path": "pii_app_readme.tmpl",
+      "byte_length": 2292,
+      "sha256": "d1733fdce6fdc9576544067bc8539ea28bc220581c25dd9a6b01c8cfa127061c",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18599,
+          "physical_lines": 68,
+          "sha256": "c991d3f05ad577a29b393227ed1a24c8b988a9de04424c70014f811d8bfb588c"
+        }
+      ]
+    },
+    {
+      "path": "pii_app_root_package_json.tmpl",
+      "byte_length": 286,
+      "sha256": "01039b722fd59d64b9a9f0248fe50e3e4cf7bfc12895aa8b720fefd2fc275029",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16518,
+          "physical_lines": 16,
+          "sha256": "f27fc716404466eddff25843bb95aceb53f6622ad41ab6bb9e24fce842c689a8"
+        }
+      ]
+    },
+    {
+      "path": "single_api_api_dev_server_mjs.tmpl",
+      "byte_length": 998,
+      "sha256": "74ee7e1aa00448bed24cfd990ac5b5ef0fa7f6818447d3875591a72abe31aa8a",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16685,
+          "physical_lines": 38,
+          "sha256": "56948f0849125f45a9c253610df4ef8f1db256313e3fba3b6c0ad26ae6c3567e"
+        }
+      ]
+    },
+    {
+      "path": "single_api_api_readme.tmpl",
+      "byte_length": 1037,
+      "sha256": "7da3b6677caef3a83750733c21c8a82e81be692eaf617bb97474cc353401cacf",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18344,
+          "physical_lines": 51,
+          "sha256": "f8608ec12774ff9eabdb9c919f922426e96af0624ddc1a4774822c0fcd1831ea"
+        }
+      ]
+    },
+    {
+      "path": "single_api_app_readme.tmpl",
+      "byte_length": 4472,
+      "sha256": "1d5b2d72a7b1da86e1969e8641f5ab80441c2f7de21a799085397a54798ffc27",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18428,
+          "physical_lines": 110,
+          "sha256": "543e9681b6a3c89d541cd8a04e08820352e4c749726adafe8b36e8a3a3ec6d9f"
+        }
+      ]
+    },
+    {
+      "path": "site_app_vue.tmpl",
+      "byte_length": 401,
+      "sha256": "e82f40a9b02ef5912e6565183b4ad7055c8bce0b57f66ed5ba66fcc7bf783d88",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16603,
+          "physical_lines": 26,
+          "sha256": "acf3e3ace5663bdcb9cf283a507af94212b9d4e26dc1fc0af9f96d97f6cf1978"
+        }
+      ]
+    },
+    {
+      "path": "site_package_json.tmpl",
+      "byte_length": 363,
+      "sha256": "686a0b3969accf6571bd403cca21a058de6dfceb562d412ea948319fc3c909cb",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16451,
+          "physical_lines": 24,
+          "sha256": "793ef90f75f60f9ea97dd729ee5a88774a89c87eb1e48bee1d3a5a5802502d81"
+        }
+      ]
+    },
+    {
+      "path": "site_readme.tmpl",
+      "byte_length": 955,
+      "sha256": "cc7b7f0ebc7d4f6e18a16122ed5040fdc5d7351cdc40f48e7a653d06020b60e0",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18299,
+          "physical_lines": 44,
+          "sha256": "de3037e7a8b3232084e37af5eb02387f755167af0e01462e0d71bb3084296d1e"
+        }
+      ]
+    },
+    {
+      "path": "split_app_existing_repo_readme.tmpl",
+      "byte_length": 1391,
+      "sha256": "0457ee407885c6ba38472af36044da5b68330b7fff090282ff3fe13228e06c3e",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18247,
+          "physical_lines": 39,
+          "sha256": "1c32f4f1617c297180359e961f806245e6f9041521ef2b963f2acbb576cfa630"
+        }
+      ]
+    },
+    {
+      "path": "split_app_frontend_app_vue.tmpl",
+      "byte_length": 5728,
+      "sha256": "daad3478a15a83d7ef2ea81a4176f609be97af73067f87f5bc64ab4e726d5157",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17404,
+          "physical_lines": 241,
+          "sha256": "53384795192c49a1166b92d2cafe3f0c3130ca966549f7108a6301b6a88427f1"
+        }
+      ]
+    },
+    {
+      "path": "split_app_frontend_package_json.tmpl",
+      "byte_length": 414,
+      "sha256": "3023b292ddb9a3c1952dcf5c466b3c2a410048af9dcb947c4e707a5a78dd122d",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17371,
+          "physical_lines": 24,
+          "sha256": "5e40b68c674129feb0df86e7df86e1ce23c48c4e590b5a9a3695951d077fa97e"
+        }
+      ]
+    },
+    {
+      "path": "split_app_live_readme.tmpl",
+      "byte_length": 1852,
+      "sha256": "187676bf24aea05a28bda82ead892f4c6f750f344066c86f1de1535f4e0465cd",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17931,
+          "physical_lines": 71,
+          "sha256": "4941a6b8722cd32dba26efb10a735a35e83660bea1c862a642e3239fa298a9a9"
+        }
+      ]
+    },
+    {
+      "path": "split_app_live_server_mjs.tmpl",
+      "byte_length": 8298,
+      "sha256": "240028206faa4b326b2da0dc01e67354051527700f4ce962417f8afdf99b4ecd",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16919,
+          "physical_lines": 280,
+          "sha256": "61ba41de79b40c8091859de1471a9513577b6005a65e2d1653f0dd10aeac94f4"
+        }
+      ]
+    },
+    {
+      "path": "split_app_readme.tmpl",
+      "byte_length": 6885,
+      "sha256": "eb300f94122656d22d1ac391ee0fadcbb6cfef891fd0e4de6e4261043d6cb19f",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18079,
+          "physical_lines": 167,
+          "sha256": "5f9542c0201cbc519976020533b85e3fda7354a5fc78ed6de2704fddd4545cbe"
+        }
+      ]
+    },
+    {
+      "path": "split_app_vault_contract_ko.tmpl",
+      "byte_length": 1960,
+      "sha256": "f95c26349d4c05537410d5364455add096faba05e46467f2530d0a3af2292067",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17857,
+          "physical_lines": 73,
+          "sha256": "941448f586e5d56cc2fb6b32c532d6d0e467569b460ff5c4f29adf0408214966"
+        }
+      ]
+    },
+    {
+      "path": "split_app_vault_dev_server_mjs.tmpl",
+      "byte_length": 5481,
+      "sha256": "d650919a1088c51bbf5c10b049922fefcc325b4fc2f253102d1c74d441a6d6b9",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 17658,
+          "physical_lines": 198,
+          "sha256": "6ae7e558c34e9c8c7f8bb6f19ee89e08ab69f168cca4b6a33d08da28897c2441"
+        }
+      ]
+    },
+    {
+      "path": "split_app_vault_readme.tmpl",
+      "byte_length": 861,
+      "sha256": "12d5554c549d2d31731861d2116f0bffe1781583d84eb081f746791ff45be145",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18003,
+          "physical_lines": 40,
+          "sha256": "f83be7ec4036931b5baa9b14aeb88265267e5dfc56746237b8e41b49a69a1bc9"
+        }
+      ]
+    },
+    {
+      "path": "webapp_frontend_package_json.tmpl",
+      "byte_length": 367,
+      "sha256": "137c6946c264bdc6bef64cf7de41fc4b261240b23133e899e6cd75c1569c2b1a",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16493,
+          "physical_lines": 24,
+          "sha256": "3d943327788ca1f509fb0c1df0124054888f1ef01f5b88dcfdc8dbe5a4b4d27b"
+        }
+      ]
+    },
+    {
+      "path": "webapp_readme.tmpl",
+      "byte_length": 1889,
+      "sha256": "f78313284e446e8c74c1fb91b08e49f6480565a2882ad77b52aace58796c254e",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 18539,
+          "physical_lines": 59,
+          "sha256": "e60661fb650ce7cf9df755cd78986f2bcc6ccd0a432b1bfbf61046cea8074712"
+        }
+      ]
+    },
+    {
+      "path": "webapp_root_package_json.tmpl",
+      "byte_length": 285,
+      "sha256": "b006ce247cd69b519749fa31ecd0a2ef16f75ae63fa4dc376a28c96bc6b714a9",
+      "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
+      "source_preimages": [
+        {
+          "path": "../../../soracloud.rs",
+          "start_line": 16476,
+          "physical_lines": 16,
+          "sha256": "9611c789f9c0e280ea3087ec4cde939ba3b518ef4e7fd9b9e2fc72cb7a85297f"
+        }
+      ]
+    }
+  ]
+}

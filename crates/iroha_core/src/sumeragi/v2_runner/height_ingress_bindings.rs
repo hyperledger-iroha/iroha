@@ -2,10 +2,12 @@
 ///
 /// Once both gates are live they must retire in one queue transaction: the
 /// Serve binding and leader-wire binding describe carriers in the same lanes.
+#[cfg(test)]
 struct HeightIngressBindings {
     certified_serve: CertifiedServeIngressBinding,
     leader_wire: LeaderWireIngressBinding,
 }
+#[cfg(test)]
 impl HeightIngressBindings {
     fn new(
         certified_serve: CertifiedServeIngressBinding,
@@ -62,6 +64,7 @@ impl HeightIngressBindings {
         Ok(())
     }
 }
+#[cfg(test)]
 impl Drop for HeightIngressBindings {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -107,6 +110,7 @@ fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2
     ingress_ready.store(false, Ordering::Release);
     block_ingress.close();
 }
+#[cfg(test)]
 fn open_ingress_for_active_height(
     output_guard: &ConsensusOutputGuard,
     ingress_ready: &AtomicBool,

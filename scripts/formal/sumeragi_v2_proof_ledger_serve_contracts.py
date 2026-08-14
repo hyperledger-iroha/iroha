@@ -1381,9 +1381,6 @@ _SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256 = {
     "PersistedServicedCandidate": (
         "b270b68c01fa0b0f10f8415fd36c9f2fa80f8ff627fee866ca0bf3c35b86b207"
     ),
-    "PersistedServicedCandidatesV3": (
-        "bb1e47bffc2d32ebcea3f96f98072eca3713fb508264bd6624380af71e061d67"
-    ),
     "ProducerContinuationAddress": (
         "7fd1d0c883e804f99c21932bdee838f7916ba6b40a199bba8dfd9d8a9754b4fd"
     ),
@@ -1479,11 +1476,8 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
     "encode_frame_v4": (
         "14296fa8c429ee49f9ccba935bdc06f984941eefda1b0e995d091741e6130ad2"
     ),
-    "encode_frame_v3": (
-        "bd12646c0dfab04045c7d8527c2c920e31fc7bf8200058ffe87589b86ef0b195"
-    ),
     "decode_frame": (
-        "c6d86c1a78e3df5299570c3a409750c852ba7552ce54fcbff48b5e4833bf7d48"
+        "97f0a238c245499678a700ffb079238580d5998b8fb73858245a2bffa51ddf92"
     ),
 }
 _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256 = {
@@ -1683,8 +1677,8 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "serviced_candidate_recovery_rejects_substituted_wal_directory": (
         "bef464622aa061ccf1d5e580647f03a3222d3897069acf4a581d7cdcc9bf1d01"
     ),
-    "v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically": (
-        "10a637f7e21143470bdd72792630231d35801c52bbfa745786c836067b7dd244"
+    "v4_roundtrips_terminal_producer_continuations": (
+        "c67045239305a98a9110b7e71cd665dc6fc6e86b775a8e8b9733897a8a5c6c51"
     ),
     "leader_wire_gate_reconciles_producer_first_terminal_crash": (
         "f225f861684b5a468fd1e45a9424e614b91b8bfebfd75e10e429c91dbd32b58d"
@@ -1702,10 +1696,10 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
         "ef03bf7b54f58eb0ee9e358a780c023aedce3abc15e0e453041c6b1a905c9d9a"
     ),
     "snapshot_rejects_truncation_version_ordering_duplicates_and_oversize": (
-        "11a74c656afed6467421484b12819a41ae85d8f974e5baf22deaac81d6f218ac"
+        "42c3d3e1698a4bb437bb37e61e363b7ff77930814d2cf218bea09c9bdac684fd"
     ),
     "v4_rejects_noncanonical_or_over_capacity_producer_tables": (
-        "5067bd4555946a59ee5abe37e5b9f473df832bb3f0337f15f14c269d78b8b578"
+        "78776cdef7779455e547040a79b4a32c2b188f416b5875cbd88d93b896a14679"
     ),
     "producer_identity_stage_projection_rejects_foreign_root_and_successor_stages": (
         "ec16de15110425ee5c28d0dbaf66cd52445dc5f2cd97439877f079aede5ad2a8"

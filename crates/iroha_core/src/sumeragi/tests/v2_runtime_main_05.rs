@@ -862,6 +862,152 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
     );
 }
 #[test]
+fn body_available_rebind_rejects_busy_source_and_restored_ingress_destination_before_mutation() {
+    let directory = TempDir::new().expect("temporary cross-carrier conflict directory");
+    let (mut runtime, context, _keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime before opening a signer fence");
+    let deadline = now + runtime.round_timeout();
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(deadline)
+        .expect("open a runtime-owned TimeoutVote signer fence")
+    else {
+        panic!("timeout dispatch unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout dispatch retains exact scheduler ownership");
+    assert!(matches!(
+        timeout_effects.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }]
+    ));
+    let timeout_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("TimeoutVote Sign retains its lifecycle owner");
+    let [timeout_ownership] = timeout_ownership.as_slice() else {
+        panic!("TimeoutVote Sign has one exact owner")
+    };
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
+        .expect("publish the pending TimeoutVote signer owner");
+    let source_tag = runtime.round_tag();
+    let manifest = runtime_manifest(&context, 0x91);
+    let (source_ordinal, source_owner) = defer_persistent_body_available_for_test(
+        &mut runtime,
+        source_tag,
+        &manifest,
+        b"persistent-body-busy-source",
+    );
+    let rebound = EventTag::new(
+        source_tag.height(),
+        source_tag.view() + 1,
+        Generation::new(source_tag.generation().get() + 1),
+    );
+    observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+
+    // Inject exact stage-7 ingress metadata to exercise fail-closed
+    // cross-carrier defense; full restart reachability is covered elsewhere.
+    let destination_ordinal = runtime
+        .ingress
+        .lifecycle_ordinals
+        .reserve_one()
+        .expect("reserve the restored destination lifecycle");
+    let destination = runtime
+        .restored_tagged_command(
+            rebound,
+            CommandClass::Completion,
+            AdapterCommand::BodyAvailable {
+                manifest: manifest.clone(),
+            },
+            now,
+            Hash::new(b"persistent-body-restored-destination"),
+            destination_ordinal,
+            RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE,
+        )
+        .expect("reconstruct the independent persistent destination");
+    let destination_owner = destination
+        .lifecycle_owner()
+        .expect("restored destination retains its exact lifecycle owner");
+    runtime
+        .ingress
+        .enqueue(destination)
+        .expect("stage the restored persistent destination");
+    assert_ne!(source_ordinal, destination_ordinal);
+    assert_ne!(source_owner, destination_owner);
+    let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+        manifest: manifest.clone(),
+    };
+    assert_eq!(
+        runtime
+            .driver
+            .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
+        (1, 1)
+    );
+    assert_eq!(
+        runtime
+            .driver
+            .deferred_body_pipeline_completion_ownership(rebound, &evidence),
+        (0, 0)
+    );
+    assert_eq!(
+        runtime
+            .ingress
+            .restored_body_available_retirement(rebound, |queued| queued == &manifest),
+        Ok(Some(RestoredProducerRetirement {
+            causal_lifecycle_key: Hash::new(b"persistent-body-restored-destination"),
+            admission_ordinal: destination_ordinal,
+            producer_stage: RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE,
+        }))
+    );
+    let adapter_ordinals_before = runtime.driver.all_deferred_admission_ordinals();
+    let wrapper_ownership_before = runtime.deferred_lifecycle_ownership.clone();
+    let queue_before = runtime.ingress.ownership_snapshot();
+    assert_eq!(
+        runtime
+            .rebind_body_available(source_tag, rebound, &manifest)
+            .expect_err("two persistent roots must fail before either owner is retired"),
+        "Sumeragi v2 body completion has two persistent producer roots"
+    );
+    assert!(runtime.fail_closed);
+    assert_eq!(
+        runtime.driver.all_deferred_admission_ordinals(),
+        adapter_ordinals_before
+    );
+    assert_eq!(
+        runtime.deferred_lifecycle_ownership,
+        wrapper_ownership_before
+    );
+    assert_eq!(runtime.ingress.ownership_snapshot(), queue_before);
+    assert_eq!(
+        runtime
+            .driver
+            .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
+        (1, 1)
+    );
+    assert!(
+        runtime
+            .driver
+            .deferred_body_available_has_persistent_producer(source_tag, &manifest)
+            .expect("source persistent root remains exact")
+    );
+    assert!(
+        runtime
+            .ingress
+            .restored_body_available_retirement(rebound, |queued| queued == &manifest)
+            .expect("destination restored root remains exact")
+            .is_some()
+    );
+}
+#[test]
 fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation() {
     {
         let directory = TempDir::new().expect("temporary destination-conflict directory");

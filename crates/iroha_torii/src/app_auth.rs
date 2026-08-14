@@ -346,7 +346,8 @@ impl Iterator for CanonicalRequestFormLossyChars<'_> {
                 Some(ch)
             }
             Err(error) if error.valid_up_to() != 0 => {
-                let valid = &encoded[..error.valid_up_to()];
+                let valid = std::str::from_utf8(&encoded[..error.valid_up_to()])
+                    .expect("UTF-8 validation guarantees its reported prefix is valid");
                 let ch = valid.chars().next().expect("non-empty valid UTF-8 prefix");
                 self.advance(ch.len_utf8());
                 Some(ch)
@@ -718,7 +719,7 @@ pub fn canonical_request_message(
     uri: &Uri,
     body: &[u8],
 ) -> Result<Vec<u8>, crate::Error> {
-    bounded_canonical_request_message(method, uri, body).map(Box::into_vec)
+    bounded_canonical_request_message(method, uri, body).map(|message| message.into_vec())
 }
 /// Construct exact-network canonical request bytes for signing.
 ///
@@ -732,7 +733,7 @@ pub fn canonical_network_request_message(
     body: &[u8],
 ) -> Result<Vec<u8>, crate::Error> {
     bounded_canonical_network_request_message(network_id, method, uri, body, None)
-        .map(Box::into_vec)
+        .map(|message| message.into_vec())
 }
 /// Hash an exact-network canonical request for a multisig witness.
 ///
@@ -766,7 +767,7 @@ pub fn canonical_network_request_signature_message(
         body,
         Some((timestamp_ms, nonce)),
     )
-    .map(Box::into_vec)
+    .map(|message| message.into_vec())
 }
 /// Encode a signature payload for use in `X-Iroha-Signature` headers.
 ///
@@ -2893,7 +2894,7 @@ mod tests {
         assert_eq!(
             decode_bounded_canonical_base64_value(&exact, 3, "test base64")
                 .expect("exact decoded byte limit"),
-            [0x11, 0x22, 0x33]
+            Box::<[u8]>::from([0x11, 0x22, 0x33])
         );
 
         let excessive = BASE64_STANDARD.encode([0x11, 0x22, 0x33, 0x44]);

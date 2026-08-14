@@ -206,6 +206,15 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         / "sumeragi"
         / "v2_worker.rs"
     )
+    worker_test_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "tests"
+        / "v2_worker_main_01.rs"
+    )
     errors: list[str] = []
     sources: dict[Path, str] = {}
     for path, description in (
@@ -215,6 +224,7 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         (network_path, "exact reply peer-writer source"),
         (merge_path, "exact sidecar reply-attempt regression source"),
         (worker_path, "exact reply adaptive-attempt worker source"),
+        (worker_test_path, "exact reply adaptive-attempt regression source"),
     ):
         if not path.is_file() or path.is_symlink():
             errors.append(f"{path}: {description} must be a regular file")
@@ -251,6 +261,13 @@ def _reply_writer_deadline_production_source_fidelity_errors(
                 f"{path}: {description} must occur exactly {count} time(s) in "
                 f"executable Rust source; found {observed}"
             )
+
+    worker_test_include = 'include!("tests/v2_worker_main_01.rs");'
+    if sources[worker_path].count(worker_test_include) != 1:
+        errors.append(
+            f"{worker_path}: adaptive reply-attempt worker regressions must "
+            "compile exactly once from their canonical split owner"
+        )
 
     require(
         defaults_path,
@@ -389,6 +406,7 @@ connect_startup_delay_until,
     network_source = sources[network_path]
     merge_source = sources[merge_path]
     worker_source = sources[worker_path]
+    worker_test_source = sources[worker_test_path]
     identity_context = (("impl", "NetworkReplyFlushIdentity"),)
     ack_context = (("impl", "NetworkReplyFlushAck"),)
     deadline_context = (("impl", "ExactReplyWriterDeadline"),)
@@ -429,12 +447,7 @@ connect_startup_delay_until,
     )
     worker_context = (("impl", "PendingExactOutput"),)
     fanout_context = (("impl", "PendingExactFanout"),)
-    worker_test_context = (
-        (
-            "#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super",
-            ")", "mod", "tests",
-        ),
-    )
+    worker_test_context: tuple[tuple[str, ...], ...] = ()
     merge_test_context = (
         ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
     )
@@ -1399,10 +1412,10 @@ if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {
         _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256.items()
     ):
         test = _require_rust_item(
-            worker_path, worker_source, test_name, errors
+            worker_test_path, worker_test_source, test_name, errors
         )
         _require_rust_item_context(
-            worker_path,
+            worker_test_path,
             test,
             worker_test_context,
             f"adaptive reply-attempt regression {test_name}",
@@ -1410,7 +1423,7 @@ if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            worker_path,
+            worker_test_path,
             test,
             expected_sha256,
             f"adaptive reply-attempt regression {test_name}",

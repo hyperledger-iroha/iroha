@@ -9,6 +9,14 @@
     dead_code,
     reason = "the production entropy and reopen seals are uninhabited"
 )]
+#![cfg_attr(
+    not(test),
+    allow(
+        unreachable_code,
+        unused_variables,
+        reason = "the production reopen seal is intentionally uninhabited"
+    )
+)]
 use super::super::super::super::super::super::{
     ZkAmsMkheErrorV1, global_lookup_statement_v1::global_lookup_topology_digest_v1,
 };
@@ -854,7 +862,7 @@ struct WeightedOpeningColumnsSinkV1 {
 }
 impl WeightedOpeningColumnsSinkV1 {
     fn from_seal_v1(seal: GlobalLookupCanonicalReopenSealV1) -> Result<Self, ZkAmsMkheErrorV1> {
-        let group_weights = match seal {
+        let group_weights: ZeroizingT256ScalarVecV1 = match seal {
             GlobalLookupCanonicalReopenSealV1::Production {
                 post_rho_verifier_weights,
             } => match post_rho_verifier_weights {},
@@ -928,7 +936,6 @@ struct WeightedOpeningColumnsV1 {
 }
 #[path = "source_openings_v1/canonical_reopen_v1.rs"]
 mod canonical_reopen_v1;
-pub(in crate::vega::zk_ams::mkhe) use canonical_reopen_v1::Phase23GlobalLookupSourceReopenedV1;
 fn map_bulletproof_error_v1(
     _: crate::generalized_bulletproof::GeneralizedBulletproofErrorV1,
 ) -> ZkAmsMkheErrorV1 {

@@ -276,7 +276,7 @@ fn independent_lookup_language_and_telescoping_mask_oracle_hold() {
     let evaluate=|candidates:[u64;8]| { let mut total=0_u64; for (index,a) in candidates.into_iter().enumerate() { let coordinate=index&1; let plane=index>>1; let active=u64::from(plane<3); let inverse=active*mod_pow_v1((z+p-a)%p,p-2,p)%p; let bits=[coordinate,plane&1,(plane>>1)&1]; let equality=bits.into_iter().zip(rho).fold(1_u64,|value,(bit,challenge)| (u128::from(value)*u128::from(if bit==1 {challenge}else{(1+p-challenge)%p})%u128::from(p)) as u64); let e0=u64::from(coordinate==0); let table_inverse=mod_pow_v1((z+p-plane as u64)%p,p-2,p); let local=((z+p-a)%p*inverse+p-active)%p; let log=(inverse+p-(e0*multiplicities[plane]%p)*table_inverse%p)%p; let count=(e0*multiplicities[plane]+p-active)%p; total=(total+alpha*equality%p*local+lambda*log+mu*count)%p; } total };
     assert_eq!(evaluate([0,1,1,2,2,3,0,0]),0);
     assert_eq!(evaluate([4,1,1,2,2,3,0,0]),81);
-    let mut carry=0_u64; for (challenge,[a,b,c]) in [(9_u64,[2_u64,4,6]),(10,[3,5,7])] { let d=(carry+p-a-b-c)%p*49%p; let mask=|x:u64| (((a*x%p*x%p*x+b*x%p*x+c*x+d)%p)); assert_eq!((mask(0)+mask(1))%p,carry); carry=mask(challenge); }
+    let mut carry=0_u64; for (challenge,[a,b,c]) in [(9_u64,[2_u64,4,6]),(10,[3,5,7])] { let d=(carry+p-a-b-c)%p*49%p; let mask=|x:u64| (a*x%p*x%p*x+b*x%p*x+c*x+d)%p; assert_eq!((mask(0)+mask(1))%p,carry); carry=mask(challenge); }
     assert_ne!(carry,0);
     for schema in [LOOKUP_INDEX_LANGUAGE_V1,LOOKUP_RELATION_LANGUAGE_V1,LOOKUP_MASK_LANGUAGE_V1,LOOKUP_ENDPOINT_LANGUAGE_V1,LOOKUP_SOUNDNESS_LANGUAGE_V1] { assert!(!schema.is_empty()); }
 }

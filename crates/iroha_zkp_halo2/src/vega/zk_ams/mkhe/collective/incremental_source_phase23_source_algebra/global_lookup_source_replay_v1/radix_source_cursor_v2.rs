@@ -76,10 +76,9 @@ impl RadixSourceReadScheduleV2 {
 
 /// Narrow move-only cursor. It owns replay evidence, exposes no callback, and
 /// accepts only the next canonical `(record, block)` pair.
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) struct Phase23GlobalLookupRadixSourceCursorV2<
-    K,
-    P,
-> {
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+struct Phase23GlobalLookupRadixSourceCursorV2
+<K, P> {
     evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>,
     replay_record_digest: [u8; 32],
     source_receipt_digest: [u8; 32],
@@ -110,7 +109,7 @@ impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
         ))
     }
 
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) fn read_next_canonical_block_v2(
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn read_next_canonical_block_v2(
         &mut self,
         record: usize,
         block: usize,
@@ -146,7 +145,7 @@ impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
 
     /// Sole restricted Evidence return. The radix materializer calls this once
     /// after exactly `43 * 512` successful authenticated reads.
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) fn complete_for_radix_materializer_v2(
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn complete_for_radix_materializer_v2(
         mut self,
     ) -> Result<(Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, [u8; 32]), ZkAmsMkheErrorV1> {
         let evidence = self
@@ -174,7 +173,7 @@ impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
 
 impl<K, P> Phase23GlobalLookupSourceReplayEvidenceV1<K, P> {
     /// Consume authenticated replay into the sole compact radix materializer.
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) fn into_radix_witness_materialized_v2(
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn into_radix_witness_materialized_v2(
         self,
         sink: Phase23RadixWitnessScratchSinkV2,
     ) -> Result<Phase23RadixWitnessMaterializedV2<K, P>, ZkAmsMkheErrorV1> {

@@ -2109,6 +2109,15 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
             qualification_args[1::2],
         )
     ]
+    foundational_args = foundational_cli_args(tmp_path)
+    assert len(foundational_args) % 2 == 0
+    foundational_lines = [
+        f"{flag} {value}"
+        for flag, value in zip(
+            foundational_args[::2],
+            foundational_args[1::2],
+        )
+    ]
     args = tmp_path / "aggregate.args"
     args.write_text(
         "\n".join(
@@ -2119,18 +2128,7 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
                 f"--now-unix {NOW_UNIX}",
                 f"--deployment-id {DEPLOYMENT_ID}",
                 f"--environment {ENVIRONMENT}",
-                (
-                    "--foundational-prerequisite-signer-public-key-hex "
-                    f"{FOUNDATIONAL_SIGNER_PUBLIC_KEY.hex()}"
-                ),
-                (
-                    "--foundational-prerequisite-release-sequence "
-                    f"{FOUNDATIONAL_RELEASE_SEQUENCE}"
-                ),
-                (
-                    "--foundational-prerequisite-previous-envelope-sha256 "
-                    f"{FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256}"
-                ),
+                *foundational_lines,
             ]
         )
         + "\n",

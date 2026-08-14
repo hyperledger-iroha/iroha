@@ -1078,18 +1078,24 @@ def test_production_release_inventory_seals_successor_parent_binding(
             "assert_eq!(core_parent.context_id(), context_id(successor_id));",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+            ),
             "successor_context_requires_the_durable_cryptographic_parent",
-            "let admitted = adapter\n            .receive_authenticated(authenticated)",
-            "let admitted = adapter\n            .receive_authenticated(proposal)",
+            "let admitted = adapter\n        .receive_authenticated(authenticated)",
+            "let admitted = adapter\n        .receive_authenticated(proposal)",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_ingress_authentication_tests.rs"
+            ),
             "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter",
             "adapter.authenticate(conflicting_proposal_message),\n"
-            "            Err(AdapterError::ConflictingExecutionCommitment)",
+            "        Err(AdapterError::ConflictingExecutionCommitment)",
             "adapter.authenticate(conflicting_proposal_message),\n"
-            "            Err(AdapterError::MissingExecutionCommitment)",
+            "        Err(AdapterError::MissingExecutionCommitment)",
         ),
     )
     for relative, test_name, old, new in mutations:
@@ -1108,49 +1114,61 @@ def test_production_release_inventory_seals_successor_parent_binding(
         ), errors
         source_path.write_text(canonical_source, encoding="utf-8")
 
-    adapter_path = (
-        tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
-    )
-    canonical_source = adapter_path.read_text(encoding="utf-8")
     semantic_mutations = (
         (
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+            ),
             "Hash::new(b\"substituted successor execution policy\")",
             "successor.execution_policy_hash",
             "successor authentication must reject execution-policy substitution "
             "against the durable parent context",
         ),
         (
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"
+            ),
             "proposal_subject.payload_hash = Hash::new(&proposal_body);",
             "proposal_subject.payload_hash = Hash::new(b\"unbound parent body\");",
             "successor parent-certificate authentication must use a canonical "
             "payload-bound proposal fixture",
         ),
         (
-            "&locally_validated_payload,\n        )\n"
-            "        .expect(\"encode locally validated payload\")",
-            "&[0x88, 2],\n        )\n"
-            "        .expect(\"encode locally validated payload\")",
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_ingress_authentication_tests.rs"
+            ),
+            "&locally_validated_payload,",
+            "&[0x88, 2],",
             "execution-commitment conflict authentication must bind the locally "
             "validated canonical payload fixture",
         ),
         (
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "v2_adapter_inline_ingress_authentication_tests.rs"
+            ),
             "encode_payload(&context, proposal_round, proposal_subject, &proposal_body)\n"
-            "                .expect(\"encode later-view proposal payload\")",
+            "            .expect(\"encode later-view proposal payload\")",
             "encode_payload(&context, proposal_round, proposal_subject, &[0x83, 3])\n"
-            "                .expect(\"encode later-view proposal payload\")",
+            "            .expect(\"encode later-view proposal payload\")",
             "embedded-certificate conflict authentication must bind the "
             "later-view canonical payload fixture",
         ),
     )
-    for old, new, expected_error in semantic_mutations:
+    for relative, old, new, expected_error in semantic_mutations:
+        source_path = tmp_path / relative
+        canonical_source = source_path.read_text(encoding="utf-8")
         assert canonical_source.count(old) == 1, old
-        adapter_path.write_text(
+        source_path.write_text(
             canonical_source.replace(old, new, 1),
             encoding="utf-8",
         )
         errors = module._production_liveness_release_inventory_errors(tmp_path)
         assert any(expected_error in error for error in errors), errors
-        adapter_path.write_text(canonical_source, encoding="utf-8")
+        source_path.write_text(canonical_source, encoding="utf-8")
 
 
 def test_production_release_inventory_seals_closed_prefix_suffix_retry(

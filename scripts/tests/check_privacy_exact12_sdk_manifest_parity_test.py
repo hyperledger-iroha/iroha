@@ -28,10 +28,20 @@ def _minimal_safe_tree(tmp_path: Path) -> Path:
     )
     _write(
         tmp_path / MODULE.RUST_BRIDGE,
+        "mod platform_jni;\n"
         "compiled_privacy_profile_catalog_v1\n"
         "The catalog contains no committed height.\n"
         + exports,
     )
+    _write(
+        tmp_path / MODULE._RUST_BRIDGE_PLATFORM_JNI,
+        "".join(
+            f'include!("{path}");\n'
+            for path in MODULE._RUST_BRIDGE_PLATFORM_JNI_INCLUDES
+        ),
+    )
+    for path in MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS:
+        _write(tmp_path / path, "// authenticated test bridge part\n")
     declarations = "\n".join(
         f"void {name}(void);" for name in sorted(MODULE.APPROVED_PRIVACY_EXPORTS)
     )
@@ -84,6 +94,17 @@ def test_sixth_privacy_export_is_rejected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(MODULE.AuditError, match="exact approved five"):
+        MODULE.audit(root)
+
+
+def test_incomplete_rust_bridge_platform_closure_is_rejected(tmp_path: Path) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    platform_jni = root / MODULE._RUST_BRIDGE_PLATFORM_JNI
+    platform_jni.write_text(
+        'include!("platform_jni/part_1.rs");\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(MODULE.AuditError, match="exact three-part inventory"):
         MODULE.audit(root)
 
 
@@ -352,13 +373,13 @@ def test_swift_cutover_hostile_source_regressions_fail_closed(
     ("relative", "needle", "replacement", "failed_gate"),
     (
         (
-            MODULE.RUST_BRIDGE,
+            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
             "committed.compiled_profile == local.compiled_profile",
             "committed.compiled_profile != local.compiled_profile",
             "exact_native_local_tuple_match",
         ),
         (
-            MODULE.RUST_BRIDGE,
+            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
             "validate_privacy_capability_archive_v1(archive)",
             "accept_unchecked_privacy_capability_archive_v1(archive)",
             "native_canonical_manifest_validation",
@@ -408,7 +429,7 @@ def test_jvm_cutover_hostile_source_regressions_fail_closed(
             MODULE._JVM_KOTLIN_TRANSACTION_ADAPTER,
             MODULE._JVM_JAVA_INSTRUCTION,
             MODULE._JVM_JAVA_TRANSACTION_ADAPTER,
-            MODULE.RUST_BRIDGE,
+            *MODULE._RUST_BRIDGE_SOURCE_FILES,
         )
     }
     assert needle in sources[relative]

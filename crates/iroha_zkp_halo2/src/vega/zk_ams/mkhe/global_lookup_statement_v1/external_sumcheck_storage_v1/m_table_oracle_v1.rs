@@ -754,7 +754,7 @@ impl GlobalCubicOracleV1 {
             && self.axes.mu == *mu
             && prefix.len() == round
             && &self.point[..round] == prefix
-            && self.point[round..].iter().all(Scalar::is_zero)
+            && self.point[round..].iter().all(|scalar| scalar.is_zero())
     }
     pub(in super::super) fn evaluate_next_v1(
         mut self,
@@ -795,9 +795,10 @@ impl GlobalCubicOracleV1 {
             mask[1],
             mask[0],
         ]);
-        let masked = ZeroizingScalarArrayV1(core::array::from_fn(|index| {
-            base_coefficients.0[index] + mask_coefficients.0[index]
-        }));
+        let masked: ZeroizingScalarArrayV1<4> =
+            ZeroizingScalarArrayV1(core::array::from_fn(|index| {
+                base_coefficients.0[index] + mask_coefficients.0[index]
+            }));
         if Scalar::from_u64(2) * masked.0[0] + masked.0[1] + masked.0[2] + masked.0[3]
             != self.base_claim + self.mask_carry
         {

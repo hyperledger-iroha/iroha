@@ -42512,7 +42512,13 @@ mod query_endpoint_tests {
         .build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
-        let world = World::with_assets([domain], [account], [asset_def], [asset], []);
+        let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
+        world.account_permissions_mut_for_testing().insert(
+            alice_id.clone(),
+            BTreeSet::from([
+                iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+            ]),
+        );
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

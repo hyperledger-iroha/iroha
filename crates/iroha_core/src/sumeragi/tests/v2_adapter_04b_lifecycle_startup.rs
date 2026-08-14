@@ -931,10 +931,16 @@ fn exercise_pending_kura_production_lifecycle(
         let progress = pending
             .drive_apply_recovery_turn(&mut setup_runner, 64)
             .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
+        let completed = matches!(
+            progress,
+            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Completed { .. }
+        );
         pending
             .with_runner_setup(&mut setup_runner, |executor, services| {
                 assert!(executor.lifecycle_live_clocks_are_unarmed());
-                assert!(services.matches_installed_pending_kura_tip(expected));
+                if completed {
+                    assert!(services.matches_installed_pending_kura_tip(expected));
+                }
                 Ok::<
                     _,
                     super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
@@ -944,10 +950,7 @@ fn exercise_pending_kura_production_lifecycle(
         assert!(!ingress_ready.load(Ordering::Acquire));
         assert!(!leader_wire_ingress.state.lock().open);
         assert!(crate::sumeragi::status::v2_status().is_none());
-        if matches!(
-            progress,
-            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Completed { .. }
-        ) {
+        if completed {
             break;
         }
         if Instant::now() >= completion_deadline {

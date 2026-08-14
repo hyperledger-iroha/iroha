@@ -2259,7 +2259,7 @@
             "fn begin_fetch<S: V2EffectServices>(",
             "        if round.context_id != self.context.id()\n",
             "        self.finality_completion = None;\n        if round.context_id != self.context.id()\n",
-            "executor must have exactly the reviewed runtime and recovered finality constructors",
+            "the durable Apply completion tombstone must have exactly the runtime and recovered authenticated installation paths",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2477,15 +2477,16 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "struct FinalityCompletion {",
             "ownership: FinalityCompletionOwner,",
-            "ownership: RuntimeEffectOwnership,",
-            "durable finality must distinguish runtime and recovered Decision Apply ownership",
+            "ownership: Option<FinalityCompletionOwner>,",
+            "durable Apply tombstone must retain the exact reducer incarnation tag",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(crate) fn complete_application<S: V2EffectServices>(",
             "            ownership: FinalityCompletionOwner::Runtime(ownership),\n        });",
-            "            ownership: FinalityCompletionOwner::Runtime(ownership.clone()),\n        });",
-            "runtime Apply completion must retain its exact typed owner",
+            "            ownership: FinalityCompletionOwner::RecoveredDecisionApply(\n"
+            "                RecoveredDecisionApplyDispatchKeyV1::new_for_test(),\n            ),\n        });",
+            "durable Apply completion must retain the exact tag",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2702,7 +2703,7 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "fn matches_apply(",
             "matches!(&self.ownership, FinalityCompletionOwner::Runtime(retained) if retained == ownership)",
             "true",
-            "durable Apply tombstone equality must bind typed runtime ownership, finality decision, and Kura receipt",
+            "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",

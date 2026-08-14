@@ -174,12 +174,15 @@ fn prover_secret_edwards_scalar_sum_v1(
     ProverSecretCopyValueV1::take(&mut sum)
 }
 struct ProverSecretPointV1<P: ProofPoint>(P);
+#[cfg(test)]
 struct BorrowedProverPointSlotV1<'a, P: ProofPoint>(&'a mut P);
+#[cfg(test)]
 impl<P: ProofPoint> BorrowedProverPointSlotV1<'_, P> {
     fn expose_copy(&self) -> P {
         *self.0
     }
 }
+#[cfg(test)]
 impl<P: ProofPoint> Drop for BorrowedProverPointSlotV1<'_, P> {
     fn drop(&mut self) {
         self.0.clear_secret();
@@ -191,6 +194,7 @@ impl<P: ProofPoint> ProverSecretPointV1<P> {
         point.move_into(&mut owned.0);
         owned
     }
+    #[cfg(test)]
     fn take(value: &mut P) -> Self {
         let incoming = BorrowedProverPointSlotV1(value);
         let owned = Self(incoming.expose_copy());

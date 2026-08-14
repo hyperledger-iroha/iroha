@@ -1282,6 +1282,31 @@ def _corridor_artifacts(
                     f"corridor grouped Native AMX V2 {surface} leg is not "
                     "bound to the exact fixture and suite sources"
                 )
+            replay_marker_prefix = "openapi-two-mirror-replay "
+            replay_markers = [
+                line for line in lines if line.startswith(replay_marker_prefix)
+            ]
+            if surface == "openapi":
+                expected_replay_marker = (
+                    "openapi-two-mirror-replay status=success "
+                    f"candidate_oid={sealed['head_commit']} "
+                    f"candidate_tree={sealed['head_tree']} "
+                    "mirrors=2 artifacts=5 require_signed=1"
+                )
+                if (
+                    replay_markers != [expected_replay_marker]
+                    or lines.index(expected_replay_marker)
+                    >= lines.index(expected_marker)
+                ):
+                    raise ReceiptError(
+                        "corridor grouped Native AMX V2 openapi leg lacks the "
+                        "exact path-free two-mirror replay binding"
+                    )
+            elif replay_markers:
+                raise ReceiptError(
+                    f"corridor grouped Native AMX V2 {surface} leg contains "
+                    "an unexpected OpenAPI replay binding"
+                )
         if kind == "sdk-diagnostics":
             surface = leg_id.removeprefix("sumeragi-diagnostics-")
             expected_marker = (
@@ -2003,13 +2028,16 @@ def _sdk_validate_private_source_manifest(
         raise ReceiptError("SDK private source manifest digest changed")
     document = _require_exact_json_fields(
         _decode_canonical_json(snapshot.data, "SDK private source manifest"),
-        {"format", "schema_version", "git", "node", "swiftpm", "gradle"},
+        {
+            "format", "schema_version", "git", "node", "openapi_node",
+            "swiftpm", "gradle",
+        },
         "SDK private source manifest",
     )
     if (
         document["format"] != _SDK_SOURCE_MANIFEST_FORMAT
         or type(document["schema_version"]) is not int
-        or document["schema_version"] != 2
+        or document["schema_version"] != 3
     ):
         raise ReceiptError("SDK private source manifest identity is not exact")
     git = _require_exact_json_fields(
@@ -2019,6 +2047,11 @@ def _sdk_validate_private_source_manifest(
         document["node"],
         {"node_modules_root", "package_lock_sha256", "node_modules_inventory"},
         "SDK private Node source",
+    )
+    openapi_node = _require_exact_json_fields(
+        document["openapi_node"],
+        {"node_modules_root", "package_lock_sha256", "node_modules_inventory"},
+        "SDK private OpenAPI Node source",
     )
     swift = _require_exact_json_fields(
         document["swiftpm"],
@@ -2041,17 +2074,31 @@ def _sdk_validate_private_source_manifest(
     for value, name in (
         (git["executable"], "SDK private protected Git"),
         (node["node_modules_root"], "SDK private node_modules root"),
+        (
+            openapi_node["node_modules_root"],
+            "SDK private OpenAPI node_modules root",
+        ),
         (swift["cache_root"], "SDK private SwiftPM cache root"),
         (gradle["distribution_archive"], "SDK private Gradle distribution"),
         (gradle["gradle_user_home"], "SDK private Gradle user home"),
     ):
         _sdk_source_path(value, name)
+    if Path(openapi_node["node_modules_root"]).parts[-3:] != (
+        "tools", "openapi", "node_modules",
+    ):
+        raise ReceiptError(
+            "SDK private OpenAPI node_modules root is not the exact tools/openapi root"
+        )
     expected_bindings = bindings
     if (
         _require_digest(git["sha256"], "SDK private protected Git")
         != expected_git_sha256
         or _require_digest(node["package_lock_sha256"], "SDK private package lock")
         != expected_bindings["node"]["package_lock_sha256"]
+        or _require_digest(
+            openapi_node["package_lock_sha256"],
+            "SDK private OpenAPI package lock",
+        ) != expected_bindings["openapi_node"]["package_lock_sha256"]
         or _require_digest(
             swift["package_resolved_sha256"], "SDK private Package.resolved"
         ) != expected_bindings["swiftpm"]["package_resolved_sha256"]
@@ -2078,6 +2125,10 @@ def _sdk_validate_private_source_manifest(
         (
             "node/node_modules", node["node_modules_inventory"],
             "SDK private Node member inventory",
+        ),
+        (
+            "openapi/node_modules", openapi_node["node_modules_inventory"],
+            "SDK private OpenAPI Node member inventory",
         ),
         (
             "swiftpm/cache", swift["cache_inventory"],
@@ -2168,7 +2219,8 @@ def _sdk_binding_contract(
     """Validate the path-free Node, SwiftPM, and Gradle lock bindings."""
 
     bindings = _require_exact_json_fields(
-        value, {"node", "swiftpm", "gradle"}, "SDK dependency bindings"
+        value, {"node", "openapi_node", "swiftpm", "gradle"},
+        "SDK dependency bindings"
     )
     node = _require_exact_json_fields(
         bindings["node"],
@@ -2187,6 +2239,26 @@ def _sdk_binding_contract(
         raise ReceiptError("SDK Node archive names are not exact")
     for field in ("package_lock_sha256", "installed_lock_sha256"):
         _require_digest(node[field], f"SDK Node {field}")
+    openapi_node = _require_exact_json_fields(
+        bindings["openapi_node"],
+        {
+            "node_modules_archive_name",
+            "package_lock_archive_name",
+            "package_lock_sha256",
+            "installed_lock_sha256",
+        },
+        "SDK OpenAPI Node binding",
+    )
+    if (
+        openapi_node["node_modules_archive_name"] != "openapi/node_modules"
+        or openapi_node["package_lock_archive_name"]
+        != "openapi/package-lock.json"
+    ):
+        raise ReceiptError("SDK OpenAPI Node archive names are not exact")
+    for field in ("package_lock_sha256", "installed_lock_sha256"):
+        _require_digest(
+            openapi_node[field], f"SDK OpenAPI Node {field}"
+        )
     swift = _require_exact_json_fields(
         bindings["swiftpm"],
         {
@@ -2264,6 +2336,10 @@ def _sdk_binding_contract(
     expected_files = {
         "node/package-lock.json": node["package_lock_sha256"],
         "node/node_modules/.package-lock.json": node["installed_lock_sha256"],
+        "openapi/package-lock.json": openapi_node["package_lock_sha256"],
+        "openapi/node_modules/.package-lock.json": openapi_node[
+            "installed_lock_sha256"
+        ],
         "swiftpm/Package.resolved": swift["package_resolved_sha256"],
         "gradle/gradle-9.3.0-bin.zip": gradle["distribution_sha256"],
         "gradle/java-gradle-wrapper.properties": wrappers["java"],
@@ -2274,7 +2350,8 @@ def _sdk_binding_contract(
         if not isinstance(record, dict) or record.get("kind") != "file" or record.get("sha256") != digest:
             raise ReceiptError(f"SDK binding does not match archived {relative}")
     for relative in (
-        "node/node_modules", "swiftpm/cache", "swiftpm/cache/checkouts",
+        "node/node_modules", "openapi/node_modules", "swiftpm/cache",
+        "swiftpm/cache/checkouts",
         "swiftpm/cache/repositories", "gradle/gradle-user-home",
     ):
         record = records.get(relative)
@@ -2320,6 +2397,27 @@ def _sdk_validate_control_files(
         or any(package["packages"].get(key) != value for key, value in installed["packages"].items())
     ):
         raise ReceiptError("SDK archived Node closure disagrees with package-lock.json")
+    openapi_package = decoded("openapi/package-lock.json")
+    openapi_installed = decoded("openapi/node_modules/.package-lock.json")
+    openapi_packages = openapi_package.get("packages")
+    openapi_installed_packages = openapi_installed.get("packages")
+    if (
+        openapi_package.get("lockfileVersion") != 3
+        or openapi_installed.get("lockfileVersion") != 3
+        or (openapi_package.get("name"), openapi_package.get("version"))
+        != (openapi_installed.get("name"), openapi_installed.get("version"))
+        or not isinstance(openapi_packages, dict)
+        or not isinstance(openapi_installed_packages, dict)
+        or not openapi_installed_packages
+        or "" not in openapi_packages
+        or openapi_installed_packages
+        != {
+            key: value for key, value in openapi_packages.items() if key
+        }
+    ):
+        raise ReceiptError(
+            "SDK archived OpenAPI Node closure disagrees exactly with package-lock.json"
+        )
     resolved = decoded("swiftpm/Package.resolved")
     resolved_pairs = sorted(
         (
@@ -2380,6 +2478,8 @@ def _sdk_validate_tar(
     control_names = {
         "node/package-lock.json",
         "node/node_modules/.package-lock.json",
+        "openapi/package-lock.json",
+        "openapi/node_modules/.package-lock.json",
         "swiftpm/Package.resolved",
         "gradle/java-gradle-wrapper.properties",
         "gradle/kotlin-gradle-wrapper.properties",

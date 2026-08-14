@@ -1234,7 +1234,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     else {
         unreachable!("cold fixture Broadcast is a signed Proposal")
     };
-    substituted_proposal.subject.payload_hash = Hash::new(b"substituted cold Broadcast");
+    substituted_proposal.subject.payload_hash = Hash::new(b"substituted cold Proposal payload");
     assert!(
         RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
             super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),

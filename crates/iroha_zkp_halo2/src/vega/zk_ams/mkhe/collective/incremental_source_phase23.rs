@@ -694,10 +694,6 @@ const _: () = {
 };
 #[path = "incremental_source_phase23_source_algebra.rs"]
 mod source_algebra;
-pub(super) use source_algebra::{
-    GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
-    Phase23GlobalLookupSourceReplayV1,
-};
 impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
     /// Sole private consuming seam into the still-uninhabited source-algebra
     /// prerequisite. No tuple split or borrowed callback exposes the owner.

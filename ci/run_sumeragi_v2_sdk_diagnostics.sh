@@ -445,13 +445,13 @@ case "$surface" in
     done
     ;;
   swift)
-    observed_test_count=17
+    observed_test_count=33
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for Sumeragi v2 Swift diagnostics" >&2
       exit 1
     fi
     readonly swift_transcript="${temporary_root}/swift.log"
-    readonly swift_filter='ToriiClientTests/testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync|ToriiClientTests/testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest|ToriiClientTests/testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection|ToriiClientTests/testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts|ToriiClientTests/testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict|ToriiClientTests/testSumeragiDiagnosticsReservationsDurableIdentityAndGeometryAreExact|ToriiClientTests/testSumeragiDiagnosticsRejectsUnknownAutonomousLaneExecutionField|ToriiClientTests/testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows|ToriiClientTests/testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync|ToriiClientTests/testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence|ToriiClientTests/testSumeragiDiagnosticsRejectsWrongNativeAmxPhaseAndDuplicateLegs|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxSignatureAndPopLengthDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsLowercaseSourceAndLegacyReceipt|ToriiClientTests/testSumeragiDiagnosticsRejectsNoncanonicalNexusFeeQuantities|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxContextAndEpochDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsFlattenedNativeAmxPhaseAndSessionTampering|ToriiClientTests/testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes'
+    readonly swift_filter='ToriiClientTests/testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync|ToriiClientTests/testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest|ToriiClientTests/testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection|ToriiClientTests/testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts|ToriiClientTests/testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict|ToriiClientTests/testSumeragiDiagnosticsReservationsDurableIdentityAndGeometryAreExact|ToriiClientTests/testSumeragiDiagnosticsRejectsUnknownAutonomousLaneExecutionField|ToriiClientTests/testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows|ToriiClientTests/testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync|ToriiClientTests/testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence|ToriiClientTests/testSumeragiDiagnosticsRejectsWrongNativeAmxPhaseAndDuplicateLegs|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxSignatureAndPopLengthDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsLowercaseSourceAndLegacyReceipt|ToriiClientTests/testSumeragiDiagnosticsRejectsNoncanonicalNexusFeeQuantities|ToriiClientTests/testSumeragiDiagnosticsRejectsNativeAmxContextAndEpochDrift|ToriiClientTests/testSumeragiDiagnosticsRejectsFlattenedNativeAmxPhaseAndSessionTampering|ToriiClientTests/testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes|SumeragiV2WireFixtureTests'
     run_and_capture "$swift_transcript" \
       env GIT_ALLOW_PROTOCOL= GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       GIT_TERMINAL_PROMPT=0 HTTP_PROXY=http://127.0.0.1:9 \
@@ -484,7 +484,7 @@ if len(passed_cases) != expected or any("skipped" in line.lower() for line in li
 PY
     ;;
   kotlin)
-    observed_test_count=26
+    observed_test_count=42
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -504,17 +504,19 @@ PY
       --project-cache-dir "${temporary_root}/kotlin-project-cache" \
       --init-script "$gradle_init_path" \
       :core-jvm:test \
+      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTest \
       --tests org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTest \
       --tests org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
+      org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest \
       org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsModelsTest \
       org.hyperledger.iroha.sdk.consensus.SumeragiStatusModelsTest \
       org.hyperledger.iroha.sdk.client.SumeragiHttpTransportContractTest
     ;;
   java)
-    observed_test_count=24
+    observed_test_count=41
     java_home="$(resolve_java_home)"
     readonly java_home
     readonly gradle_build_root="${temporary_root}/gradle-build"
@@ -535,12 +537,14 @@ PY
       --init-script "$gradle_init_path" \
       :core:test \
       --tests org.hyperledger.iroha.android.client.SumeragiHttpTransportTests \
+      --tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests \
       --tests org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests \
       --tests org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsParsingTests \
       --tests org.hyperledger.iroha.android.consensus.SumeragiStatusModelsTests
     assert_gradle_reports \
       "$gradle_build_root" "$observed_test_count" \
       org.hyperledger.iroha.android.client.SumeragiHttpTransportTests \
+      org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests \
       org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModelsTests \
       org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsParsingTests \
       org.hyperledger.iroha.android.consensus.SumeragiStatusModelsTests

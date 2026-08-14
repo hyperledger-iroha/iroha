@@ -85,6 +85,7 @@
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModelsTests.java",
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsParsingTests.java",
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiStatusModelsTests.java",
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
       "javascript/iroha_js/test/sumeragiBrowserFixtures.js",
       "javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js",
       "javascript/iroha_js/test/toriiClient.test.js",
@@ -92,6 +93,7 @@
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/SumeragiHttpTransportContractTest.kt",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModelsTest.kt",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModelsTest.kt",
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
       "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
       "python/iroha_torii_client/tests/sumeragi_exact_json_test_support.py",
       "python/iroha_torii_client/tests/test_client.py"
@@ -1235,6 +1237,8 @@
       "kotlin/core-jvm/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro"
     ],
     "native-amx-v2-grouped-suite": [
+      "artifacts/openapi/allowed_signers.json",
+      "ci/check_openapi_spec.sh",
       "ci/run_native_amx_v2_grouped_sdk_parity.sh",
       "crates/connect_norito_bridge/include/connect_norito_bridge.h",
       "crates/connect_norito_bridge/src/lib.rs",
@@ -1341,6 +1345,7 @@
       "python/iroha_python/src/iroha_python/tx.py",
       "python/iroha_torii_client/__init__.py",
       "python/iroha_torii_client/attachment_client.py",
+      "python/iroha_torii_client/canonical_request_v1.py",
       "python/iroha_torii_client/client.py",
       "python/iroha_torii_client/client_status_models.py",
       "python/iroha_torii_client/connect_session.py",

@@ -137,6 +137,13 @@ def _timeout_vote_episode_source_fidelity_errors(
         (),
         "queue-local fair-ingress barrier verdict",
     )
+    shared_selector = bind_item(
+        "ingress::select_fair_v2_ingress_candidate",
+        "ingress",
+        "select_fair_v2_ingress_candidate",
+        (),
+        "shared ordinary-before-dependency fair-ingress selector",
+    )
     for name, description in (
         (
             "try_recv_if_checked",
@@ -297,6 +304,7 @@ def _timeout_vote_episode_source_fidelity_errors(
     expected_item_keys = {
         "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner",
         "ingress::fair_v2_ingress_queue_gate_verdict",
+        "ingress::select_fair_v2_ingress_candidate",
         "ingress::try_recv_if_checked",
         "ingress::try_recv_if_checked_retiring_obsolete",
         "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass",

@@ -365,6 +365,8 @@ def _sdk_dependency_fixture_material() -> tuple[
         "gradle/kotlin-gradle-wrapper.properties": wrapper,
         "node/node_modules/.package-lock.json": installed_lock,
         "node/package-lock.json": package_lock,
+        "openapi/node_modules/.package-lock.json": installed_lock,
+        "openapi/package-lock.json": package_lock,
         "swiftpm/cache/checkouts/fixture/.git/HEAD": (revision + "\n").encode(),
         "swiftpm/Package.resolved": package_resolved,
     }
@@ -378,7 +380,8 @@ def _sdk_dependency_fixture_material() -> tuple[
         f"gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/{gradle_key}",
         f"gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/{gradle_key}/gradle-9.3.0",
         f"gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/{gradle_key}/gradle-9.3.0/bin",
-        "node", "node/node_modules", "swiftpm", "swiftpm/cache",
+        "node", "node/node_modules", "openapi", "openapi/node_modules",
+        "swiftpm", "swiftpm/cache",
         "swiftpm/cache/checkouts", "swiftpm/cache/checkouts/fixture",
         "swiftpm/cache/checkouts/fixture/.git", "swiftpm/cache/repositories",
     )
@@ -404,6 +407,12 @@ def _sdk_dependency_fixture_material() -> tuple[
         "node": {
             "node_modules_archive_name": "node/node_modules",
             "package_lock_archive_name": "node/package-lock.json",
+            "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
+            "installed_lock_sha256": hashlib.sha256(installed_lock).hexdigest(),
+        },
+        "openapi_node": {
+            "node_modules_archive_name": "openapi/node_modules",
+            "package_lock_archive_name": "openapi/package-lock.json",
             "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
             "installed_lock_sha256": hashlib.sha256(installed_lock).hexdigest(),
         },
@@ -470,12 +479,19 @@ def _sdk_source_manifest_fixture(git: Path) -> bytes:
 
     return _fixture_canonical({
         "format": "iroha-sumeragi-v2-sdk-dependency-sources",
-        "schema_version": 2,
+        "schema_version": 3,
         "git": {"executable": str(git), "sha256": _sha256(git)},
         "node": {
             "node_modules_root": "/operator/node_modules",
             "node_modules_inventory": inventory("node/node_modules"),
             "package_lock_sha256": bindings["node"]["package_lock_sha256"],
+        },
+        "openapi_node": {
+            "node_modules_root": "/operator/tools/openapi/node_modules",
+            "node_modules_inventory": inventory("openapi/node_modules"),
+            "package_lock_sha256": bindings["openapi_node"][
+                "package_lock_sha256"
+            ],
         },
         "swiftpm": {
             "cache_root": "/operator/swiftpm-cache",

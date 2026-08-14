@@ -61,6 +61,18 @@ class SumeragiHttpTransportContractTest {
     @Test
     fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`() {
         val payload = statusJson().toByteArray(StandardCharsets.UTF_8)
+        assertFails("status endpoint must reject a diagnostics-shaped payload") {
+            transport(
+                FixedResponseExecutor(
+                    jsonResponse(diagnosticsJson().toByteArray(StandardCharsets.UTF_8)),
+                ),
+            ).getSumeragiStatus().join()
+        }
+        assertFails("diagnostics endpoint must reject a status-shaped payload") {
+            transport(FixedResponseExecutor(jsonResponse(payload)))
+                .getSumeragiDiagnostics()
+                .join()
+        }
         val invalidHeaders = listOf(
             emptyMap(),
             mapOf("Content-Type" to listOf("application/json; charset=utf-8")),

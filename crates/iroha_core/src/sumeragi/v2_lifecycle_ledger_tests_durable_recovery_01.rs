@@ -11,6 +11,7 @@ use super::*;
 use crate::{
     kura::Kura,
     sumeragi::{
+        v2::RecoveredLifecycleOwnerKuraBindingV1,
         v2_body_store::ValidatedBodyReceipt,
         v2_core::{EventTag, Generation},
         v2_transport::{AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request},

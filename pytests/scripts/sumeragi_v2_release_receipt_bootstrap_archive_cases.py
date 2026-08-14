@@ -19,6 +19,9 @@ import pytest
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
     run_fixture_cargo_cache_copy,
 )
+from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import (
+    REQUIRED_RUNNER_TOOL_NAMES,
+)
 from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
     canonical_json,
     sha256,
@@ -874,6 +877,77 @@ def exercise_private_pr_outer_lifecycle(runner: Path, tmp_path: Path) -> None:
     assert stage_failure.returncode == 89 and not Path(stage_failure_log.read_text(encoding="utf-8").strip()).exists()
 
 
+def test_release_runner_recovers_authenticated_tool_sources(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    source_root = root / "sources"
+    archive_root = root / "evidence" / "runner-tools"
+    runner_bin = root / "evidence" / "runner-bin"
+    source_root.mkdir(parents=True, mode=0o700)
+    archive_root.mkdir(parents=True, mode=0o700)
+    runner_bin.mkdir(mode=0o700)
+    sources: dict[str, Path] = {}
+    archived_tools: dict[str, dict[str, object]] = {}
+    source_tools: dict[str, dict[str, str]] = {}
+    for name in REQUIRED_RUNNER_TOOL_NAMES:
+        payload = f"#!/bin/sh\n# authenticated {name}\n".encode()
+        source = source_root / name
+        source.write_bytes(payload)
+        source.chmod(0o500)
+        archive = archive_root / name
+        archive.write_bytes(payload)
+        archive.chmod(0o500)
+        (runner_bin / name).symlink_to(f"../runner-tools/{name}")
+        digest = hashlib.sha256(payload).hexdigest()
+        sources[name] = source
+        source_tools[name] = {"path": str(source), "sha256": digest}
+        archived_tools[name] = {
+            "archive_id": f"release-runner-tool.{name}.v1",
+            "alias_name": name,
+            "archive_name": f"runner-tools/{name}",
+            "mode": "0500",
+            "sha256": digest,
+            "size_bytes": len(payload),
+        }
+    manifest = root / "evidence" / "runner-tool-manifest.json"
+    manifest.write_bytes(canonical_json({"schema_version": 1, "tools": source_tools}))
+    manifest.chmod(0o400)
+    marker = root / "evidence" / "BOOTSTRAP_COMPLETED.json"
+    marker.write_bytes(canonical_json({
+        "runner": {"tools": archived_tools},
+        "trusted_inputs": {"runner_tool_manifest": {
+            "archive_name": manifest.name,
+            "mode": "0400",
+            "sha256": sha256(manifest),
+            "size_bytes": manifest.stat().st_size,
+        }},
+    }))
+    invocation = [
+        "/bin/bash", "-c",
+        'source "$1"; authenticated_runner_tool_sources "$2" "$3" "$4" "$5" "$6"',
+        "runner-support-fixture",
+        str(ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates_support.sh"),
+        sys.executable, str(marker), sha256(marker), str(runner_bin), str(manifest),
+    ]
+    recovered = subprocess.run(
+        invocation, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, check=False,
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    assert dict(line.split("\t", 1) for line in recovered.stdout.splitlines()) == {
+        name: str(source) for name, source in sources.items()
+    }
+    changed = sources["cargo"]
+    changed.chmod(0o700)
+    changed.write_bytes(b"#!/bin/sh\n# changed cargo\n")
+    changed.chmod(0o500)
+    rejected = subprocess.run(
+        invocation, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, check=False,
+    )
+    assert rejected.returncode != 0
+    assert "authenticated runner tool source cargo changed" in rejected.stderr
+
+
 def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     runner = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
@@ -900,6 +974,12 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         ('GIT_EXEC_PATH="$pr_bin"', 1),
         ('GIT_EXEC_PATH="$release_git_exec_path"', 1),
         ('IROHA_RELEASE_CHILD_RESULT_PATH="$release_child_result_path"', 1),
+        ('release_runner_tool_source_tsv="$(authenticated_runner_tool_sources \\', 1),
+        ('"$(release_runner_tool_source cargo)"', 1),
+        ('return (runtime / "swift-toolchain" / "bin" / name).resolve(strict=True)', 1),
+        ('IROHA_RELEASE_TLAPM_BIN="$release_child_runtime/tlapm-distribution/bin/tlapm"', 1),
+        ('IROHA_RELEASE_APALACHE_BIN="$release_child_runtime/apalache-distribution/bin/apalache-mc"', 1),
+        ('IROHA_RELEASE_APALACHE_BIN="$release_child_bin/apalache-mc"', 0),
         ('"$sealed_repo_root/scripts/write_sumeragi_v2_release_receipt.py"', 1),
         ("--profile --release --checkpoint sealed", 0),
     ):
@@ -959,7 +1039,10 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     rust_support = toolchain / "lib" / "support.bin"
     rust_support.write_bytes(b"rust support\n")
     rust_support.chmod(0o600)
-    swift = executable(runtime_sources / "swift-toolchain" / "bin" / "swift", "swift fixture 1")
+    swift_bin = runtime_sources / "swift-toolchain" / "bin"
+    swift = executable(swift_bin / "swift-frontend", "swift fixture 1")
+    (swift_bin / "swift").symlink_to(swift.name)
+    (swift_bin / "swiftc").symlink_to(swift.name)
     (swift.parent.parent / "lib").mkdir(mode=0o700)
     (swift.parent.parent / "lib" / "support.bin").write_bytes(b"swift support\n")
     java = executable(runtime_sources / "java-runtime" / "bin" / "java", "java fixture 1")
@@ -1038,6 +1121,11 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         == tlapm_backend.read_bytes()
     assert (runtime / "apalache-distribution/lib/apalache.jar").read_bytes() \
         == apalache_jar.read_bytes()
+    assert (runtime / "swift-toolchain/bin/swift").is_symlink()
+    assert (runtime / "swift-toolchain/bin/swift").resolve() \
+        == runtime / "swift-toolchain/bin/swift-frontend"
+    assert (runtime / "swift-toolchain/bin/swiftc").resolve() \
+        == runtime / "swift-toolchain/bin/swift-frontend"
     assert (runtime / "bin/tlapm").resolve() == runtime / "tlapm-distribution/bin/tlapm"
     assert (runtime / "bin/apalache-mc").resolve() \
         == runtime / "apalache-distribution/bin/apalache-mc"

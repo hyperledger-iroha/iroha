@@ -111,6 +111,9 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
+// TODO: Reconnect the private global-lookup prototype after its confidential
+// spool dependency can enter the authorized workspace lock graph.
+#[cfg(any())]
 #[path = "mkhe/global_lookup_statement_v1.rs"]
 mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]

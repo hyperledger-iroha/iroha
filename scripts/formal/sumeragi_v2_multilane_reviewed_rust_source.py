@@ -25,7 +25,181 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "eda431f5b3885532c34dccdaff41a392ddc73fdc868b56c12544a53e2814ed50"
+    "df2fe00c80e0b300bee7e044451f4d7a8f0f893cb4a130e582a19ba8547a6402"
+)
+API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
+    (
+        "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
+        ("test_sumeragi_status_and_diagnostics_openapi_surfaces_are_disjoint",),
+    ),
+    (
+        "crates/iroha/src/client.rs",
+        (
+            "pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status>",
+            "pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>",
+        ),
+    ),
+    (
+        "crates/iroha/src/client/sumeragi_api_separation_tests.rs",
+        (
+            "get_sumeragi_status_rejects_unknown_json_fields",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
+            "diagnostics endpoint must reject a status-shaped payload",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/tests/test_client.py",
+        ("test_sumeragi_endpoint_methods_reject_swapped_payload_contracts",),
+    ),
+    (
+        "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+        ("test_typed_endpoint_methods_reject_swapped_sumeragi_payloads",),
+    ),
+    (
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "typed Sumeragi endpoints reject swapped status and diagnostics payloads",
+            "sumeragi status payload contains unknown field pipeline_execution",
+            "sumeragi diagnostics contains unknown field protocol_version",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+        (
+            "func testRustOwnedGroupedNativeAmxV2EndpointSeparation()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
+        "SumeragiHttpTransportContractTest.kt",
+        (
+            "fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/"
+        "SumeragiHttpTransportTests.java",
+        (
+            "public void responsesRequireExactContentTypeCanonicalLengthAndBoundedBody()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload",
+        ),
+    ),
+)
+API_AUTHORITY_SEPARATION_SOURCE_PATHS = tuple(
+    path for path, _tokens in API_AUTHORITY_SEPARATION_SOURCE_CHECKS
+)
+FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
+    (
+        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+        (
+            "add `--check`",
+            '"--check" if !check_only',
+            "native_amx_grouped::write_fixture(",
+            "options.check_only",
+        ),
+    ),
+    (
+        "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
+        (
+            '"rust_owner": "iroha_data_model::block::consensus"',
+            "pub fn write_fixture(path: &Path, check_only: bool)",
+        ),
+    ),
+    (
+        "ci/run_native_amx_v2_grouped_sdk_parity.sh",
+        (
+            "openapi_require_signed=0",
+            'if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then',
+            "openapi_require_signed=1",
+            'expected_marker="openapi-two-mirror-replay status=success '
+            "candidate_oid=${candidate_oid} candidate_tree=${candidate_tree} "
+            'mirrors=2 artifacts=5 require_signed=${require_signed}"',
+            "grouped Native AMX V2 OpenAPI parity lacks one exact path-free "
+            "two-mirror replay marker",
+            "observed_test_count=7",
+            'OPENAPI_NODE_BIN="$sdk_openapi_node_bin"',
+            'OPENAPI_NODE_MODULES_ROOT="$sdk_openapi_node_modules_root"',
+            'OPENAPI_REQUIRE_SIGNED="$openapi_require_signed"',
+            'bash "${repo_root}/ci/check_openapi_spec.sh"',
+            "assert_openapi_replay_marker",
+        ),
+    ),
+    (
+        "ci/sumeragi_v2_sdk_source_closure.json",
+        (
+            '"native-amx-v2-grouped-suite": [',
+            '"artifacts/openapi/allowed_signers.json",',
+            '"ci/check_openapi_spec.sh",',
+        ),
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
+        (
+            'readonly native_amx_grouped_parity_harness="ci/'
+            'run_native_amx_v2_grouped_sdk_parity.sh"',
+            'bash "$native_amx_grouped_parity_harness" '
+            "--suite-source-manifest-sha256",
+            "grouped Native AMX V2 parity harness returned an invalid source digest",
+            '"native-amx-grouped-${native_amx_grouped_parity_surface}"',
+            "native_amx_grouped_suite_source_manifest_sha256 \\",
+        ),
+    ),
+    (
+        "scripts/write_sumeragi_v2_release_receipt.py",
+        (
+            '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
+            "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae",
+            '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
+            'resolve_sumeragi_v2_sdk_source_closure.py"',
+            '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'
+            'sumeragi_v2_sdk_source_closure.json"',
+            '_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = "native-amx-v2-grouped"',
+            "hashlib.sha256(payload).hexdigest()",
+            "!= _RELEASE_RECEIPT_COMPONENT_SHA256[filename]",
+            '"_sdk_suite_source_manifest",',
+        ),
+    ),
+    (
+        "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py",
+        (
+            "expected_suite_manifest = _sdk_suite_source_manifest(",
+            "repo_root, _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE",
+            'fields["native_amx_grouped_suite_source_manifest_sha256"]',
+            'replay_marker_prefix = "openapi-two-mirror-replay "',
+            'f"candidate_oid={sealed[\'head_commit\']} "',
+            'f"candidate_tree={sealed[\'head_tree\']} "',
+            '"mirrors=2 artifacts=5 require_signed=1"',
+            "replay_markers != [expected_replay_marker]",
+            "or lines.index(expected_replay_marker)",
+            ">= lines.index(expected_marker)",
+            "exact path-free two-mirror replay binding",
+        ),
+    ),
+    (
+        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+        (
+            "native-amx-rust-fixture-check command 0",
+            "regenerate Native AMX Rust fixture authority twice into disjoint "
+            "private roots and byte-authenticate both outputs",
+            'readonly grouped_parity_harness="ci/'
+            'run_native_amx_v2_grouped_sdk_parity.sh"',
+            'bash "$grouped_parity_harness" --suite-source-manifest-sha256',
+            'symbols["_sdk_suite_source_manifest"](',
+            'symbols["_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE"]',
+            '!= "$grouped_suite_source_manifest_sha256"',
+            "grouped Native AMX V2 fixture/suite source binding is invalid",
+            "grouped Native AMX V2 suite-source manifest SHA-256",
+        ),
+    ),
+)
+FIXTURE_CANONICAL_OWNER_SOURCE_PATHS = tuple(
+    path for path, _tokens in FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS
 )
 WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
     (
@@ -68,11 +242,79 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         ),
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        (
+            "fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version()",
+            "legacy.version = MERGE_COMMITTEE_SIGNATURE_VERSION_V2.saturating_sub(1);",
+            'expect("reject legacy merge-share version")',
+            'expect("read untouched signing guard")',
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
+        (
+            "final class SumeragiV2WireFixtureTests: XCTestCase",
+            'private let fixtureRelativePath = "fixtures/sumeragi_v2/wire_v2.tsv"',
+            "func testRustCanonicalMessageFixturesRoundtrip() throws",
+            "func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
+        "SumeragiV2WireFixtureTest.kt",
+        (
+            "class SumeragiV2WireFixtureTest",
+            'private const val FIXTURE_RELATIVE_PATH = "fixtures/sumeragi_v2/wire_v2.tsv"',
+            "fun `rust canonical message fixtures roundtrip`()",
+            "fun `malformed and semantically noncanonical fixtures fail closed`()",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+        "SumeragiV2WireFixtureTests.java",
+        (
+            "public final class SumeragiV2WireFixtureTests",
+            'private static final String FIXTURE_RELATIVE_PATH = "fixtures/sumeragi_v2/wire_v2.tsv";',
+            "public void rustCanonicalMessageFixturesRoundtrip() throws Exception",
+            "public void malformedAndSemanticallyNoncanonicalFixturesFailClosed() throws Exception",
+        ),
+    ),
+    (
+        "ci/run_sumeragi_v2_sdk_diagnostics.sh",
+        (
+            "observed_test_count=33",
+            "SumeragiV2WireFixtureTests'",
+            "observed_test_count=42",
+            "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
+            "observed_test_count=41",
+            "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests",
+        ),
+    ),
+    (
+        "ci/sumeragi_v2_sdk_source_closure.json",
+        (
+            '"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"',
+            '"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt"',
+            '"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java"',
+        ),
+    ),
+    (
         "scripts/run_sumeragi_v2_release_gates.sh",
         (
+            "sumeragi::v2_lane_work::tests::merge_share_transport_rejects_omission_nonleader_body_and_legacy_version",
             "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
             "sumeragi_v2_cross_sdk_fixtures::shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation",
             "cross-sdk-rust cargo-exact 2",
+            "sumeragi_v2_sdk_diagnostics_test_counts=(",
+            '"sumeragi-diagnostics-${sumeragi_v2_sdk_diagnostics_surface}"',
+        ),
+    ),
+    (
+        "scripts/write_sumeragi_v2_release_receipt.py",
+        (
+            '("swift", 33)',
+            '("kotlin", 42)',
+            '("java", 41)',
         ),
     ),
     (
@@ -81,7 +323,10 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "source-sealed-legacy-codec-guard command 0",
             "bash scripts/check_no_legacy_codec.sh",
             "native-amx-rust-fixture-check command 0",
-            "sumeragi_v2_wire_fixtures -- --check",
+            "regenerate Native AMX Rust fixture authority twice into disjoint "
+            "private roots and byte-authenticate both outputs",
+            "for sdk_diagnostics_test_count in 121 88 33 42 41; do",
+            "SumeragiV2WireFixtureTest",
         ),
     ),
 )
@@ -90,12 +335,17 @@ WIRE_RELEASE_INVARIANT_SOURCE_PATHS = tuple(
 )
 
 
-def _validate_wire_release_invariant_source_checks(
+def _validate_exact_release_invariant_source_checks(
     mutation_id: str, source_checks: object, errors: list[str]
 ) -> None:
-    """Require the exact reviewed wire-release source paths and tokens."""
+    """Require the exact reviewed API and wire release-source contracts."""
 
-    if mutation_id != "ML-MUT-WIRE-01":
+    expected = {
+        "ML-MUT-API-02": API_AUTHORITY_SEPARATION_SOURCE_CHECKS,
+        "ML-MUT-API-04": FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS,
+        "ML-MUT-WIRE-01": WIRE_RELEASE_INVARIANT_SOURCE_CHECKS,
+    }.get(mutation_id)
+    if expected is None:
         return
     actual = (
         tuple(
@@ -111,7 +361,7 @@ def _validate_wire_release_invariant_source_checks(
         if isinstance(source_checks, list)
         else ()
     )
-    if actual != WIRE_RELEASE_INVARIANT_SOURCE_CHECKS:
+    if actual != expected:
         errors.append(
             f"{mutation_id}: semantic source checks differ from the "
             "exact reviewed contract"

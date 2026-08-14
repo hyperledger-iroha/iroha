@@ -7428,7 +7428,9 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             core::slice::from_ref(&sign_core_effect),
         );
         self.armed = false;
-        super::status::set_v2_status(committed_status);
+        if self.adapter.status_publication_enabled {
+            super::status::set_v2_status(committed_status);
+        }
     }
 }
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
@@ -7842,6 +7844,7 @@ impl FinalizedV2Height {
     /// A retained WAL is safe and replayable; it must be retried or reported,
     /// but it cannot turn a durably finalized height back into an unfinalized
     /// one.
+    #[cfg(test)]
     pub(crate) fn wal_retirement_warning(&self) -> Option<&str> {
         self.wal_retirement_warning.as_deref()
     }
@@ -10958,6 +10961,13 @@ pub(crate) struct SumeragiV2Adapter {
     /// instead of re-entering an adapter-owned FIFO.
     reducer_fence_generation: u64,
     replay_complete: bool,
+    /// Whether reducer transitions may publish the current-height global status.
+    ///
+    /// Recovered startup keeps this closed until the lifecycle activation
+    /// authority snapshots the exact ordinary or PendingKura height. Reducer
+    /// recovery still computes and validates every status while publication is
+    /// deferred, so opening the live boundary cannot hide an invalid snapshot.
+    status_publication_enabled: bool,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -11027,6 +11037,7 @@ impl SumeragiV2Adapter {
     /// queue larger than the standalone fixture default cannot exhaust the
     /// serviced-identity table while its legitimate lifecycles remain active.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub(crate) fn open_with_capacity_geometry(
         kura: &Kura,
         wal_authority: KuraSafetyWalDirectoryAuthority,
@@ -11120,6 +11131,7 @@ impl SumeragiV2Adapter {
         )
     }
     /// Open with deferred status publication and the validated queue geometry.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
         kura: &Kura,
@@ -11382,6 +11394,7 @@ impl SumeragiV2Adapter {
             last_progress: None,
             reducer_fence_generation: 0,
             replay_complete: false,
+            status_publication_enabled: publish_initial_status,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -16308,7 +16321,20 @@ impl SumeragiV2Adapter {
             round,
             wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
         ));
-        self.status()
+        let status = self.status()?;
+        self.status_publication_enabled = true;
+        Ok(status)
+    }
+    /// Snapshot and open status publication for an already-applied PendingKura height.
+    ///
+    /// Unlike ordinary successor activation, this boundary deliberately does
+    /// not record a successor-height marker or arm the pacemaker.
+    pub(in crate::sumeragi) fn pending_kura_activation_status(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        let status = self.status()?;
+        self.status_publication_enabled = true;
+        Ok(status)
     }
     fn liveness_status(&mut self) -> Result<wire::SumeragiV2LivenessStatus, AdapterError> {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
@@ -19196,7 +19222,9 @@ impl SumeragiV2Adapter {
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
         let status = self.status()?;
-        super::status::set_v2_status(status);
+        if self.status_publication_enabled {
+            super::status::set_v2_status(status);
+        }
         Ok(())
     }
     /// Permanently close the adapter after an internal macro-step shape

@@ -1,11 +1,5 @@
 // Exact-network SoraFS HTTP authentication helpers and regression included by the parent tests.
-fn sorafs_api_test_network_id() -> NetworkId {
-    let mut bytes = [0_u8; Hash::LENGTH];
-    bytes[Hash::LENGTH - 1] = 1;
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed(bytes),
-    ))
-}
+
 fn signed_app_headers(
     account: &AccountId,
     key_pair: &KeyPair,
@@ -14,7 +8,7 @@ fn signed_app_headers(
     body: &[u8],
 ) -> HeaderMap {
     signed_network_app_headers(
-        &sorafs_api_test_network_id(),
+        &crate::signed_query_test_network_id(),
         account,
         key_pair,
         method,

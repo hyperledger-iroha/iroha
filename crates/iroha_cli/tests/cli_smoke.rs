@@ -4706,7 +4706,8 @@ fn address_audit_rejects_domain_suffix() {
         "unexpected stderr: {stderr}"
     );
 }
-include!("cli_smoke_address_audit_csv_test.rs");
+include!("cli_smoke/address_audit_csv_test.rs");
+
 fn assert_address_audit_stats(stats_value: &Value) {
     let stats = stats_value
         .as_object()

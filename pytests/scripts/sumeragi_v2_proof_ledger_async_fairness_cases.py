@@ -66,7 +66,7 @@
             "closed pending recovery must wait only for the lesser of its remaining deadline and the finite local wake bound",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
             "dropping a borrowed turn must advance exactly one finite Completion, Runtime, or Ingress target",

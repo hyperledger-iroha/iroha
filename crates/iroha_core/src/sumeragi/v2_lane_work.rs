@@ -51,7 +51,6 @@ use super::{
         check_production_in_flight_first_release_serve_late_body_transition,
         check_production_in_flight_first_release_transition,
     },
-    v2_effects::VerifiedPendingGenesisNexusAmxContext,
     v2_worker::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
@@ -490,14 +489,11 @@ fn merge_entry_carries_lane(
 pub(crate) enum AuthenticatedGenesisNexusAmxContext {
     /// Projection recomputed from the validated, uncommitted genesis overlay.
     Staged(StagedGenesisNexusAmxContext),
-    /// Projection bound by exact pending-Decision/body/validation replay.
-    ReplayedPending(VerifiedPendingGenesisNexusAmxContext),
 }
 impl AuthenticatedGenesisNexusAmxContext {
     const fn hash(self) -> Hash {
         match self {
             Self::Staged(staged) => staged.hash(),
-            Self::ReplayedPending(replayed) => replayed.hash(),
         }
     }
 }

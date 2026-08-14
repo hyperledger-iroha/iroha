@@ -266,13 +266,23 @@ fn reconcile_pending_lane_startup(
                     key_pair,
                 )
                 .map_err(V2RunnerError::Service)?;
-                plan_lane_reservation_ownership(
+                let completed_bootstraps = lifecycle.completed_bootstraps();
+                let recovered_attempts = lifecycle.recovered_attempts();
+                let replanned = plan_lane_reservation_ownership(
                     state.as_ref(),
                     queue.as_ref(),
                     kura.as_ref(),
                     verified_context,
                     Some(lifecycle),
-                )?
+                )?;
+                if completed_bootstraps != 0 || recovered_attempts != 0 {
+                    iroha_logger::info!(
+                        completed_bootstraps,
+                        recovered_attempts,
+                        "reconciled signed autonomous lifecycle custody before Queue publication"
+                    );
+                }
+                replanned
             }
             pending_plan => pending_plan,
         };

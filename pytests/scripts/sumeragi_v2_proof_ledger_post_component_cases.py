@@ -1,6 +1,64 @@
 """Late-bound proof-ledger cases executed in the canonical test namespace."""
 
 
+def wrap_tla_theorem_proof_step(
+    source: str,
+    symbol: str,
+    anchor: str,
+) -> str:
+    """Wrap one anchored structured proof step in an invalid temporal box."""
+
+    declaration = re.search(
+        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+        source,
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    theorem_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    theorem = source[declaration.end() : theorem_end]
+    assert theorem.count(anchor) == 1, (symbol, anchor)
+    anchor_offset = theorem.index(anchor)
+    labels = [
+        match
+        for match in re.finditer(r"(?m)^[ \t]*<\d+>\d+\.[ \t]*", theorem)
+        if match.end() <= anchor_offset
+    ]
+    assert labels, (symbol, anchor)
+    label = labels[-1]
+    proof_marker = re.search(
+        r"(?m)^[ \t]*BY\b",
+        theorem[label.end() :],
+    )
+    assert proof_marker is not None, (symbol, anchor)
+    step_end = label.end() + proof_marker.start()
+    assert anchor_offset < step_end, (symbol, anchor)
+    step = theorem[label.end() : step_end]
+    formula = step.rstrip()
+    trailing = step[len(formula) :]
+    mutated_theorem = (
+        theorem[: label.end()]
+        + "[]("
+        + formula
+        + ")"
+        + trailing
+        + theorem[step_end:]
+    )
+    return (
+        source[: declaration.end()]
+        + mutated_theorem
+        + source[theorem_end:]
+    )
+
+
 def test_rust_item_scanner_ignores_lint_only_inner_cfg_attr() -> None:
     """A conditional lint annotation must not masquerade as compile gating."""
 

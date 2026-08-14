@@ -3010,7 +3010,7 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
     let coordinates = between(
         field,
         "pub(super) fn secret_coordinates_v1(",
-        "pub(super) fn secret_coordinates_ref_v1(",
+        "/// Lend a borrowed Selene point's owner-confined canonical encoding",
     );
     let point_guard = coordinates
         .find("BorrowedZeroizingCopySlot(&mut self)")
@@ -3023,12 +3023,14 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
     assert!(point_guard < invert && invert < inverse_guard && inverse_guard < branch);
     assert!(coordinates.contains("point.as_ref().x.mul_ref(inverse.as_ref())"));
     assert!(coordinates.contains("point.as_ref().y.mul_ref(inverse.as_ref())"));
-    assert!(coordinates.contains("Option<SecretCycleCoordinatesV1<$field>>"));
+    assert!(coordinates.contains("Option<SecretCycleCoordinatesV1<HelioseleneField>>"));
     assert!(
         coordinates.contains("let coordinates = SecretCycleCoordinatesV1(SecretCopyValueV1::new((")
     );
     assert!(!coordinates.contains("Option<($field, $field)>"));
-    assert!(coordinates.contains("drop(inverse);\n                drop(point);"));
+    let drop_inverse = coordinates.find("drop(inverse);").unwrap();
+    let drop_point = coordinates.find("drop(point);").unwrap();
+    assert!(drop_inverse < drop_point);
     let borrowed_coordinates = between(
         field,
         "pub(super) fn secret_coordinates_ref_v1(",
