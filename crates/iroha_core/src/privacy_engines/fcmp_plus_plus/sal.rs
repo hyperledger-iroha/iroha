@@ -18,6 +18,7 @@ use curve25519_dalek::{
     scalar::Scalar,
     traits::{Identity as _, IsIdentity as _},
 };
+use p256::elliptic_curve::subtle::{Choice, ConstantTimeLess as _};
 use rand_core_06::{CryptoRng, RngCore};
 use std::sync::OnceLock;
 use zeroize::Zeroize;
@@ -25,11 +26,26 @@ const SAL_POINT_COUNT_V1: usize = 6;
 const SAL_SCALAR_COUNT_V1: usize = 6;
 const MAX_SAL_SCALAR_ATTEMPTS_V1: usize = 128;
 const MAX_SAL_PROVER_RESTARTS_V1: usize = 128;
+static ED25519_SCALAR_MODULUS_LE_V1: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+];
 /// Exact canonical SAL proof width.
 pub const FCMP_SAL_PROOF_BYTES_V1: usize =
     (SAL_POINT_COUNT_V1 + SAL_SCALAR_COUNT_V1) * FCMP_POINT_BYTES_V1;
 struct SalSecretCopyValueV1<T: Copy + Zeroize>(T);
 struct BorrowedSalCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
+#[cfg(test)]
+std::thread_local! {
+    static SAL_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static FCMP_SAL_WITNESS_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static SAL_SECRET_CANONICALITY_STATE_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static SAL_SECRET_WIDE_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 impl<T: Copy + Zeroize> BorrowedSalCopySlotV1<'_, T> {
     fn expose_copy(&self) -> T {
         *self.0
@@ -53,9 +69,6 @@ impl<T: Copy + Zeroize> SalSecretCopyValueV1<T> {
         drop(incoming);
         owned
     }
-    fn expose_copy(&self) -> T {
-        self.0
-    }
     fn expose_ref(&self) -> &T {
         &self.0
     }
@@ -65,7 +78,119 @@ impl<T: Copy + Zeroize> Drop for SalSecretCopyValueV1<T> {
         self.0.zeroize();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = SAL_SECRET_COPY_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
+}
+struct SalSecretScalarCanonicalityStateV1 {
+    less: Choice,
+    greater: Choice,
+    byte_less: Choice,
+    byte_greater: Choice,
+    prefix_decided: Choice,
+    prefix_equal: Choice,
+    less_update: Choice,
+    greater_update: Choice,
+}
+impl SalSecretScalarCanonicalityStateV1 {
+    fn new_v1() -> Self {
+        Self {
+            less: Choice::from(0),
+            greater: Choice::from(0),
+            byte_less: Choice::from(0),
+            byte_greater: Choice::from(0),
+            prefix_decided: Choice::from(0),
+            prefix_equal: Choice::from(0),
+            less_update: Choice::from(0),
+            greater_update: Choice::from(0),
+        }
+    }
+    fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
+        self.prefix_decided = self.less | self.greater;
+        self.prefix_equal = !self.prefix_decided;
+        self.byte_less = byte.ct_lt(modulus_byte);
+        self.byte_greater = modulus_byte.ct_lt(byte);
+        self.less_update = self.prefix_equal & self.byte_less;
+        self.greater_update = self.prefix_equal & self.byte_greater;
+        self.less |= self.less_update;
+        self.greater |= self.greater_update;
+    }
+}
+impl Drop for SalSecretScalarCanonicalityStateV1 {
+    fn drop(&mut self) {
+        self.less = Choice::from(0);
+        self.greater = Choice::from(0);
+        self.byte_less = Choice::from(0);
+        self.byte_greater = Choice::from(0);
+        self.prefix_decided = Choice::from(0);
+        self.prefix_equal = Choice::from(0);
+        self.less_update = Choice::from(0);
+        self.greater_update = Choice::from(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.less);
+        let _ = core::hint::black_box(&mut self.greater);
+        let _ = core::hint::black_box(&mut self.byte_less);
+        let _ = core::hint::black_box(&mut self.byte_greater);
+        let _ = core::hint::black_box(&mut self.prefix_decided);
+        let _ = core::hint::black_box(&mut self.prefix_equal);
+        let _ = core::hint::black_box(&mut self.less_update);
+        let _ = core::hint::black_box(&mut self.greater_update);
+        #[cfg(test)]
+        let _ = SAL_SECRET_CANONICALITY_STATE_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+struct SalSecretScalarWideInputV1([u8; 64]);
+impl SalSecretScalarWideInputV1 {
+    fn from_borrowed_v1(bytes: &[u8; 32]) -> Self {
+        let mut wide = Self([0_u8; 64]);
+        wide.0[..32].copy_from_slice(bytes);
+        wide
+    }
+}
+impl Drop for SalSecretScalarWideInputV1 {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = SAL_SECRET_WIDE_INPUT_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+pub(super) struct FcmpSalSecretScalarEncodingV1(SalSecretCopyValueV1<[u8; 32]>);
+impl FcmpSalSecretScalarEncodingV1 {
+    pub(super) fn from_scalar_ref_v1(scalar: &Scalar) -> Self {
+        let mut encoded = scalar.to_bytes();
+        Self::take(&mut encoded)
+    }
+    fn take(encoded: &mut [u8; 32]) -> Self {
+        Self(SalSecretCopyValueV1::take(encoded))
+    }
+    #[cfg(test)]
+    pub(super) fn from_test_bytes_v1(mut encoded: [u8; 32]) -> Self {
+        Self::take(&mut encoded)
+    }
+}
+#[cfg(test)]
+pub(super) fn reset_sal_secret_copy_owner_drops_v1() {
+    SAL_SECRET_COPY_OWNER_DROPS_V1.with(|drops| drops.set(0));
+}
+#[cfg(test)]
+pub(super) fn sal_secret_copy_owner_drops_v1() -> usize {
+    SAL_SECRET_COPY_OWNER_DROPS_V1.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(super) fn reset_fcmp_sal_witness_owner_drops_v1() {
+    FCMP_SAL_WITNESS_OWNER_DROPS_V1.with(|drops| drops.set(0));
+}
+#[cfg(test)]
+pub(super) fn fcmp_sal_witness_owner_drops_v1() -> usize {
+    FCMP_SAL_WITNESS_OWNER_DROPS_V1.with(std::cell::Cell::get)
 }
 // Generated by the pinned Monero `hash_to_ec` construction. Keeping the
 // canonical encodings here avoids silently substituting a generic
@@ -107,9 +232,24 @@ fn scalar_from_bytes(bytes: [u8; 32]) -> Result<Scalar, FcmpNativeErrorV1> {
 fn secret_scalar_from_bytes_v1(
     bytes: &[u8; 32],
 ) -> Result<SalSecretCopyValueV1<Scalar>, FcmpNativeErrorV1> {
-    let mut scalar = Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
-        .ok_or(FcmpNativeErrorV1::ScalarEncoding)?;
-    Ok(SalSecretCopyValueV1::take(&mut scalar))
+    let mut canonicality = SalSecretScalarCanonicalityStateV1::new_v1();
+    let mut index = ED25519_SCALAR_MODULUS_LE_V1.len();
+    while index != 0 {
+        index -= 1;
+        let byte = &bytes[index];
+        let modulus_byte = &ED25519_SCALAR_MODULUS_LE_V1[index];
+        canonicality.observe_byte_v1(byte, modulus_byte);
+    }
+    let is_canonical = bool::from(canonicality.less);
+    drop(canonicality);
+    if !is_canonical {
+        return Err(FcmpNativeErrorV1::ScalarEncoding);
+    }
+    let wide = SalSecretScalarWideInputV1::from_borrowed_v1(bytes);
+    let mut scalar = Scalar::from_bytes_mod_order_wide(&wide.0);
+    drop(wide);
+    let scalar = SalSecretCopyValueV1::take(&mut scalar);
+    Ok(scalar)
 }
 fn random_scalar(rng: &mut (impl RngCore + CryptoRng)) -> Result<Scalar, FcmpNativeErrorV1> {
     // A zero alpha or beta is algebraically valid but makes the corresponding
@@ -220,6 +360,10 @@ impl Zeroize for FcmpSalWitnessV1 {
 impl Drop for FcmpSalWitnessV1 {
     fn drop(&mut self) {
         self.zeroize();
+        #[cfg(test)]
+        let _ = FCMP_SAL_WITNESS_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
 }
 impl core::fmt::Debug for FcmpSalWitnessV1 {
@@ -237,20 +381,37 @@ impl FcmpSalWitnessV1 {
         mut r_i: [u8; 32],
         mut r_r_i: [u8; 32],
     ) -> Result<Self, FcmpNativeErrorV1> {
-        let x_bytes = SalSecretCopyValueV1::take(&mut x);
-        let y_bytes = SalSecretCopyValueV1::take(&mut y);
-        let r_i_bytes = SalSecretCopyValueV1::take(&mut r_i);
-        let r_r_i_bytes = SalSecretCopyValueV1::take(&mut r_r_i);
-        let x = secret_scalar_from_bytes_v1(x_bytes.expose_ref())?;
-        let y = secret_scalar_from_bytes_v1(y_bytes.expose_ref())?;
-        let r_i = secret_scalar_from_bytes_v1(r_i_bytes.expose_ref())?;
-        let r_r_i = secret_scalar_from_bytes_v1(r_r_i_bytes.expose_ref())?;
-        Ok(Self {
-            x: x.expose_copy(),
-            y: y.expose_copy(),
-            r_i: r_i.expose_copy(),
-            r_r_i: r_r_i.expose_copy(),
-        })
+        let x_bytes = FcmpSalSecretScalarEncodingV1::take(&mut x);
+        let y_bytes = FcmpSalSecretScalarEncodingV1::take(&mut y);
+        let r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_i);
+        let r_r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_r_i);
+        Self::from_secret_scalar_encoding_owners_v1(x_bytes, y_bytes, r_i_bytes, r_r_i_bytes)
+    }
+    pub(super) fn from_secret_scalar_encoding_owners_v1(
+        x_bytes: FcmpSalSecretScalarEncodingV1,
+        y_bytes: FcmpSalSecretScalarEncodingV1,
+        r_i_bytes: FcmpSalSecretScalarEncodingV1,
+        r_r_i_bytes: FcmpSalSecretScalarEncodingV1,
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        let mut x = secret_scalar_from_bytes_v1(x_bytes.0.expose_ref())?;
+        let mut y = secret_scalar_from_bytes_v1(y_bytes.0.expose_ref())?;
+        let mut r_i = secret_scalar_from_bytes_v1(r_i_bytes.0.expose_ref())?;
+        let mut r_r_i = secret_scalar_from_bytes_v1(r_r_i_bytes.0.expose_ref())?;
+        let mut witness = Self {
+            x: Scalar::ZERO,
+            y: Scalar::ZERO,
+            r_i: Scalar::ZERO,
+            r_r_i: Scalar::ZERO,
+        };
+        core::mem::swap(&mut witness.x, &mut x.0);
+        drop(x);
+        core::mem::swap(&mut witness.y, &mut y.0);
+        drop(y);
+        core::mem::swap(&mut witness.r_i, &mut r_i.0);
+        drop(r_i);
+        core::mem::swap(&mut witness.r_r_i, &mut r_r_i.0);
+        drop(r_r_i);
+        Ok(witness)
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -459,6 +620,7 @@ mod tests {
     use crate::privacy_engines::fcmp_plus_plus::FailingRngV1;
     use core::cell::Cell;
     use curve25519_dalek::scalar::Scalar;
+    use p256::elliptic_curve::bigint::{Encoding as _, U256};
     use rand_08::{SeedableRng as _, rngs::StdRng};
     thread_local! {
         static SAL_SECRET_CLEARS: Cell<usize> = const { Cell::new(0) };
@@ -470,6 +632,17 @@ mod tests {
             self.0 = 0;
             SAL_SECRET_CLEARS.with(|calls| calls.set(calls.get() + 1));
         }
+    }
+    fn reset_secret_scalar_decoder_owner_drops_v1() {
+        SAL_SECRET_CANONICALITY_STATE_OWNER_DROPS_V1.with(|drops| drops.set(0));
+        SAL_SECRET_WIDE_INPUT_OWNER_DROPS_V1.with(|drops| drops.set(0));
+        reset_sal_secret_copy_owner_drops_v1();
+    }
+    fn secret_canonicality_state_owner_drops_v1() -> usize {
+        SAL_SECRET_CANONICALITY_STATE_OWNER_DROPS_V1.with(Cell::get)
+    }
+    fn secret_wide_input_owner_drops_v1() -> usize {
+        SAL_SECRET_WIDE_INPUT_OWNER_DROPS_V1.with(Cell::get)
     }
     #[test]
     fn sal_secret_copy_owner_clears_transfer_success_and_unwind_slots() {
@@ -492,8 +665,139 @@ mod tests {
         assert_eq!(SAL_SECRET_CLEARS.with(Cell::get), 2);
     }
     #[test]
+    fn secret_scalar_decoder_owns_canonicality_and_wide_scratch_on_every_exit() {
+        assert_eq!(
+            ED25519_SCALAR_MODULUS_LE_V1,
+            U256::from_be_hex("1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
+                .to_le_bytes()
+        );
+        for (label, integer, expected) in [
+            ("zero", U256::ZERO, Scalar::ZERO),
+            ("one", U256::ONE, Scalar::ONE),
+            (
+                "l-1",
+                U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1).wrapping_sub(&U256::ONE),
+                -Scalar::ONE,
+            ),
+        ] {
+            reset_secret_scalar_decoder_owner_drops_v1();
+            let bytes = integer.to_le_bytes();
+            let scalar = secret_scalar_from_bytes_v1(&bytes)
+                .unwrap_or_else(|error| panic!("{label} rejected: {error:?}"));
+            assert_eq!(scalar.expose_ref(), &expected, "{label}");
+            assert_eq!(secret_canonicality_state_owner_drops_v1(), 1, "{label}");
+            assert_eq!(secret_wide_input_owner_drops_v1(), 1, "{label}");
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 0, "{label}");
+            drop(scalar);
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 1, "{label}");
+        }
+
+        let modulus = U256::from_le_bytes(ED25519_SCALAR_MODULUS_LE_V1);
+        for (label, integer) in [
+            ("l", modulus),
+            ("l+1", modulus.wrapping_add(&U256::ONE)),
+            ("max", U256::MAX),
+        ] {
+            reset_secret_scalar_decoder_owner_drops_v1();
+            let bytes = integer.to_le_bytes();
+            assert!(
+                matches!(
+                    secret_scalar_from_bytes_v1(&bytes),
+                    Err(FcmpNativeErrorV1::ScalarEncoding)
+                ),
+                "{label} accepted"
+            );
+            assert_eq!(secret_canonicality_state_owner_drops_v1(), 1, "{label}");
+            assert_eq!(secret_wide_input_owner_drops_v1(), 0, "{label}");
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 0, "{label}");
+        }
+
+        reset_secret_scalar_decoder_owner_drops_v1();
+        let unwind = std::panic::catch_unwind(|| {
+            let bytes = U256::from(7_u8).to_le_bytes();
+            let scalar = secret_scalar_from_bytes_v1(&bytes).expect("canonical scalar");
+            assert_eq!(secret_canonicality_state_owner_drops_v1(), 1);
+            assert_eq!(secret_wide_input_owner_drops_v1(), 1);
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 0);
+            let _ = core::hint::black_box(scalar.expose_ref());
+            panic!("exercise decoded scalar owner unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(secret_canonicality_state_owner_drops_v1(), 1);
+        assert_eq!(secret_wide_input_owner_drops_v1(), 1);
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 1);
+
+        reset_secret_scalar_decoder_owner_drops_v1();
+        let comparison_unwind = std::panic::catch_unwind(|| {
+            let mut canonicality = SalSecretScalarCanonicalityStateV1::new_v1();
+            canonicality.observe_byte_v1(&7_u8, &11_u8);
+            assert_eq!(secret_canonicality_state_owner_drops_v1(), 0);
+            assert_eq!(secret_wide_input_owner_drops_v1(), 0);
+            let _ = core::hint::black_box(&canonicality.less);
+            panic!("exercise active scalar canonicality state unwind");
+        });
+        assert!(comparison_unwind.is_err());
+        assert_eq!(secret_canonicality_state_owner_drops_v1(), 1);
+        assert_eq!(secret_wide_input_owner_drops_v1(), 0);
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 0);
+
+        reset_secret_scalar_decoder_owner_drops_v1();
+        let wide_unwind = std::panic::catch_unwind(|| {
+            let bytes = U256::from(11_u8).to_le_bytes();
+            let wide = SalSecretScalarWideInputV1::from_borrowed_v1(&bytes);
+            assert_eq!(secret_canonicality_state_owner_drops_v1(), 0);
+            assert_eq!(secret_wide_input_owner_drops_v1(), 0);
+            let _ = core::hint::black_box(&wide.0);
+            panic!("exercise active scalar wide-input owner unwind");
+        });
+        assert!(wide_unwind.is_err());
+        assert_eq!(secret_canonicality_state_owner_drops_v1(), 0);
+        assert_eq!(secret_wide_input_owner_drops_v1(), 1);
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 0);
+    }
+    #[test]
     fn sal_witness_takes_all_bytes_before_borrowed_decoding() {
         let source = include_str!("sal.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests {")
+            .expect("test module boundary")
+            .0;
+        for forbidden in ["U256", "from_le_slice", "Encoding as _"] {
+            assert!(
+                !production.contains(forbidden),
+                "retained production {forbidden}"
+            );
+        }
+        let modulus = source
+            .split_once("static ED25519_SCALAR_MODULUS_LE_V1: [u8; 32] = [")
+            .expect("little-endian scalar modulus")
+            .1
+            .split_once("];")
+            .expect("scalar modulus boundary")
+            .0;
+        assert_eq!(
+            modulus.split_whitespace().collect::<String>(),
+            "0xed,0xd3,0xf5,0x5c,0x1a,0x63,0x12,0x58,0xd6,0x9c,0xf7,0xa2,0xde,0xf9,0xde,0x14,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,"
+        );
+        let public_decoder = source
+            .split_once("fn scalar_from_bytes(bytes: [u8; 32])")
+            .expect("public scalar decoder")
+            .1
+            .split_once("fn secret_scalar_from_bytes_v1(")
+            .expect("public scalar decoder boundary")
+            .0;
+        assert_eq!(
+            public_decoder
+                .matches("validate_edwards_scalar(bytes)?")
+                .count(),
+            1
+        );
+        assert_eq!(
+            public_decoder
+                .matches("Scalar::from_canonical_bytes(bytes)")
+                .count(),
+            1
+        );
         let decoder = source
             .split_once("fn secret_scalar_from_bytes_v1(")
             .expect("secret scalar decoder")
@@ -502,13 +806,168 @@ mod tests {
             .expect("decoder boundary")
             .0;
         assert!(decoder.contains("bytes: &[u8; 32]"));
-        let decoded = decoder
-            .find("Scalar::from_canonical_bytes(*bytes)")
-            .expect("borrowed exact decode");
-        let take = decoder
-            .find("SalSecretCopyValueV1::take(&mut scalar)")
-            .expect("decoded scalar take");
-        assert!(decoded < take);
+        let decoder_steps = [
+            "let mut canonicality = SalSecretScalarCanonicalityStateV1::new_v1()",
+            "let mut index = ED25519_SCALAR_MODULUS_LE_V1.len()",
+            "while index != 0",
+            "index -= 1",
+            "let byte = &bytes[index]",
+            "let modulus_byte = &ED25519_SCALAR_MODULUS_LE_V1[index]",
+            "canonicality.observe_byte_v1(byte, modulus_byte)",
+            "let is_canonical = bool::from(canonicality.less)",
+            "drop(canonicality)",
+            "if !is_canonical",
+            "let wide = SalSecretScalarWideInputV1::from_borrowed_v1(bytes)",
+            "let mut scalar = Scalar::from_bytes_mod_order_wide(&wide.0)",
+            "drop(wide)",
+            "let scalar = SalSecretCopyValueV1::take(&mut scalar)",
+            "Ok(scalar)",
+        ];
+        let decoder_positions = decoder_steps
+            .iter()
+            .map(|needle| {
+                decoder
+                    .find(needle)
+                    .unwrap_or_else(|| panic!("missing decoder step {needle}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(decoder_positions.windows(2).all(|pair| pair[0] < pair[1]));
+        for (needle, expected) in [
+            ("SalSecretScalarCanonicalityStateV1::new_v1()", 1),
+            ("ED25519_SCALAR_MODULUS_LE_V1.len()", 1),
+            ("canonicality.observe_byte_v1(byte, modulus_byte)", 1),
+            ("bool::from(canonicality.less)", 1),
+            ("SalSecretScalarWideInputV1::from_borrowed_v1(bytes)", 1),
+            ("Scalar::from_bytes_mod_order_wide(&wide.0)", 1),
+            ("SalSecretCopyValueV1::take(&mut scalar)", 1),
+            ("drop(canonicality)", 1),
+            ("drop(wide)", 1),
+        ] {
+            assert_eq!(decoder.matches(needle).count(), expected, "{needle}");
+        }
+        for forbidden in [
+            "bytes: [u8; 32]",
+            "Scalar::from_canonical_bytes",
+            "validate_edwards_scalar",
+            "U256",
+            "from_le_slice",
+            "U256::from_le_bytes",
+            "let integer",
+            "let mut res",
+            "let mut buf",
+            "Choice::",
+            ".ct_lt(",
+            "*bytes",
+            ".expose_copy()",
+            ".clone()",
+            ".to_owned()",
+            "Zeroizing::new(",
+            "callback",
+            "FnOnce",
+            "Deref",
+        ] {
+            assert!(!decoder.contains(forbidden), "retained {forbidden}");
+        }
+        assert_eq!(decoder.matches("bool::from(").count(), 1);
+        let comparison_owner = source
+            .split_once("struct SalSecretScalarCanonicalityStateV1 {")
+            .expect("secret scalar canonicality owner")
+            .1
+            .split_once("struct SalSecretScalarWideInputV1([u8; 64]);")
+            .expect("secret scalar canonicality owner boundary")
+            .0;
+        assert!(
+            comparison_owner
+                .contains("fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8)")
+        );
+        let comparison_steps = [
+            "self.prefix_decided = self.less | self.greater",
+            "self.prefix_equal = !self.prefix_decided",
+            "self.byte_less = byte.ct_lt(modulus_byte)",
+            "self.byte_greater = modulus_byte.ct_lt(byte)",
+            "self.less_update = self.prefix_equal & self.byte_less",
+            "self.greater_update = self.prefix_equal & self.byte_greater",
+            "self.less |= self.less_update",
+            "self.greater |= self.greater_update",
+        ];
+        let comparison_positions = comparison_steps
+            .iter()
+            .map(|needle| {
+                comparison_owner
+                    .find(needle)
+                    .unwrap_or_else(|| panic!("missing comparison step {needle}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            comparison_positions
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert_eq!(comparison_owner.matches(".ct_lt(").count(), 2);
+        assert!(!comparison_owner.contains("bool::from("));
+        for field in [
+            "less",
+            "greater",
+            "byte_less",
+            "byte_greater",
+            "prefix_decided",
+            "prefix_equal",
+            "less_update",
+            "greater_update",
+        ] {
+            assert_eq!(
+                comparison_owner
+                    .matches(&format!("\n    {field}: Choice,"))
+                    .count(),
+                1,
+                "missing comparison state {field}"
+            );
+            assert_eq!(
+                comparison_owner
+                    .matches(&format!("self.{field} = Choice::from(0)"))
+                    .count(),
+                1,
+                "comparison state {field} is not cleared"
+            );
+            assert_eq!(
+                comparison_owner
+                    .matches(&format!("black_box(&mut self.{field})"))
+                    .count(),
+                1,
+                "comparison state {field} is not pinned after clear"
+            );
+        }
+        assert!(comparison_owner.contains("compiler_fence"));
+        let wide_owner = source
+            .split_once("struct SalSecretScalarWideInputV1([u8; 64]);")
+            .expect("secret wide-input owner")
+            .1
+            .split_once("pub(super) struct FcmpSalSecretScalarEncodingV1(")
+            .expect("secret wide-input owner boundary")
+            .0;
+        assert!(wide_owner.contains("fn from_borrowed_v1(bytes: &[u8; 32]) -> Self"));
+        assert!(wide_owner.contains("let mut wide = Self([0_u8; 64])"));
+        assert!(wide_owner.contains("wide.0[..32].copy_from_slice(bytes)"));
+        assert!(wide_owner.contains("self.0.zeroize()"));
+        assert!(wide_owner.contains("compiler_fence"));
+        assert!(wide_owner.contains("black_box"));
+        for owner in [comparison_owner, wide_owner] {
+            for forbidden in [
+                "#[derive(",
+                "impl Clone",
+                "impl Copy",
+                "Deref",
+                "fn expose_",
+                "fn get",
+                "fn as_",
+                "fn with_",
+                "callback",
+                "FnOnce",
+                "FnMut",
+            ] {
+                assert!(!owner.contains(forbidden), "retained owner {forbidden}");
+            }
+        }
         let constructor = source
             .split_once("impl FcmpSalWitnessV1 {")
             .expect("SAL witness impl")
@@ -518,17 +977,21 @@ mod tests {
             .0;
         assert_eq!(
             constructor
-                .matches("SalSecretCopyValueV1::take(&mut")
+                .matches("FcmpSalSecretScalarEncodingV1::take(&mut")
                 .count(),
             4
         );
         let last_take = constructor
-            .rfind("SalSecretCopyValueV1::take(&mut")
+            .rfind("FcmpSalSecretScalarEncodingV1::take(&mut")
             .expect("last input take");
+        let consume = constructor
+            .find("Self::from_secret_scalar_encoding_owners_v1(")
+            .expect("owner-consuming constructor");
+        assert!(last_take < consume);
         let first_decode = constructor
             .find("secret_scalar_from_bytes_v1(")
             .expect("first borrowed decode");
-        assert!(last_take < first_decode);
+        assert!(consume < first_decode);
         assert_eq!(
             constructor.matches("secret_scalar_from_bytes_v1(").count(),
             4
@@ -536,10 +999,178 @@ mod tests {
         let last_decode = constructor
             .rfind("secret_scalar_from_bytes_v1(")
             .expect("last scalar owner");
-        let publish = constructor.find("Ok(Self {").expect("final publication");
-        assert!(first_decode < last_decode && last_decode < publish);
+        let destination = constructor
+            .find("let mut witness = Self {")
+            .expect("zero destination");
+        assert!(first_decode < last_decode && last_decode < destination);
+        let swaps = [
+            "core::mem::swap(&mut witness.x, &mut x.0)",
+            "drop(x)",
+            "core::mem::swap(&mut witness.y, &mut y.0)",
+            "drop(y)",
+            "core::mem::swap(&mut witness.r_i, &mut r_i.0)",
+            "drop(r_i)",
+            "core::mem::swap(&mut witness.r_r_i, &mut r_r_i.0)",
+            "drop(r_r_i)",
+            "Ok(witness)",
+        ];
+        let positions = swaps
+            .iter()
+            .map(|needle| {
+                constructor
+                    .find(needle)
+                    .unwrap_or_else(|| panic!("missing {needle}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(destination < positions[0]);
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(constructor.matches("Scalar::ZERO").count(), 4);
+        assert!(!constructor.contains(".expose_copy()"));
         assert!(!constructor.contains("Zeroizing::new(x)"));
         assert!(!constructor.contains("scalar_from_bytes(*"));
+        let encoding_owner = source
+            .split_once("pub(super) struct FcmpSalSecretScalarEncodingV1(")
+            .expect("opaque scalar-encoding owner")
+            .1
+            .split_once("// Generated by the pinned Monero")
+            .expect("encoding owner boundary")
+            .0;
+        for forbidden in [
+            "#[derive(",
+            "impl Clone",
+            "impl Copy",
+            "Deref",
+            "AsRef",
+            "Borrow",
+            "fn expose_",
+            "fn get",
+            "fn as_",
+            "fn with_",
+            "FnOnce",
+            "FnMut",
+            ") -> [u8; 32]",
+            ") -> Scalar",
+            "callback",
+        ] {
+            assert!(!encoding_owner.contains(forbidden), "retained {forbidden}");
+        }
+        assert_eq!(encoding_owner.matches("impl ").count(), 1);
+        let owned_copy_impl = source
+            .split_once("impl<T: Copy + Zeroize> SalSecretCopyValueV1<T> {")
+            .expect("SAL copy owner impl")
+            .1
+            .split_once("impl<T: Copy + Zeroize> Drop for SalSecretCopyValueV1<T>")
+            .expect("SAL copy owner boundary")
+            .0;
+        assert!(!owned_copy_impl.contains("fn expose_copy(&self)"));
+    }
+    #[test]
+    fn sal_scalar_encoding_owners_cover_each_decode_position_zeroize_and_unwind() {
+        let values = [
+            Scalar::from(17_u64),
+            Scalar::from(23_u64),
+            Scalar::from(31_u64),
+            Scalar::from(43_u64),
+        ];
+        reset_sal_secret_copy_owner_drops_v1();
+        reset_fcmp_sal_witness_owner_drops_v1();
+        {
+            let witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[0]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[1]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[2]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[3]),
+            )
+            .expect("owned SAL witness");
+            assert_eq!(witness.x, values[0]);
+            assert_eq!(witness.y, values[1]);
+            assert_eq!(witness.r_i, values[2]);
+            assert_eq!(witness.r_r_i, values[3]);
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+            assert_eq!(fcmp_sal_witness_owner_drops_v1(), 0);
+        }
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 1);
+
+        for invalid_position in 0..4 {
+            reset_sal_secret_copy_owner_drops_v1();
+            reset_fcmp_sal_witness_owner_drops_v1();
+            let mut encodings = values.map(|value| value.to_bytes());
+            encodings[invalid_position] = [u8::MAX; 32];
+            let result = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+                FcmpSalSecretScalarEncodingV1::from_test_bytes_v1(encodings[0]),
+                FcmpSalSecretScalarEncodingV1::from_test_bytes_v1(encodings[1]),
+                FcmpSalSecretScalarEncodingV1::from_test_bytes_v1(encodings[2]),
+                FcmpSalSecretScalarEncodingV1::from_test_bytes_v1(encodings[3]),
+            );
+            assert!(matches!(result, Err(FcmpNativeErrorV1::ScalarEncoding)));
+            assert_eq!(
+                sal_secret_copy_owner_drops_v1(),
+                4 + invalid_position,
+                "decode position {invalid_position}"
+            );
+            assert_eq!(fcmp_sal_witness_owner_drops_v1(), 0);
+        }
+
+        reset_sal_secret_copy_owner_drops_v1();
+        reset_fcmp_sal_witness_owner_drops_v1();
+        let mut witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[0]),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[1]),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[2]),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[3]),
+        )
+        .expect("witness for explicit zeroize");
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+        witness.zeroize();
+        assert_eq!(witness.x, Scalar::ZERO);
+        assert_eq!(witness.y, Scalar::ZERO);
+        assert_eq!(witness.r_i, Scalar::ZERO);
+        assert_eq!(witness.r_r_i, Scalar::ZERO);
+        drop(witness);
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 1);
+
+        reset_sal_secret_copy_owner_drops_v1();
+        reset_fcmp_sal_witness_owner_drops_v1();
+        let unwind = std::panic::catch_unwind(|| {
+            let witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[0]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[1]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[2]),
+                FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&values[3]),
+            )
+            .expect("witness before unwind");
+            assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+            assert_eq!(fcmp_sal_witness_owner_drops_v1(), 0);
+            let _ = core::hint::black_box(&witness);
+            panic!("exercise SAL witness downstream unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 1);
+    }
+    #[test]
+    fn sal_witness_owner_drops_after_downstream_relation_error() {
+        let (public, correct_witness) = public_and_witness();
+        drop(correct_witness);
+        reset_sal_secret_copy_owner_drops_v1();
+        reset_fcmp_sal_witness_owner_drops_v1();
+        let wrong = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&Scalar::from(18_u64)),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&Scalar::from(23_u64)),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&Scalar::from(31_u64)),
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&Scalar::from(43_u64)),
+        )
+        .expect("canonical mismatched witness");
+        assert_eq!(sal_secret_copy_owner_drops_v1(), 8);
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 0);
+        assert_eq!(
+            validate_sal_witness_relation_v1(&public, &wrong),
+            Err(FcmpNativeErrorV1::SalWitnessMismatch)
+        );
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 0);
+        drop(wrong);
+        assert_eq!(fcmp_sal_witness_owner_drops_v1(), 1);
     }
     struct ZeroRng;
     impl RngCore for ZeroRng {

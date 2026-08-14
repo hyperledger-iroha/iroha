@@ -3618,8 +3618,6 @@ where
         || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
-#[path = "incremental_source_phase23.rs"]
-mod incremental_source_phase23;
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

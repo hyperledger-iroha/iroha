@@ -1,7 +1,15 @@
 //! Public Torii DTOs for the first-release Offline lifecycle.
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use crate::ErrorEnvelope;
 use iroha_crypto::Hash;
+pub use iroha_data_model::offline::{
+    KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
+    KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
+    OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+    OfflineActiveRecursiveStepEpVerifier, OfflineActiveRecursiveStepEqVerifier,
+    OfflineActiveTopUpShieldVerifier, OfflineActiveTransferVerifier, OfflineActiveUnshieldVerifier,
+    OfflineAuthenticatedArtifactSet, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
+    OfflineVerifierId,
+};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -14,15 +22,7 @@ use iroha_data_model::{
         KagemushaActiveReceiverWitnessProofV1, KagemushaRecipientPaymentRequestV2,
     },
 };
-pub use iroha_data_model::offline::{
-    KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
-    KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
-    OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-    OfflineActiveRecursiveStepEpVerifier, OfflineActiveRecursiveStepEqVerifier,
-    OfflineActiveTopUpShieldVerifier, OfflineActiveTransferVerifier, OfflineActiveUnshieldVerifier,
-    OfflineAuthenticatedArtifactSet, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
-    OfflineVerifierId,
-};
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Stable public Norito schema name for the request-independent lineage query.
 pub const OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME: &str =
     "iroha.torii.v1.offline.recipient_lineage.request";
@@ -553,8 +553,8 @@ pub enum OfflineOperationStatus {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use super::*;
+    use std::collections::BTreeMap;
     #[derive(Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
     struct JsonDefaultByteMappingProbe {
         fixed: [u8; 4],
@@ -585,9 +585,10 @@ mod tests {
             r#"{"fixed":"00AB10FF","dynamic":[],"keyed":{"00FF":7,"00ff":8}}"#,
         )
         .expect_err("lexically distinct keys must not alias one typed map key");
-        assert!(
-            error.to_string().contains("duplicate field"),
-            "unexpected duplicate-key error: {error}"
+        assert_eq!(
+            error.to_string(),
+            "duplicate JSON object field",
+            "unexpected duplicate-key error"
         );
     }
     fn universal_capability_status() -> OfflineStatus {
@@ -629,7 +630,7 @@ mod tests {
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineStatus>(&unknown)
             .expect_err("unknown universal capability members fail closed");
-        assert!(error.to_string().contains("unknown field"));
+        assert_eq!(error.to_string(), "unknown JSON field");
     }
     #[test]
     fn tagged_json_rejects_duplicate_discriminator_members() {
@@ -717,11 +718,7 @@ mod tests {
             r#"{"kind":"unknown_command","value":null}"#,
         )
         .expect_err("unknown operation kind must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("unknown variant `unknown_command`")
-        );
+        assert_eq!(error.to_string(), "unknown JSON enum variant");
     }
     #[test]
     fn operation_reference_golden_vector() {

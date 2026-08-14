@@ -4,7 +4,6 @@
 //! boundary keeps the complete V3 permutation and its domain constants owned
 //! by `iroha_core`, so every language derives byte-identical commitments and
 //! nullifiers from the same implementation.
-use std::{ptr, slice, str};
 use iroha_core::zk::confidential_v2::{
     CONFIDENTIAL_TREE_CAPACITY_V2, CONFIDENTIAL_TREE_DEPTH_V2, ConfidentialMerklePathV2,
     compute_confidential_merkle_path_v3, default_confidential_diversifier_v2,
@@ -17,6 +16,7 @@ use iroha_core::zk::confidential_v2::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 use libc::{c_int, c_uchar, c_ulong};
+use std::{ptr, slice, str};
 const DIGEST_BYTES: usize = 32;
 const MAX_DIVERSIFIER_SEED_BYTES: usize = 4_096;
 const MAX_ASSET_DEFINITION_ID_BYTES: usize = 512;
@@ -551,13 +551,13 @@ pub unsafe extern "C" fn connect_norito_confidential_merkle_path_advance_v3(
     target_os = "windows"
 ))]
 mod jni_exports {
+    use super::*;
     use jni::{
         JNIEnv,
         objects::{JByteArray, JClass},
         sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong},
     };
     use zeroize::Zeroizing;
-    use super::*;
     fn read(env: &mut JNIEnv<'_>, value: JByteArray<'_>, maximum: usize) -> Option<Vec<u8>> {
         let length = usize::try_from(env.get_array_length(&value).ok()?).ok()?;
         if length == 0 || length > maximum {

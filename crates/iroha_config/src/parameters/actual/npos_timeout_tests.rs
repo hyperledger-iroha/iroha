@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, num::NonZeroU32};
+use super::*;
 use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility};
 use iroha_primitives::{addr::socket_addr, unique_vec};
-use super::*;
+use std::{collections::BTreeMap, num::NonZeroU32};
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked iroha_config dummy peer keypair")
 }
@@ -264,4 +264,4 @@ fn sorafs_gateway_effective_anonymity_policy_respects_phase_fallback() {
         SorafsAnonymityStage::MajorityPq
     );
 }
-include!("actual/runtime_tail_tests.rs");
+include!("runtime_tail_tests.rs");

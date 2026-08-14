@@ -592,7 +592,7 @@ impl CachedResolverSourceV1 {
         ))
     }
     /// Return the exact finalized anchor represented by this source.
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
     pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }

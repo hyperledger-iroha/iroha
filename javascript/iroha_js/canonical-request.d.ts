@@ -25,6 +25,10 @@ export const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: 65536;
 export const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: 32;
 /** Maximum UTF-8 bytes in the canonical V1 percent-encoded path. */
 export const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: 65536;
+/** Maximum detached-signature bytes accepted by canonical V1 auth. */
+export const CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1: 3309;
+/** Maximum decoded bytes in a forwarded canonical V1 witness. */
+export const CANONICAL_REQUEST_MAX_WITNESS_BYTES_V1: 786432;
 
 export interface CanonicalRequestMessageInput {
   method: string;
@@ -44,10 +48,12 @@ export interface CanonicalRequestSignatureMessageInput
 
 export interface CanonicalRequestHeadersInput
   extends CanonicalRequestMessageInput {
-  /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
+  /** Exact canonical I105 account or structurally bounded ASCII alias header. */
   accountId: string;
   /** Exact genesis-derived network domain for every authenticated route. */
   networkId: NetworkId;
+  /** Caller query prepared with WHATWG URL wire encoding before signing. */
+  query?: string | URLSearchParams;
   privateKey: CanonicalRequestBytes;
   /** Non-negative JavaScript safe integer rendered as exact unsigned decimal. */
   timestampMs?: number;
@@ -82,7 +88,7 @@ export type CanonicalJsonRequestSignature =
   | string;
 
 export interface CanonicalJsonRequestInput {
-  /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
+  /** Exact canonical I105 account or structurally bounded ASCII alias header. */
   accountId: string;
   /** Exact genesis-derived network domain for the signed request. */
   networkId: NetworkId;

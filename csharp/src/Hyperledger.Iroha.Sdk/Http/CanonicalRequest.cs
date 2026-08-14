@@ -23,8 +23,11 @@ public static partial class CanonicalRequest
     /// <summary>Maximum UTF-8 bytes in a canonical V1 account identity or alias.</summary>
     public const int MaxAccountLiteralBytesV1 = 36 * 1024;
 
-    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+    /// <summary>Maximum ASCII bytes preflighted for a three-segment account alias.</summary>
+    public const int MaxAliasLiteralBytesV1 = 3 * 255 + 2;
+
     private static readonly byte[] NetworkDomain = Encoding.UTF8.GetBytes("iroha.app.request.network.v1\0");
+    private static readonly Uri CanonicalPathBaseUri = new("https://canonical.invalid", UriKind.Absolute);
 
     public static CanonicalRequestHeaders BuildHeaders(
         NetworkId networkId,
@@ -41,7 +44,8 @@ public static partial class CanonicalRequest
         var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
         var canonicalAccountId = RequireCanonicalAccountId(exactAccountId, nameof(accountId));
         var exactMethod = RequireHttpMethodToken(method, nameof(method));
-        var exactPath = RequireRootRelativePath(path, nameof(path));
+        var exactPath = RequireHttpTransportPath(path, nameof(path));
+        var exactQuery = RequireHttpTransportQuery(query, exactPath);
 
         var effectiveTimestamp = RequirePositiveTimestamp(
             timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -49,7 +53,7 @@ public static partial class CanonicalRequest
         var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));
         effectiveNonce = RequireCanonicalNonce(effectiveNonce, nameof(nonce));
         EnsureAccountMatchesPrivateKey(canonicalAccountId, privateKeySeed, nameof(accountId));
-        var message = BuildSignatureMessage(networkId, exactMethod, exactPath, query, body, effectiveTimestamp, effectiveNonce);
+        var message = BuildSignatureMessage(networkId, exactMethod, exactPath, exactQuery, body, effectiveTimestamp, effectiveNonce);
         var signature = Ed25519Signer.Sign(message, privateKeySeed);
         return new CanonicalRequestHeaders(
             canonicalAccountId,
@@ -75,11 +79,6 @@ public static partial class CanonicalRequest
         }
         if (query.Length == 0)
         {
-            if (hasQueryPrefix)
-            {
-                throw new ArgumentException("query must contain at least one query parameter.", nameof(rawQuery));
-            }
-
             return string.Empty;
         }
 
@@ -88,7 +87,7 @@ public static partial class CanonicalRequest
         {
             if (part.Length == 0)
             {
-                throw new ArgumentException("query must not contain empty query segments.", nameof(rawQuery));
+                continue;
             }
             if (pairs.Count >= MaxQueryPairsV1)
             {
@@ -99,11 +98,6 @@ public static partial class CanonicalRequest
 
             var components = part.Split('=', 2, StringSplitOptions.None);
             var key = DecodeQueryComponent(components[0]);
-            if (string.IsNullOrEmpty(key) || key.Any(char.IsWhiteSpace))
-            {
-                throw new ArgumentException("query parameter names must not be empty or whitespace.", nameof(rawQuery));
-            }
-
             var value = components.Length > 1 ? DecodeQueryComponent(components[1]) : string.Empty;
             pairs.Add(new KeyValuePair<string, string>(key, value));
         }
@@ -207,17 +201,17 @@ public static partial class CanonicalRequest
 
     internal static string RequireCanonicalNonce(string? value, string paramName)
     {
-        var exact = RequireExactNonBlank(value, paramName);
-        if (exact.Length != 32 || !exact.All(IsLowerHex))
+        if (string.IsNullOrEmpty(value)
+            || value.Length > 256
+            || value.Any(static character => character is < '\u0021' or > '\u007e'))
         {
-            throw new ArgumentException($"{paramName} must be a 16-byte lowercase hex nonce.", paramName);
+            throw new ArgumentException(
+                $"{paramName} must contain 1...256 printable ASCII bytes without spaces.",
+                paramName);
         }
 
-        return exact;
+        return value;
     }
-
-    private static bool IsLowerHex(char value)
-        => value is >= '0' and <= '9' or >= 'a' and <= 'f';
 
     private static string RequireHttpMethodToken(string? value, string paramName)
     {
@@ -247,6 +241,7 @@ public static partial class CanonicalRequest
     {
         var exact = RequireExactNonBlank(value, paramName);
         RequireCanonicalPathByteLength(exact, paramName);
+        RequireCanonicalPathAsciiWireSpelling(exact, paramName);
         if (exact[0] != '/')
         {
             throw new ArgumentException($"{paramName} must be a root-relative path.", paramName);
@@ -257,13 +252,39 @@ public static partial class CanonicalRequest
             throw new ArgumentException($"{paramName} must not be a scheme-relative URI.", paramName);
         }
 
-        if (exact.Contains(':', StringComparison.Ordinal))
+        if (exact.Contains('?', StringComparison.Ordinal)
+            || exact.Contains('#', StringComparison.Ordinal))
         {
-            throw new ArgumentException($"{paramName} must not contain raw ':' characters.", paramName);
+            throw new ArgumentException(
+                $"{paramName} must not contain query or fragment characters.",
+                paramName);
         }
 
         RequireUriStablePath(exact, paramName);
         return exact;
+    }
+
+    private static string RequireHttpTransportPath(string? value, string paramName)
+    {
+        var exact = RequireRootRelativePath(value, paramName);
+        var wirePath = new Uri(CanonicalPathBaseUri, exact).AbsolutePath;
+        RequireCanonicalPathByteLength(wirePath, paramName);
+        RequireCanonicalPathAsciiWireSpelling(wirePath, paramName);
+        RequireUriStablePath(wirePath, paramName);
+        return wirePath;
+    }
+
+    private static string? RequireHttpTransportQuery(string? value, string wirePath)
+    {
+        _ = BuildCanonicalQueryString(value);
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var rawQuery = value[0] == '?' ? value[1..] : value;
+        var wireQuery = new Uri(CanonicalPathBaseUri, $"{wirePath}?{rawQuery}").Query;
+        return wireQuery.Length == 0 ? string.Empty : wireQuery[1..];
     }
 
     internal static string RequireCanonicalAccountId(string? value, string paramName)
@@ -275,15 +296,15 @@ public static partial class CanonicalRequest
                 $"{paramName} must not exceed {MaxAccountLiteralBytesV1} UTF-8 bytes.",
                 paramName);
         }
-        try
+        if (TryParseCanonicalI105Account(exact, out _)
+            || IsCanonicalAsciiAccountAlias(exact))
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            return exact;
         }
-        catch (AccountAddressException exception)
-        {
-            throw new ArgumentException($"{paramName} must be a canonical I105 account id.", paramName, exception);
-        }
+
+        throw new ArgumentException(
+            $"{paramName} must be a canonical I105 account id or structurally valid ASCII account alias.",
+            paramName);
     }
 
     internal static long RequirePositiveTimestamp(long timestampMs, string paramName)
@@ -301,6 +322,13 @@ public static partial class CanonicalRequest
         ReadOnlySpan<byte> privateKeySeed,
         string accountParamName)
     {
+        if (!TryParseCanonicalI105Account(accountId, out _))
+        {
+            // An alias is resolved to its controller by Torii; the SDK cannot
+            // prove that state-dependent binding before sending the request.
+            return;
+        }
+
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
         var expectedAccountId = AccountAddress.FromPublicKey(publicKey, "ed25519")
             .ToI105(AccountAddress.DefaultChainDiscriminant);
@@ -310,6 +338,65 @@ public static partial class CanonicalRequest
                 $"accountId must match the account derived from privateKeySeed: {expectedAccountId}.",
                 accountParamName);
         }
+    }
+
+    internal static string CanonicalAccountHeaderValue(string accountId)
+    {
+        return TryParseCanonicalI105Account(accountId, out var address)
+            ? address!.CanonicalHex
+            : accountId;
+    }
+
+    private static bool TryParseCanonicalI105Account(string value, out AccountAddress? address)
+    {
+        try
+        {
+            address = AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant);
+            return true;
+        }
+        catch (AccountAddressException)
+        {
+            address = null;
+            return false;
+        }
+    }
+
+    private static bool IsCanonicalAsciiAccountAlias(string value)
+    {
+        var separator = value.IndexOf('@');
+        if (value.Length > MaxAliasLiteralBytesV1
+            || value.StartsWith("0x", StringComparison.Ordinal)
+            || separator <= 0
+            || separator != value.LastIndexOf('@')
+            || separator == value.Length - 1
+            || value.Any(static character => character is < '\u0021' or > '\u007e'))
+        {
+            return false;
+        }
+
+        var scope = value[(separator + 1)..].Split('.', StringSplitOptions.None);
+        return scope.Length is 1 or 2
+            && IsCanonicalAsciiAliasSegment(value[..separator])
+            && scope.All(IsCanonicalAsciiAliasSegment);
+    }
+
+    private static bool IsCanonicalAsciiAliasSegment(string value)
+    {
+        if (value.Length is < 1 or > 63
+            || value[0] == '-'
+            || value[^1] == '-'
+            || !value.All(static character => character is >= 'a' and <= 'z'
+                or >= '0' and <= '9'
+                or '-'
+                or '_'))
+        {
+            return false;
+        }
+
+        return value.Length < 4
+            || value[2] != '-'
+            || value[3] != '-'
+            || value.StartsWith("xn--", StringComparison.Ordinal);
     }
 
     private static int CompareUtf8(string left, string right)
@@ -344,19 +431,30 @@ public static partial class CanonicalRequest
         }
     }
 
-    private static string DecodeQueryComponent(string value)
+    internal static void RequireCanonicalPathAsciiWireSpelling(string value, string paramName)
     {
-        ValidatePercentEscapes(value);
-        var decoded = DecodePercentEncodedQueryComponent(value);
-        if (decoded.Any(char.IsControl))
+        if (value.Any(static character => !IsCanonicalPathWireCharacter(character)))
         {
-            throw new ArgumentException("query components must not contain control characters.", nameof(value));
+            throw new ArgumentException(
+                $"{paramName} must use its exact percent-encoded ASCII wire spelling.",
+                paramName);
         }
-
-        return decoded;
     }
 
-    private static void RequireUriStablePath(string value, string paramName)
+    private static bool IsCanonicalPathWireCharacter(char value)
+        => value is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '!' or '$' or '%' or '&' or '\'' or '(' or ')' or '*'
+            or '+' or ',' or '-' or '.' or '/' or ':' or ';' or '=' or '@'
+            or '_' or '~';
+
+    private static string DecodeQueryComponent(string value)
+    {
+        return DecodePercentEncodedQueryComponent(value);
+    }
+
+    internal static void RequireUriStablePath(string value, string paramName)
     {
         if (value.Contains('\\', StringComparison.Ordinal))
         {
@@ -371,115 +469,214 @@ public static partial class CanonicalRequest
                 continue;
             }
 
-            var decodedSegment = DecodePercentEncodedPathSegment(segment, paramName);
-            if (decodedSegment.Any(char.IsControl))
-            {
-                throw new ArgumentException($"{paramName} path segments must not contain percent-decoded control characters.", paramName);
-            }
-
-            if (decodedSegment is "." or "..")
+            if (IsDotPathSegment(segment))
             {
                 throw new ArgumentException($"{paramName} must not contain dot path segments.", paramName);
             }
         }
     }
 
-    private static string DecodePercentEncodedPathSegment(string value, string paramName)
+    private static bool IsDotPathSegment(string value)
     {
-        var builder = new StringBuilder(value.Length);
+        var dotCount = 0;
         for (var index = 0; index < value.Length;)
         {
-            if (value[index] != '%')
+            if (value[index] == '.')
             {
-                builder.Append(value[index]);
+                dotCount++;
                 index++;
                 continue;
             }
 
-            var bytes = new List<byte>();
-            while (index < value.Length && value[index] == '%')
+            if (value[index] == '%'
+                && HexValue(value[index + 1]) == 2
+                && HexValue(value[index + 2]) == 14)
             {
-                bytes.Add((byte)((HexValue(value[index + 1]) << 4) | HexValue(value[index + 2])));
+                dotCount++;
                 index += 3;
+                continue;
             }
 
-            try
-            {
-                builder.Append(StrictUtf8.GetString(bytes.ToArray()));
-            }
-            catch (DecoderFallbackException exception)
-            {
-                throw new ArgumentException(
-                    $"{paramName} path segments must contain valid UTF-8 percent-encoded bytes.",
-                    paramName,
-                    exception);
-            }
+            return false;
         }
 
-        return builder.ToString();
+        return dotCount is 1 or 2;
     }
 
     private static string DecodePercentEncodedQueryComponent(string value)
     {
-        var builder = new StringBuilder(value.Length);
-        for (var index = 0; index < value.Length;)
+        var raw = Encoding.UTF8.GetBytes(value);
+        var decoded = new List<byte>(raw.Length);
+        for (var index = 0; index < raw.Length;)
         {
-            if (value[index] == '+')
+            if (raw[index] == (byte)'+')
             {
-                builder.Append(' ');
+                decoded.Add((byte)' ');
                 index++;
                 continue;
             }
 
-            if (value[index] != '%')
+            if (raw[index] == (byte)'%' && index + 2 < raw.Length)
             {
-                builder.Append(value[index]);
-                index++;
-                continue;
+                var high = HexValue(raw[index + 1]);
+                var low = HexValue(raw[index + 2]);
+                if (high >= 0 && low >= 0)
+                {
+                    decoded.Add((byte)((high << 4) | low));
+                    index += 3;
+                    continue;
+                }
             }
 
-            var bytes = new List<byte>();
-            while (index < value.Length && value[index] == '%')
+            decoded.Add(raw[index]);
+            index++;
+        }
+
+        return DecodeUtf8LossyLikeRust(decoded);
+    }
+
+    private static string DecodeUtf8LossyLikeRust(IReadOnlyList<byte> bytes)
+    {
+        var decoded = new StringBuilder(bytes.Count);
+        var index = 0;
+        while (index < bytes.Count)
+        {
+            var first = bytes[index];
+            if (first < 0x80)
             {
-                bytes.Add((byte)((HexValue(value[index + 1]) << 4) | HexValue(value[index + 2])));
+                decoded.Append((char)first);
+                index++;
+            }
+            else if (first is >= 0xc2 and <= 0xdf)
+            {
+                if (index + 1 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
+
+                var second = bytes[index + 1];
+                if (!IsUtf8Continuation(second))
+                {
+                    decoded.Append('\uFFFD');
+                    index++;
+                    continue;
+                }
+
+                decoded.Append((char)(((first & 0x1f) << 6) | (second & 0x3f)));
+                index += 2;
+            }
+            else if (first is >= 0xe0 and <= 0xef)
+            {
+                if (index + 1 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
+
+                var second = bytes[index + 1];
+                var validSecond = first switch
+                {
+                    0xe0 => second is >= 0xa0 and <= 0xbf,
+                    0xed => second is >= 0x80 and <= 0x9f,
+                    _ => IsUtf8Continuation(second),
+                };
+                if (!validSecond)
+                {
+                    decoded.Append('\uFFFD');
+                    index++;
+                    continue;
+                }
+
+                if (index + 2 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
+
+                var third = bytes[index + 2];
+                if (!IsUtf8Continuation(third))
+                {
+                    decoded.Append('\uFFFD');
+                    index += 2;
+                    continue;
+                }
+
+                decoded.Append((char)(
+                    ((first & 0x0f) << 12)
+                    | ((second & 0x3f) << 6)
+                    | (third & 0x3f)));
                 index += 3;
             }
+            else if (first is >= 0xf0 and <= 0xf4)
+            {
+                if (index + 1 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
 
-            try
-            {
-                builder.Append(StrictUtf8.GetString(bytes.ToArray()));
+                var second = bytes[index + 1];
+                var validSecond = first switch
+                {
+                    0xf0 => second is >= 0x90 and <= 0xbf,
+                    0xf4 => second is >= 0x80 and <= 0x8f,
+                    _ => IsUtf8Continuation(second),
+                };
+                if (!validSecond)
+                {
+                    decoded.Append('\uFFFD');
+                    index++;
+                    continue;
+                }
+
+                if (index + 2 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
+
+                var third = bytes[index + 2];
+                if (!IsUtf8Continuation(third))
+                {
+                    decoded.Append('\uFFFD');
+                    index += 2;
+                    continue;
+                }
+
+                if (index + 3 >= bytes.Count)
+                {
+                    decoded.Append('\uFFFD');
+                    break;
+                }
+
+                var fourth = bytes[index + 3];
+                if (!IsUtf8Continuation(fourth))
+                {
+                    decoded.Append('\uFFFD');
+                    index += 3;
+                    continue;
+                }
+
+                var codePoint = ((first & 0x07) << 18)
+                    | ((second & 0x3f) << 12)
+                    | ((third & 0x3f) << 6)
+                    | (fourth & 0x3f);
+                decoded.Append(char.ConvertFromUtf32(codePoint));
+                index += 4;
             }
-            catch (DecoderFallbackException exception)
+            else
             {
-                throw new ArgumentException(
-                    "query components must contain valid UTF-8 percent-encoded bytes.",
-                    nameof(value),
-                    exception);
+                decoded.Append('\uFFFD');
+                index++;
             }
         }
 
-        return builder.ToString();
+        return decoded.ToString();
     }
 
-    private static void ValidatePercentEscapes(string value)
-    {
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (value[index] != '%')
-            {
-                continue;
-            }
-
-            if (index + 2 >= value.Length
-                || !Uri.IsHexDigit(value[index + 1])
-                || !Uri.IsHexDigit(value[index + 2]))
-            {
-                throw new ArgumentException("query components must contain valid percent escapes.", nameof(value));
-            }
-
-            index += 2;
-        }
-    }
+    private static bool IsUtf8Continuation(byte value)
+        => value is >= 0x80 and <= 0xbf;
 
     private static void ValidatePathPercentEscapes(string value, string paramName)
     {
@@ -508,6 +705,15 @@ public static partial class CanonicalRequest
             >= 'A' and <= 'F' => value - 'A' + 10,
             >= 'a' and <= 'f' => value - 'a' + 10,
             _ => throw new ArgumentException("query components must contain valid percent escapes."),
+        };
+
+    private static int HexValue(byte value)
+        => value switch
+        {
+            >= (byte)'0' and <= (byte)'9' => value - (byte)'0',
+            >= (byte)'A' and <= (byte)'F' => value - (byte)'A' + 10,
+            >= (byte)'a' and <= (byte)'f' => value - (byte)'a' + 10,
+            _ => -1,
         };
 
     private static string GenerateNonce()

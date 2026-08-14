@@ -1,0 +1,2 @@
+const string RAW = "{}";
+            fn decode() -> Json { Json::parse(RAW) }

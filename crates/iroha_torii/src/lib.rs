@@ -51639,20 +51639,24 @@ async fn handler_mcp_jsonrpc(
     if mcp::is_initialized_notification(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    let response_payload = if let Some(batch) = payload.as_array() {
-        if batch.is_empty() {
+    let response_payload = match payload {
+        norito::json::Value::Array(batch) if batch.is_empty() => {
             mcp::jsonrpc_invalid_request("batch request must not be empty")
-        } else {
-            let mut responses = Vec::with_capacity(batch.len());
-            for request_value in batch {
-                let response =
-                    mcp::handle_jsonrpc_request(app.clone(), &headers, request_value.clone()).await;
-                responses.push(response);
-            }
-            norito::json::Value::Array(responses)
         }
-    } else {
-        mcp::handle_jsonrpc_request(app, &headers, payload).await
+        norito::json::Value::Array(batch) => {
+            let mut responses = Vec::new();
+            if responses.try_reserve_exact(batch.len()).is_err() {
+                mcp::jsonrpc_allocation_failed("failed to reserve MCP batch response storage")
+            } else {
+                for request_value in batch {
+                    let response =
+                        mcp::handle_jsonrpc_request(app.clone(), &headers, request_value).await;
+                    responses.push(response);
+                }
+                norito::json::Value::Array(responses)
+            }
+        }
+        payload => mcp::handle_jsonrpc_request(app, &headers, payload).await,
     };
     mcp::private_no_store_response((StatusCode::OK, JsonBody(response_payload)))
 }

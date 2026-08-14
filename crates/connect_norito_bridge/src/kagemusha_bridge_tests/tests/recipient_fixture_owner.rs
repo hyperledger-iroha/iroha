@@ -1,10 +1,9 @@
+use super::*;
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::Write as _,
     path::{Path, PathBuf},
 };
-use super::*;
 const FIXTURE_STAGE_ENV: &str = "IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE";
 fn fixture_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

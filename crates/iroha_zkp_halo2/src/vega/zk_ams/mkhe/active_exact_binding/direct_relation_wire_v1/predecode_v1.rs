@@ -22,6 +22,11 @@ use super::{
     ordered_membership_roots,
 };
 use crate::vega::VegaT256ScalarV1 as Scalar;
+#[path = "predecode_v1/galois_semantic_verifier_v1.rs"]
+mod galois_semantic_verifier_v1;
+pub(in super::super) use galois_semantic_verifier_v1::{
+    CompletedDirectGaloisSemanticVerificationV1, verify_direct_galois_semantic_candidate_v1,
+};
 #[path = "predecode_v1/rkg_one_semantic_verifier_v1.rs"]
 mod rkg_one_semantic_verifier_v1;
 pub(in super::super) use rkg_one_semantic_verifier_v1::{

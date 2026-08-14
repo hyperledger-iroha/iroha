@@ -188,7 +188,7 @@ public final class ZkAssetMerklePathTests {
             new ToriiZkAssetMerklePathProvider(
                 client,
                 new ToriiCanonicalRequestAuth(
-                    "alice",
+                    "alice@universal",
                     ZkAssetMerklePathTests::sign,
                     Long.valueOf(1_700_000_000_000L),
                     "reused-provider-nonce")));
@@ -361,7 +361,7 @@ public final class ZkAssetMerklePathTests {
 
   private static ToriiCanonicalRequestAuth canonicalAuth() {
     return new ToriiCanonicalRequestAuth(
-        "alice", ZkAssetMerklePathTests::sign);
+        "alice@universal", ZkAssetMerklePathTests::sign);
   }
 
   private static KeyPair generateKeyPair() {

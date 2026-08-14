@@ -1,0 +1,8 @@
+
+            module Tests {
+                #[test]
+                fn bypasses_contract_boundary() {
+                    run();
+                }
+            }
+            

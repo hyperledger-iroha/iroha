@@ -4,19 +4,11 @@
 //! boundaries used by the Android lab.  The checkpoint contains public proof
 //! results only; note openings remain in the owner-private staged scenario and
 //! are decoded again after the XCTest process restart.
-use std::{
-    collections::BTreeMap,
-    ffi::OsStr,
-    fs::{File, OpenOptions},
-    io::Read as _,
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
-    path::{Path, PathBuf},
-    ptr, slice,
-    time::Instant,
+use super::kagemusha_candidate_scenario::{
+    bytes as scenario_bytes, digest32 as scenario_digest32, load_scenario, positive_decimal,
+    read_private_regular, scenario_inventory_sha256,
+    validate_kagemusha_candidate_scenario_directory_v1,
 };
-use libc::{c_int, c_uchar, c_ulong};
-use norito::json::{Map as JsonMap, Value as JsonValue};
-use sha2::{Digest as _, Sha256};
 use super::{
     BridgeError, BridgeResult, KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
     KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
@@ -36,10 +28,18 @@ use super::{
     require_kagemusha_candidate_evidence_lab_installed_v4,
     validate_kagemusha_recursive_spend_branch_against_installed_v4, write_kagemusha_archive_bridge,
 };
-use super::kagemusha_candidate_scenario::{
-    bytes as scenario_bytes, digest32 as scenario_digest32, load_scenario, positive_decimal,
-    read_private_regular, scenario_inventory_sha256,
-    validate_kagemusha_candidate_scenario_directory_v1,
+use libc::{c_int, c_uchar, c_ulong};
+use norito::json::{Map as JsonMap, Value as JsonValue};
+use sha2::{Digest as _, Sha256};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    fs::{File, OpenOptions},
+    io::Read as _,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
+    path::{Path, PathBuf},
+    ptr, slice,
+    time::Instant,
 };
 const APPLE_CHECKPOINT_SCHEMA: &str = "iroha.kagemusha.ios_candidate_lab.checkpoint.v1";
 const APPLE_TRANSCRIPT_SCHEMA: &str = "iroha.kagemusha.ios_device_lab.native_transcript.v1";

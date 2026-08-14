@@ -63,3 +63,28 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
         norito::decode_from_bytes(bytes.as_ref()).map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn exported_boundaries_reject_noncanonical_inputs() {
+        let inspect_error = Result::err(inspect_sorafs_orderbook_submission_v1(
+            "retired-route".to_owned(),
+            Uint8Array::from(vec![0; 32]),
+            0,
+            "not-a-signer".to_owned(),
+            Uint8Array::from(vec![0]),
+        ))
+        .expect("noncanonical route must fail");
+        assert_eq!(inspect_error.status, napi::Status::InvalidArg);
+        let receipt_error = Result::err(verify_sorafs_orderbook_submission_receipt_v1(
+            Uint8Array::from(vec![0]),
+            "not-a-hash".to_owned(),
+            "not-an-entrypoint-hash".to_owned(),
+            "not-a-signed-transaction-hash".to_owned(),
+            "not-a-signer".to_owned(),
+        ))
+        .expect("noncanonical receipt identity must fail");
+        assert_eq!(receipt_error.status, napi::Status::InvalidArg);
+    }
+}

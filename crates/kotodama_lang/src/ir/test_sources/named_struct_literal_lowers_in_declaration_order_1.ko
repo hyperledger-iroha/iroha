@@ -1,0 +1,6 @@
+
+            module NamedStruct {
+                struct Pair { int first; int second; }
+                fn main() -> Pair { return Pair { second: 2, first: 1 }; }
+            }
+            

@@ -6,13 +6,6 @@
 //! completions. Control messages use the bounded committee topology: proposal
 //! manifests and phase votes reach the full committee, first-send body chunks
 //! reach Set A, and timeout/QC recovery remains committee-wide.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "worker completion seams remain test-sealed until cutover"
-    )
-)]
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,

@@ -1,6 +1,6 @@
 //! Exact-network governance ballot tool schemas.
+use super::{ToolSpec, canonical_account_auth_headers_schema, iroha_gov_post_tool_with_fields};
 use norito::json::Value;
-use super::{ToolSpec, iroha_gov_post_tool_with_fields};
 pub(super) fn governance_selector_v1_schema(description: &str) -> Value {
     norito::json!({
         "type": "string",
@@ -36,7 +36,7 @@ fn exact_network_governance_ballot_tool(
                 norito::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": "Canonical I105 account id equal to X-Iroha-Account."
+                    "description": "Canonical I105 AccountId carried in the JSON ballot body. The X-Iroha-Account HTTP header separately uses lowercase canonical 0x address hex or an exact canonical ASCII alias for the signer."
                 }),
             ),
             selector,
@@ -53,23 +53,9 @@ fn exact_network_governance_ballot_tool(
         .expect("governance ballot MCP properties are an object");
     properties.insert(
         "headers".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-            ],
-            "properties": {
-                "X-Iroha-Account": { "type": "string", "minLength": 1 },
-                "X-Iroha-Signature": { "type": "string", "minLength": 1 },
-                "X-Iroha-Timestamp-Ms": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
-                "X-Iroha-Nonce": { "type": "string", "minLength": 1 }
-            },
-            "description": "Canonical exact-network account signature over the exact JSON body forwarded by this tool."
-        }),
+        canonical_account_auth_headers_schema(
+            "Canonical exact-network signature tuple or multisig witness over the exact JSON body forwarded by this tool. X-Iroha-Account is optional with a witness. Its ASCII signer encoding is distinct from the body's canonical I105 authority encoding, which route logic matches to the verified proof subject.",
+        ),
     );
     tool
 }

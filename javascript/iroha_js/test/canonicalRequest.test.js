@@ -10,6 +10,7 @@ import {
   CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
   CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
   CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
+  CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1,
   canonicalQueryString,
   canonicalRequestMessage,
   canonicalRequestSignatureMessage,
@@ -76,7 +77,7 @@ test("canonical request signing: canonical query enforces V1 pair and byte limit
   assert.equal(canonicalQueryString("&&b=2&&a=1&"), "a=1&b=2");
 });
 
-test("canonical request signing: enforces V1 account and nonce limits", () => {
+test("canonical request signing: enforces V1 account and nonce syntax", () => {
   const { privateKey } = deterministicKeyPair(12);
   const common = {
     networkId: TEST_NETWORK_ID,
@@ -85,22 +86,51 @@ test("canonical request signing: enforces V1 account and nonce limits", () => {
     privateKey,
     timestampMs: 1_717_171_717_005,
   };
-  const exactAccount = `${"a".repeat(
-    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 - 2,
+  for (const accountId of [
+    "alice@universal",
+    "alice_1@bank_a.paynet",
+    "alice@xn--fa-hia",
+    "alice@xn--ab-0ea",
+    "alice@xn--alice",
+    "alice@xn--a",
+    "alice@xn--ab-uuba211bca8057b",
+    "alice@xn--ab-j1t",
+    "alice@xn--11b2er09f",
+    "alice@xn--4u8c",
+    "alice@xn--pq1d",
+    "alice@xn--kx7e",
+    "alice@xn--5h0f",
+    "alice@xn--zo5h",
+    "alice@xn--fi3d",
+    "alice@xn--d4f",
+    SHARED_I105_ACCOUNT,
+  ]) {
+    assert.doesNotThrow(() =>
+      buildCanonicalRequestHeaders({ ...common, accountId, nonce: "valid-account" }),
+    );
+  }
+  for (const accountId of [
+    "alice",
+    "alice.name@universal",
+    "alice@a.b.c",
+    "0xwallet@universal",
+    "alice@ab--invalid",
+    "alice@xn--",
+    `${"a".repeat(64)}@universal`,
+  ]) {
+    assert.throws(
+      () => buildCanonicalRequestHeaders({ ...common, accountId, nonce: "bad-account" }),
+      /exact canonical I105 account or ASCII account alias/u,
+    );
+  }
+  const oversizedAccount = `${"a".repeat(
+    CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 - 1,
   )}@a`;
-  assert.equal(Buffer.byteLength(exactAccount, "utf8"), 36_864);
-  assert.doesNotThrow(() =>
-    buildCanonicalRequestHeaders({
-      ...common,
-      accountId: exactAccount,
-      nonce: "account-limit",
-    }),
-  );
   assert.throws(
     () =>
       buildCanonicalRequestHeaders({
         ...common,
-        accountId: `a${exactAccount}`,
+        accountId: `a${oversizedAccount}`,
         nonce: "account-limit-plus-one",
       }),
     /exceeds 36864 UTF-8 bytes/u,
@@ -145,6 +175,12 @@ test("canonical request signing: enforces the V1 method limit", () => {
       }),
     /method exceeds 32 UTF-8 bytes/u,
   );
+  for (const method of ["", "GET POST", "GÉT", "GET\n"]) {
+    assert.throws(
+      () => canonicalRequestMessage({ ...common, method }),
+      /non-empty ASCII HTTP token/u,
+    );
+  }
 });
 
 test("canonical request signing: enforces the V1 path limit", () => {
@@ -163,6 +199,39 @@ test("canonical request signing: enforces the V1 path limit", () => {
       }),
     /path exceeds 65536 UTF-8 bytes/u,
   );
+  for (const path of [
+    "",
+    "relative",
+    "//evil/x",
+    "///evil/x",
+    "?x=1",
+    "/raw space",
+    "/raw\\slash",
+    "/café",
+    "/x?y",
+    "/x#y",
+    "/x%GG",
+    "/v1/../admin",
+    "/v1/%2e%2E/admin",
+  ]) {
+    assert.throws(
+      () => canonicalRequestMessage({ ...common, path }),
+      /exact root-relative ASCII path/u,
+    );
+  }
+});
+
+test("canonical request signing: rejects path spellings WHATWG URL would rewrite", () => {
+  for (const [path, rewritten] of [
+    ["/v1/../admin", "/admin"],
+    ["/v1/%2e%2E/admin", "/admin"],
+  ]) {
+    assert.equal(new URL(path, "https://node.test").pathname, rewritten);
+    assert.throws(
+      () => canonicalRequestMessage({ method: "GET", path }),
+      /exact root-relative ASCII path/u,
+    );
+  }
 });
 
 test("canonical request signing: requires a canonical u64-compatible timestamp", () => {
@@ -199,13 +268,79 @@ test("canonical JSON requests do not normalize non-canonical timestamps", async 
   );
 });
 
+test("canonical JSON requests enforce the prepared wire-query byte cap", async () => {
+  const rawQuery = `x=${"é".repeat(32_767)}`;
+  assert.equal(Buffer.byteLength(rawQuery, "utf8"), 65_536);
+  assert.doesNotThrow(() => canonicalQueryString(rawQuery));
+
+  await assert.rejects(
+    buildCanonicalJsonRequest({
+      accountId: "alice@universal",
+      networkId: TEST_NETWORK_ID,
+      method: "GET",
+      path: "/v1/test",
+      query: rawQuery,
+      body: {},
+      privateKey: Buffer.alloc(32, 7),
+      timestampMs: 1,
+      nonce: "prepared-query-cap",
+    }),
+    /exceeds 65536 raw UTF-8 bytes/u,
+  );
+});
+
+test("canonical JSON requests reject absolute paths before WHATWG normalization", async () => {
+  for (const path of [
+    "https://node.test/v1/../admin",
+    "https://node.test/v1/%2e%2e/admin",
+    "https://node.test/v1/a b",
+  ]) {
+    await assert.rejects(
+      buildCanonicalJsonRequest({
+        accountId: "alice@universal",
+        networkId: TEST_NETWORK_ID,
+        method: "GET",
+        path,
+        baseUrl: "https://node.test",
+        body: {},
+        privateKey: Buffer.alloc(32, 7),
+        timestampMs: 1,
+        nonce: "absolute-path-rejected",
+      }),
+      /path must be root-relative/u,
+      path,
+    );
+  }
+});
+
+test("canonical header builders enforce the prepared wire-query byte cap", () => {
+  const rawQuery = `x=${"é".repeat(32_767)}`;
+  assert.equal(Buffer.byteLength(rawQuery, "utf8"), 65_536);
+  assert.doesNotThrow(() => canonicalQueryString(rawQuery));
+
+  assert.throws(
+    () =>
+      buildCanonicalRequestHeaders({
+        accountId: "alice@universal",
+        networkId: TEST_NETWORK_ID,
+        method: "GET",
+        path: "/v1/test",
+        query: rawQuery,
+        privateKey: Buffer.alloc(32, 7),
+        timestampMs: 1,
+        nonce: "prepared-header-query-cap",
+      }),
+    /exceeds 65536 raw UTF-8 bytes/u,
+  );
+});
+
 test("canonical request signing: headers include a verifiable signature", () => {
   const { privateKey, publicKey } = deterministicKeyPair(7);
   const accountAddress = AccountAddress.fromAccount({ publicKey });
   const accountId = accountAddress.toI105();
   const accountAlias = "alice-1@wonderland";
   const body = Buffer.from('{"foo":1}');
-  const path = `/v1/accounts/${accountId}/assets`;
+  const path = `/v1/accounts/${encodeURIComponent(accountId)}/assets`;
   const timestampMs = 1_717_171_717_000;
   const nonce = "deterministic-nonce";
   const message = canonicalRequestSignatureMessage({
@@ -448,6 +583,38 @@ test("canonical request signing: JSON helper signs the exact request body with c
   });
   const signature = Buffer.from(request.headers["X-Iroha-Signature"], "base64");
   assert.equal(verifyEd25519(message, signature, publicKey), true);
+});
+
+test("canonical request signing: callback signatures are bounded canonical bytes", async () => {
+  const common = {
+    accountId: "operator@paynet",
+    networkId: TEST_NETWORK_ID,
+    method: "POST",
+    path: "/v1/test",
+    body: {},
+    timestampMs: 1_717_171_717_007,
+    nonce: "callback-signature-bounds",
+  };
+  const exact = Buffer.alloc(CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1, 1);
+  const accepted = await buildCanonicalJsonRequest({ ...common, sign: () => exact });
+  assert.equal(
+    Buffer.from(accepted.headers["X-Iroha-Signature"], "base64").length,
+    CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1,
+  );
+
+  for (const signature of [
+    Buffer.alloc(0),
+    Buffer.alloc(64),
+    Buffer.alloc(CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 + 1, 1),
+    "AQ",
+    " AQ==",
+    {},
+  ]) {
+    await assert.rejects(
+      buildCanonicalJsonRequest({ ...common, sign: () => signature }),
+      /signature|padded standard-base64/u,
+    );
+  }
 });
 
 test("canonical request signing: JSON helper includes reverse-proxy base paths", async () => {

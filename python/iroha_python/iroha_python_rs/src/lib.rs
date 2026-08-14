@@ -10,23 +10,12 @@ pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
 mod sorafs_orderbook_submission;
 mod zk_vk_draft;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use blake3::hash as blake3_hash;
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     time::Duration,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    convert::{TryFrom, TryInto},
-    fs::{self, File},
-    io::{Read, Seek, SeekFrom},
-    net::IpAddr,
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use blake3::hash as blake3_hash;
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
@@ -231,6 +220,17 @@ use sorafs_orchestrator::{
         EvictionStats, PromotionStats, QosConfig, QosStats, ReliabilityTuning, TaikaiCacheConfig,
         TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
     },
+};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::{TryFrom, TryInto},
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
+    net::IpAddr,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Runtime;
 use url::{Host, Url};
@@ -5690,7 +5690,7 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
     use ivm::bn254_vec::{self, FieldElem};
@@ -5701,8 +5701,8 @@ mod tests {
         types::{PyBytes, PyDict, PyList},
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
+    use std::fs;
     use tempfile::tempdir;
-    use super::*;
     const SAMPLE_RWA_ID: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
     fn ensure_python() {
@@ -5740,13 +5740,13 @@ mod tests {
         ensure_python();
         assert!(
             validate_sorafs_orderbook_owner_account_py(
-                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]
+                &[0x45; sorafs_manifest::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]
             )
             .is_ok()
         );
         assert!(
             validate_sorafs_orderbook_owner_account_py(
-                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
+                &[0x45; sorafs_manifest::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
             )
             .is_err()
         );

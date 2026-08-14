@@ -14,6 +14,11 @@ from pytests.scripts.sumeragi_v2_multilane_models_test import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_nested_git_fixture_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+
+
 def write_reviewed_rust_fixture(
     tmp_path: Path,
     files: dict[str, str],
@@ -296,7 +301,12 @@ def test_reviewed_rust_source_rejects_hardlink_provider_alias(
     first = root / "src/first.rs"
     first.write_text("fn aliased_provider() {}\n", encoding="utf-8")
     os.link(first, root / "src/second.rs")
+    outer_index = tmp_path / "outer.index"
+    outer_index.write_bytes(b"outer-index-sentinel")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(outer_index))
     initialize_git_fixture(root)
+    assert outer_index.read_bytes() == b"outer-index-sentinel"
+    monkeypatch.delenv("GIT_INDEX_FILE")
     monkeypatch.setattr(
         helper,
         "_REVIEWED_RUST_INCLUDE_MANIFESTS",

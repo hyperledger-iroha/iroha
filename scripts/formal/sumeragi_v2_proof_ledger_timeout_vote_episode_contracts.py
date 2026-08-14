@@ -120,6 +120,13 @@ def _timeout_vote_episode_source_fidelity_errors(
         (),
         "queue-local fair-ingress barrier verdict",
     )
+    shared_selector = bind_item(
+        "ingress::select_fair_v2_ingress_candidate",
+        "ingress",
+        "select_fair_v2_ingress_candidate",
+        (),
+        "shared strict-before-dependency fair-ingress selector",
+    )
     for name, description in (
         (
             "try_recv_if_checked",
@@ -253,6 +260,7 @@ def _timeout_vote_episode_source_fidelity_errors(
     expected_item_keys = {
         "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner",
         "ingress::fair_v2_ingress_queue_gate_verdict",
+        "ingress::select_fair_v2_ingress_candidate",
         "ingress::try_recv_if_checked",
         "ingress::try_recv_if_checked_retiring_obsolete",
         "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
@@ -423,7 +431,14 @@ let verdict = fair_v2_ingress_queue_gate_verdict(
     &leader_wire_projection,
     barrier_bypass,
 );
-(verdict != FairV2IngressQueueGateVerdict::Blocked).then(|| {
+(
+    entry.admission_ordinal,
+    Arc::clone(&entry.inbound),
+    verdict,
+    entry.leader_wire_token.as_ref().is_some_and(|token| {
+        obsolete_leader_wire_tokens.contains(token)
+    }),
+)
 """,
         "classified selector must delegate every candidate to the sealed queue-local verdict",
         errors,
@@ -432,12 +447,36 @@ let verdict = fair_v2_ingress_queue_gate_verdict(
         ingress_path,
         selector,
         """
-if selected.is_none() {
-    'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
-        for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-            if *dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
+let selected = select_fair_v2_ingress_candidate(
+    &candidates,
+    |(admission_ordinal, _, gate, obsolete)| (*admission_ordinal, *gate, *obsolete),
+    |(_, inbound, _, _)| predicate(inbound.as_ref()),
+);
 """,
         "barrier dependencies must run only after ordinary candidates and still execute the downstream predicate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        shared_selector,
+        """
+for dependency_pass in [false, true] {
+    for (source_index, source_candidates) in candidates.iter().enumerate() {
+        for candidate in source_candidates {
+            let (ordinal, gate, obsolete) = projection(candidate);
+            let dependency = gate == FairV2IngressQueueGateVerdict::Dependency;
+            if gate == FairV2IngressQueueGateVerdict::Blocked || dependency != dependency_pass {
+                continue;
+            }
+            if obsolete || predicate(candidate) {
+                let disposition = if obsolete {
+                    FairV2IngressDequeueDisposition::RetireObsolete
+                } else {
+                    FairV2IngressDequeueDisposition::Admit
+                };
+                return Some((source_index, ordinal, disposition));
+""",
+        "shared TimeoutVote selector must preserve strict-before-dependency, Blocked exclusion, downstream predicate, and exact disposition",
         errors,
     )
     if selector is not None:
@@ -543,7 +582,7 @@ if response_backpressured {
             &mut executor,
             &mut services,
             &mut lane_work,
-            output_guard.as_ref(),
+            &output_guard,
             kura.as_ref(),
             &common_config.key_pair,
             block_sync_server
@@ -561,7 +600,7 @@ if response_backpressured {
         &mut executor,
         &mut services,
         &mut lane_work,
-        output_guard.as_ref(),
+        &output_guard,
         kura.as_ref(),
         &common_config.key_pair,
         block_sync_server
@@ -589,7 +628,7 @@ if !recovering_interrupted_tip {
         &mut executor,
         &mut services,
         &mut lane_work,
-        output_guard.as_ref(),
+        &output_guard,
         kura.as_ref(),
         &common_config.key_pair,
         block_sync_server
@@ -656,7 +695,7 @@ service_certified_serve_barrier_liveness_turn(
                 &mut executor,
                 &mut services,
                 &mut lane_work,
-                output_guard.as_ref(),
+                &output_guard,
                 kura.as_ref(),
                 &common_config.key_pair,
                 block_sync_server

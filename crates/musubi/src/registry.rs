@@ -3998,11 +3998,6 @@ private_key = "{}"
     #[test]
     fn compact_release_reconstruction_matches_the_production_torii_body() {
         let (request, publisher_key, _, _) = publication_fixture();
-        let signing = signing_client_at(
-            &"http://127.0.0.1:9/".parse().expect("loopback URL"),
-            &publisher_key,
-            request.network_id(),
-        );
         let mut builder = TransactionBuilder::new(
             request.network_id(),
             request.publisher.clone(),
@@ -4017,8 +4012,8 @@ private_key = "{}"
         let reconstructed = envelope
             .reconstruct_signed_transaction(&request)
             .expect("reconstructed exact release transaction");
-        let submitted = signing.client.prepare_transaction_payload(&signed);
-        let replayed = signing.client.prepare_transaction_payload(&reconstructed);
+        let submitted = Client::prepare_transaction_payload(&signed);
+        let replayed = Client::prepare_transaction_payload(&reconstructed);
         assert_eq!(replayed.hash(), submitted.hash());
         assert_eq!(replayed.as_bytes(), submitted.as_bytes());
     }

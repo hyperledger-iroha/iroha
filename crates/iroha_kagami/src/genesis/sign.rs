@@ -2295,7 +2295,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let published = fs::read(&identity_path).expect("read deployment identity");
         publish_deployment_identity(&identity_path, &expected_hash)
             .expect("same deployment identity must be idempotent");
-        publish_deployment_identity(&identity_path, &different_hash)
+        let _error = publish_deployment_identity(&identity_path, &different_hash)
             .expect_err("different deployment identity must not replace the trust root");
         assert_eq!(
             fs::read(&identity_path).expect("reread deployment identity"),

@@ -1,0 +1,12 @@
+
+            seiyaku Demo {
+                kotoage fn arm() authorize("ArmTrigger") {}
+                kotoage fn run() authorize("RunTrigger") {
+                    let _ev = context::trigger_event();
+                }
+
+                trigger wake -> callee::run {
+                    on time pre_commit;
+                }
+            }
+            

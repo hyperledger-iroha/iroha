@@ -1,4 +1,9 @@
 //! Iroha Connect SDK helpers: key derivation, AAD, sealing/opening frames.
+use crate::connect::{
+    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints,
+    Dir, EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
+    decode_connect_envelope_framed, encode_connect_envelope_framed,
+};
 use hkdf::Hkdf;
 use iroha_crypto::{
     PublicKey, SessionKey,
@@ -12,11 +17,6 @@ use iroha_crypto::{
 use iroha_data_model::NetworkId;
 use norito::codec::Encode;
 use sha2::{Digest, Sha256};
-use crate::connect::{
-    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints,
-    Dir, EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
-    decode_connect_envelope_framed, encode_connect_envelope_framed,
-};
 /// Derive the canonical Connect session identifier for one exact deployment.
 #[must_use]
 pub fn derive_session_id(network_id: &NetworkId, app_pk: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
@@ -299,30 +299,45 @@ pub fn open_envelope_current(
 pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
     open_envelope_current(key, frame)
 }
-/// Deterministic Norito-encoded BLAKE2b-256 hash of permissions.
+
+fn encode_connect_hash_input<T: Encode>(value: &T) -> Vec<u8> {
+    let _flags = norito::core::DecodeFlagsGuard::enter(crate::connect::CONNECT_LAYOUT_FLAGS);
+    let (payload, flags) = norito::codec::encode_with_header_flags(value);
+    assert_eq!(
+        flags,
+        crate::connect::CONNECT_LAYOUT_FLAGS,
+        "Connect signature-domain values must use the zero-flag wire layout"
+    );
+    payload
+}
+
+/// Deterministic BLAKE2b-256 hash of permissions encoded with Connect's pinned
+/// zero-flag Norito layout.
 pub fn hash_permissions_current(perms: &PermissionsV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
-    let buf = perms.encode();
+    let buf = encode_connect_hash_input(perms);
     let mut out = [0u8; 32];
     let mut b2 = Blake2bVar::new(32).expect("ok");
     b2.update(&buf);
     b2.finalize_variable(&mut out).expect("ok");
     out
 }
-/// Deterministic Norito-encoded BLAKE2b-256 hash of sign-in proof.
+/// Deterministic BLAKE2b-256 hash of a sign-in proof encoded with Connect's
+/// pinned zero-flag Norito layout.
 pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
-    let buf = proof.encode();
+    let buf = encode_connect_hash_input(proof);
     let mut out = [0u8; 32];
     let mut b2 = Blake2bVar::new(32).expect("ok");
     b2.update(&buf);
     b2.finalize_variable(&mut out).expect("ok");
     out
 }
-/// Deterministic Norito-encoded BLAKE2b-256 hash of session constraints.
+/// Deterministic BLAKE2b-256 hash of session constraints encoded with
+/// Connect's pinned zero-flag Norito layout.
 #[must_use]
 pub fn hash_constraints_current(constraints: &Constraints) -> [u8; 32] {
-    let buf = constraints.encode();
+    let buf = encode_connect_hash_input(constraints);
     let mut out = [0u8; 32];
     let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
     b2.update(&buf);
@@ -450,6 +465,26 @@ pub fn encrypt_reject_current(
     });
     seal_envelope_current(key, sid, dir, seq, payload)
 }
+
+#[cfg(test)]
+fn parse_canonical_network_id_literal(literal: &str) -> NetworkId {
+    let body = norito::literal::parse("hash", literal)
+        .expect("fixture NetworkId must be a checksummed hash literal");
+    assert!(
+        !body.bytes().any(|byte| byte.is_ascii_lowercase()),
+        "fixture NetworkId hash body must use uppercase hexadecimal"
+    );
+    assert_eq!(
+        norito::literal::format("hash", body),
+        literal,
+        "fixture NetworkId must use the exact canonical checksum rendering"
+    );
+    let genesis_hash = body
+        .parse::<iroha_crypto::Hash>()
+        .expect("fixture NetworkId must contain a valid genesis hash");
+    NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(genesis_hash))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,12 +596,11 @@ mod tests {
             "../../../fixtures/connect/session_vectors.json"
         ))
         .expect("connect session vectors parse");
-        let network_id: NetworkId = fixture
+        let network_id_literal = fixture
             .get("network_id")
             .and_then(norito::json::Value::as_str)
-            .expect("network_id")
-            .parse()
-            .expect("canonical fixture NetworkId");
+            .expect("network_id");
+        let network_id = parse_canonical_network_id_literal(network_id_literal);
         assert_eq!(
             hex::encode(network_id.as_bytes()),
             fixture
@@ -656,6 +690,7 @@ mod approve_preimage_tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, block::BlockHeader};
+
     fn network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
@@ -680,12 +715,11 @@ mod approve_preimage_tests {
             )
             .unwrap_or_else(|_| panic!("invalid {field}"))
         };
-        let network_id: NetworkId = fixture
+        let network_id_literal = fixture
             .get("network_id")
             .and_then(norito::json::Value::as_str)
-            .expect("network_id")
-            .parse()
-            .expect("canonical fixture NetworkId");
+            .expect("network_id");
+        let network_id = parse_canonical_network_id_literal(network_id_literal);
         let constraints = Constraints { network_id };
         assert_eq!(
             hex::encode(hash_constraints_current(&constraints)),
@@ -736,7 +770,7 @@ mod approve_preimage_tests {
         )
         .expect("fixture approval keypair");
         assert_eq!(
-            hex::encode(key_pair.public_key().payload()),
+            hex::encode(key_pair.public_key().to_bytes().1),
             approval
                 .get("account_public_key_hex")
                 .and_then(norito::json::Value::as_str)

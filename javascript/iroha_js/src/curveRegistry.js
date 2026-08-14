@@ -1,5 +1,7 @@
 "use strict";
 
+import { ED25519_ALGORITHM, JS_TYPE_STRING } from "./commonLiterals.js";
+
 export const CurveFeature = Object.freeze({
   NONE: null,
   ML_DSA: "ml-dsa",
@@ -26,8 +28,8 @@ export const CURVE_REGISTRY = Object.freeze([
   {
     id: CurveId.ED25519,
     feature: CurveFeature.NONE,
-    algorithm: "ed25519",
-    aliases: ["ed25519", "ed"],
+    algorithm: ED25519_ALGORITHM,
+    aliases: [ED25519_ALGORITHM, "ed"],
     publicKeyLength: 32,
     publicKeyMulticodec: 0xed,
   },
@@ -155,7 +157,7 @@ export function getCurveEntryById(curveId) {
 }
 
 export function getCurveEntryByAlgorithm(algorithm) {
-  if (typeof algorithm !== "string") {
+  if (typeof algorithm !== JS_TYPE_STRING) {
     return null;
   }
   if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {

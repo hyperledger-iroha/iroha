@@ -25,12 +25,16 @@
 //! the four ordinal-bound challenges is derived.  In a random-oracle fork,
 //! two challenge vectors differ in at least one coordinate.  There
 //! `0 < |d| < 2^32 < q_i`, so `d` is invertible in every prime RNS limb.  The
-//! same range-bound commitment appears in all four rounds.  Computational
-//! binding first gives `z_j-z'_j = d*w` in the T256 scalar field; the explicit
-//! integer bounds below make that equality lift uniquely to `Z`.  Subtracting
-//! the RNS equations and cancelling `d` then gives the exact claimed relation
-//! `A*w = u` in every limb.  Guessing all four challenges has probability
-//! exactly `2^-128`; zero is deliberately one of the `2^32` challenges.
+//! same range-bound commitment appears in all four rounds.  Conditional on an
+//! external-commitment argument of knowledge extracting the bounded opening,
+//! full-basis multi-representation binding gives `z_j-z'_j = d*w` in the T256
+//! scalar field; the explicit integer bounds below make that equality lift
+//! uniquely to `Z`.  Subtracting the RNS equations and cancelling `d` then
+//! gives the exact claimed relation `A*w = u` in every limb.  In the ideal
+//! model where the four coordinates are jointly uniform, guessing all four
+//! challenges has probability exactly `2^-128`; zero is deliberately one of
+//! the `2^32` challenges.  The extraction, binding, and composite-ROM steps
+//! remain independent false-gated obligations below.
 //!
 //! The Fiat--Shamir-with-aborts distribution uses a fixed common box, not an
 //! emitted shifted box.  Let `S=(2^32-1)*2`, `M=S*2^24`, and `B=M-S`.  Sample
@@ -44,11 +48,12 @@
 //! The retry count is geometric with a witness-independent parameter and is
 //! independent of the final accepted response.
 //!
-//! A ROM simulator samples `c_j`, `z_j`, and `rho_j`, reconstructs the two
-//! first messages with the subtraction equations above, and programs the
-//! challenge-vector query.  Its distribution is exact once the external
-//! membership proof is simulated.  The integer-only sampler below removes
-//! modulo bias using the standard `2^128 mod width` rejection threshold.
+//! A candidate ROM simulator samples `c_j`, `z_j`, and `rho_j` and reconstructs
+//! the two first messages with the subtraction equations above.  Its
+//! distribution still requires simulation of the external membership proof
+//! and a proof of the composite master-seed plus four-coordinate programming
+//! conditions.  The integer-only sampler below removes modulo bias using the
+//! standard `2^128 mod width` rejection threshold.
 //!
 //! This is still not a release proof.  The native T256 generalized-
 //! Bulletproof backend, its pinned generator basis, and exact chunked
@@ -70,9 +75,7 @@ use super::{
     direct_collective_eval_ceremony::{
         ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectCeremonyRoundV1,
     },
-    direct_rkg_ephemeral_membership::{
-        VerifiedRkgEphemeralMembershipSourceV1, ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-    },
+    direct_rkg_ephemeral_membership::ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
     manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
@@ -84,8 +87,23 @@ use crate::vega::{
 use core::convert::Infallible;
 #[path = "active_exact_binding/direct_common_a_v1.rs"]
 mod direct_common_a_v1;
+#[path = "active_exact_binding/direct_galois_target_a_v1.rs"]
+mod direct_galois_target_a_v1;
 #[path = "active_exact_binding/direct_relation_wire_v1.rs"]
 mod direct_relation_wire_v1;
+#[path = "active_exact_binding/direct_rkg_one_creator_adapter_v1.rs"]
+mod direct_rkg_one_creator_adapter_v1;
+pub(in crate::vega::zk_ams::mkhe) use direct_relation_wire_v1::{
+    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, PreparedDirectRkgOneStatementCoreV1,
+    RkgH0ObjectRoleV1, RkgH1ObjectRoleV1, SealedDirectRkgOneProofOwnerV1,
+    seal_direct_rkg_one_proof_owner_v1,
+};
+pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_creator_adapter_v1::{
+    CompletedDirectRkgOneCreatorV1, DirectRkgOneCreatorH0ReadyV1, DirectRkgOneCreatorH0ReplayV1,
+    DirectRkgOneCreatorH1ReadyV1, DirectRkgOneCreatorH1ReplayV1, FinalizedDirectRkgOneCapabilityV1,
+    PreparedDirectRkgOneCreatorPermitV1, prepare_direct_rkg_one_creator_h0_v1,
+    prepare_direct_rkg_one_statement_permit_v1,
+};
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const MAX_RELATION_WITNESSES_V1: usize = 6;
 const MAX_BOUND_ONE_WITNESSES_V1: usize = 2;
@@ -206,7 +224,7 @@ const UNCHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1: usize = DIRECT_BP_SIMULTANEO
 const CHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1: usize =
     DIRECT_BP_SIMULTANEOUS_SCALAR_VECTORS_V1 * BOUND_TWO_PADDED_GATES_V1 * T256_SCALAR_BYTES_V1;
 const GOVERNED_WORKSPACE_CEILING_BYTES_V1: usize = 160 * 1024 * 1024;
-const BLOCKER_T256_MEMBERSHIP_BACKEND_V1: u16 = 1 << 0;
+const BLOCKER_T256_MEMBERSHIP_SECURITY_V1: u16 = 1 << 0;
 const BLOCKER_GENERATOR_BASIS_KAT_V1: u16 = 1 << 1;
 const BLOCKER_CANONICAL_WIRE_V1: u16 = 1 << 2;
 const BLOCKER_WORKSPACE_LEDGER_V1: u16 = 1 << 3;
@@ -214,7 +232,7 @@ const BLOCKER_SAMPLER_RUNTIME_INTEGRATION_V1: u16 = 1 << 4;
 const BLOCKER_PERSISTENT_GRAPH_RUNTIME_V1: u16 = 1 << 5;
 const BLOCKER_SPLIT_DECRYPTION_WIDE_RELATION_V1: u16 = 1 << 6;
 const BLOCKER_RELEASE_KAT_V1: u16 = 1 << 7;
-const ALL_RELEASE_BLOCKERS_V1: u16 = BLOCKER_T256_MEMBERSHIP_BACKEND_V1
+const ALL_RELEASE_BLOCKERS_V1: u16 = BLOCKER_T256_MEMBERSHIP_SECURITY_V1
     | BLOCKER_GENERATOR_BASIS_KAT_V1
     | BLOCKER_CANONICAL_WIRE_V1
     | BLOCKER_WORKSPACE_LEDGER_V1
@@ -248,7 +266,7 @@ const _: () = {
     assert!(RESPONSE_COEFFICIENT_BOUND_V1 == 144_115_179_452_366_850);
     assert!(MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 == 288_230_367_494_668_290);
     assert!(RESPONSE_COEFFICIENT_BOUND_V1 < i64::MAX);
-    assert!(MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 < (1_i64 << 59));
+    assert!(MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 < (1_i64 << 58));
     assert!(RESPONSE_COEFFICIENT_BOUND_V1 < ((MINIMUM_RELEASE_RNS_MODULUS_V1 - 1) / 2) as i64);
     assert!(WHOLE_ATTEMPT_RESPONSE_COORDINATES_V1 == 3 * (1 << 20));
     assert!(RESPONSE_PAYLOAD_BYTES_V1 == 25_165_824);
@@ -974,12 +992,12 @@ impl VerifiedPersistentWitnessBindingSetV1 {
                 self,
                 context,
                 party_index,
-                binding.record_index,
             )?;
         if binding.security_certificate_digest != self.security_certificate_digest
             || binding.generator_basis_digest != self.generator_basis_digests[party_index]
             || binding.identity_digest == self.identity_digests[party_index]
             || binding.commitment_set_digest == self.commitment_set_digests[party_index]
+            || binding.record_index != expected_context.record_index()
             || binding.source_context_digest != context.digest()
             || binding.source_context_digest != expected_context.direct_context_digest()
             || binding.source_statement_digest != expected_context.statement_digest()
@@ -1182,11 +1200,8 @@ impl PersistentDirectRelationUseSelectorV1 {
         Ok(())
     }
 }
-/// Mint the only production RKG-round-one selector from exact CPK authority.
-///
-/// Sibling ceremony code supplies provenance-bearing roster and binding
-/// values; neither a raw common-`a` digest nor the opaque authority leaves
-/// this module.
+/// Legacy selector wrapper retained only for verifier-side compatibility tests.
+#[cfg(test)]
 pub(super) fn mint_rkg_round_one_selector_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     bindings: &VerifiedPersistentWitnessBindingSetV1,
@@ -1200,6 +1215,27 @@ pub(super) fn mint_rkg_round_one_selector_v1(
         bindings,
         context,
         prior_round_digest,
+        contribution_statement_digest,
+        proof_commitment_transcript_digest,
+    )
+}
+/// Mint the only production Galois selector from exact CPK authority.
+///
+/// The target-`a` seed, schedule coordinates, and prior-round digest are
+/// inherited from the reconstructed ceremony context. Only the two
+/// party-local statement digests remain caller inputs, and no derived digest
+/// or authority object leaves the private target-`a` module.
+pub(super) fn mint_galois_selector_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    bindings: &VerifiedPersistentWitnessBindingSetV1,
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    contribution_statement_digest: [u8; 32],
+    proof_commitment_transcript_digest: [u8; 32],
+) -> Result<PersistentDirectRelationUseSelectorV1, ZkAmsMkheErrorV1> {
+    direct_galois_target_a_v1::mint_galois_selector_v1(
+        roster,
+        bindings,
+        context,
         contribution_statement_digest,
         proof_commitment_transcript_digest,
     )
@@ -1427,59 +1463,6 @@ pub(super) fn mint_collective_secret_binding_from_verified_cpk_v1(
             membership_proof_digest: source.membership_proof_digest(),
             verifier_transcript_digest: source.verifier_transcript_digest(),
             source_verification_digest: source.relation_verification_digest(),
-        },
-    )
-}
-/// Mint one move-only RKG-ephemeral binding from exact verifier authority.
-///
-/// Security-certificate and CPK-share provenance are inherited from the
-/// opaque collective-secret binding set. The caller cannot supply either
-/// digest, and the consumed membership source must match the complete direct
-/// context, party, digit, nonzero record, and secret-lineage identity.
-pub(super) fn mint_rkg_ephemeral_binding_from_verified_membership_v1(
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    bindings: &VerifiedPersistentWitnessBindingSetV1,
-    direct_context: &ZkAmsMkheDirectCeremonyContextV1,
-    party_index: usize,
-    record_index: u32,
-    source: VerifiedRkgEphemeralMembershipSourceV1,
-) -> Result<VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
-    roster.validate()?;
-    bindings.validate_for_consumer(roster, PersistentWitnessConsumerV1::RkgRoundOne)?;
-    direct_context.validate_rkg_ephemeral_membership_axes(roster, bindings)?;
-    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 || record_index == 0 {
-        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-    }
-    let expected_context =
-        ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
-            roster,
-            bindings,
-            direct_context,
-            party_index,
-            record_index,
-        )?;
-    source.validate_against(expected_context)?;
-    let source_context_digest = expected_context.direct_context_digest();
-    let source_statement_digest = expected_context.statement_digest();
-    let commitment_set_digest =
-        persistent_commitment_set_digest(source.generator_basis_digest(), source.commitments())?;
-    VerifiedPersistentWitnessBindingV1::from_verified_membership(
-        roster,
-        bindings.security_certificate_digest,
-        bindings.cpk_transcript_digest,
-        party_index,
-        bindings.cpk_share_digests[party_index],
-        record_index,
-        ExactMembershipVerificationReceiptV1 {
-            role: PersistentWitnessRoleV1::RkgEphemeral,
-            source_context_digest,
-            source_statement_digest,
-            generator_basis_digest: source.generator_basis_digest(),
-            commitments: *source.commitments(),
-            commitment_set_digest,
-            membership_proof_digest: source.membership_proof_digest(),
-            verifier_transcript_digest: source.verifier_transcript_digest(),
-            source_verification_digest: source.source_verification_digest(),
         },
     )
 }
@@ -1833,7 +1816,6 @@ struct ExactBindingAuditV1 {
     unchunked_scalar_vector_lower_bound_bytes: u64,
     chunked_scalar_vector_lower_bound_bytes: u64,
     governed_workspace_ceiling_bytes: u64,
-    candidate_membership_union_soundness_bits: u16,
     exact_common_box_hiding_certified: bool,
     retry_timing_distribution_witness_independent: bool,
     integer_sampler_unbiased: bool,
@@ -1843,6 +1825,12 @@ struct ExactBindingAuditV1 {
     persistent_graph_specified: bool,
     t256_membership_backend_implemented: bool,
     generator_basis_kat_pinned: bool,
+    external_commitment_provenance_certified: bool,
+    full_basis_mrep_crs_certified: bool,
+    membership_argument_of_knowledge_certified: bool,
+    membership_zero_knowledge_certified: bool,
+    composite_rom_forking_certified: bool,
+    full_ceremony_10_336_instance_composition_certified: bool,
     canonical_complete_wire_certified: bool,
     chunked_workspace_certified: bool,
     sampler_wired_to_runtime: bool,
@@ -1858,7 +1846,7 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
     let exact_common_box_hiding_certified = true;
     let retry_timing_distribution_witness_independent = true;
     let integer_sampler_unbiased = true;
-    let signed_t256_lift_certified = MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 < (1_i64 << 59)
+    let signed_t256_lift_certified = MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 < (1_i64 << 58)
         && RESPONSE_COEFFICIENT_BOUND_V1 < ((MINIMUM_RELEASE_RNS_MODULUS_V1 - 1) / 2) as i64;
     let fork_difference_invertible_in_every_rns_limb = profile
         .moduli
@@ -1872,6 +1860,24 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
     // these two facts alone cannot open an operational path.
     let t256_membership_backend_implemented = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 != [0; 32];
     let generator_basis_kat_pinned = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 != [0; 32];
+    // The standalone game-based precursor records why these obligations are
+    // necessary. It is neither a proof nor a certificate, so every security
+    // gate stays independently false. In particular, a straight-line AGM
+    // route is not available to a later independent prover that receives an
+    // opaque external commitment without creator-side algebraic provenance.
+    let external_commitment_provenance_certified = false;
+    let full_basis_mrep_crs_certified = false;
+    let membership_argument_of_knowledge_certified = false;
+    let membership_zero_knowledge_certified = false;
+    let composite_rom_forking_certified = false;
+    let full_ceremony_10_336_instance_composition_certified = false;
+    let t256_membership_security_certified = t256_membership_backend_implemented
+        && external_commitment_provenance_certified
+        && full_basis_mrep_crs_certified
+        && membership_argument_of_knowledge_certified
+        && membership_zero_knowledge_certified
+        && composite_rom_forking_certified
+        && full_ceremony_10_336_instance_composition_certified;
     let canonical_complete_wire_certified = false;
     let chunked_workspace_certified = false;
     let sampler_wired_to_runtime = false;
@@ -1881,8 +1887,8 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
     let mut blocker_mask = 0_u16;
     for (complete, blocker) in [
         (
-            t256_membership_backend_implemented,
-            BLOCKER_T256_MEMBERSHIP_BACKEND_V1,
+            t256_membership_security_certified,
+            BLOCKER_T256_MEMBERSHIP_SECURITY_V1,
         ),
         (generator_basis_kat_pinned, BLOCKER_GENERATOR_BASIS_KAT_V1),
         (canonical_complete_wire_certified, BLOCKER_CANONICAL_WIRE_V1),
@@ -1914,6 +1920,12 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         && persistent_graph_specified
         && t256_membership_backend_implemented
         && generator_basis_kat_pinned
+        && external_commitment_provenance_certified
+        && full_basis_mrep_crs_certified
+        && membership_argument_of_knowledge_certified
+        && membership_zero_knowledge_certified
+        && composite_rom_forking_certified
+        && full_ceremony_10_336_instance_composition_certified
         && canonical_complete_wire_certified
         && chunked_workspace_certified
         && sampler_wired_to_runtime
@@ -1968,10 +1980,6 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
             CHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1,
         )?,
         governed_workspace_ceiling_bytes: as_u64(GOVERNED_WORKSPACE_CEILING_BYTES_V1)?,
-        // A 256-bit membership argument composed at most 48 times loses fewer
-        // than six bits by a union bound.  The implemented T256 backend binds
-        // the stated transcript and exact membership relation.
-        candidate_membership_union_soundness_bits: 250,
         exact_common_box_hiding_certified,
         retry_timing_distribution_witness_independent,
         integer_sampler_unbiased,
@@ -1981,6 +1989,12 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         persistent_graph_specified,
         t256_membership_backend_implemented,
         generator_basis_kat_pinned,
+        external_commitment_provenance_certified,
+        full_basis_mrep_crs_certified,
+        membership_argument_of_knowledge_certified,
+        membership_zero_knowledge_certified,
+        composite_rom_forking_certified,
+        full_ceremony_10_336_instance_composition_certified,
         canonical_complete_wire_certified,
         chunked_workspace_certified,
         sampler_wired_to_runtime,
@@ -2002,6 +2016,18 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
 pub(super) struct ZkAmsMkheActiveExactBindingReleaseStateV1 {
     /// Exact open-blocker bit set.
     pub(super) blocker_mask: u16,
+    /// Whether every external commitment has extractor-visible provenance.
+    pub(super) external_commitment_provenance_certified: bool,
+    /// Whether the full T256 basis and its CRS model have a reviewed MRep bound.
+    pub(super) full_basis_mrep_crs_certified: bool,
+    /// Whether the exact external-commitment membership proof is an AoK.
+    pub(super) membership_argument_of_knowledge_certified: bool,
+    /// Whether the exact external-commitment membership proof is ZK.
+    pub(super) membership_zero_knowledge_certified: bool,
+    /// Whether the seed-plus-four-coordinate ROM fork is certified.
+    pub(super) composite_rom_forking_certified: bool,
+    /// Whether the fixed 10,336-proof composition is certified.
+    pub(super) full_ceremony_10_336_instance_composition_certified: bool,
     /// Whether split decryption reuses the exact persistent secret binding.
     pub(super) split_decryption_wide_relation_certified: bool,
     /// Whether every exact-binding obligation has closed together.
@@ -2016,6 +2042,14 @@ pub(super) fn exact_binding_release_state_v1(
     let audit = exact_binding_audit_v1(profile)?;
     Ok(ZkAmsMkheActiveExactBindingReleaseStateV1 {
         blocker_mask: audit.blocker_mask,
+        external_commitment_provenance_certified: audit.external_commitment_provenance_certified,
+        full_basis_mrep_crs_certified: audit.full_basis_mrep_crs_certified,
+        membership_argument_of_knowledge_certified: audit
+            .membership_argument_of_knowledge_certified,
+        membership_zero_knowledge_certified: audit.membership_zero_knowledge_certified,
+        composite_rom_forking_certified: audit.composite_rom_forking_certified,
+        full_ceremony_10_336_instance_composition_certified: audit
+            .full_ceremony_10_336_instance_composition_certified,
         split_decryption_wide_relation_certified: audit.split_decryption_wide_relation_certified,
         release_available: audit.release_available,
         audit_digest: audit.digest,
@@ -2200,11 +2234,6 @@ fn audit_digest(audit: ExactBindingAuditV1) -> [u8; 32] {
         hash.update(&value.to_be_bytes());
     }
     hash.update(&[audit.secret_consumer_mask, audit.ephemeral_consumer_mask]);
-    hash.update(
-        &audit
-            .candidate_membership_union_soundness_bits
-            .to_be_bytes(),
-    );
     hash.update(&[
         audit.exact_common_box_hiding_certified.into(),
         audit.retry_timing_distribution_witness_independent.into(),
@@ -2215,6 +2244,14 @@ fn audit_digest(audit: ExactBindingAuditV1) -> [u8; 32] {
         audit.persistent_graph_specified.into(),
         audit.t256_membership_backend_implemented.into(),
         audit.generator_basis_kat_pinned.into(),
+        audit.external_commitment_provenance_certified.into(),
+        audit.full_basis_mrep_crs_certified.into(),
+        audit.membership_argument_of_knowledge_certified.into(),
+        audit.membership_zero_knowledge_certified.into(),
+        audit.composite_rom_forking_certified.into(),
+        audit
+            .full_ceremony_10_336_instance_composition_certified
+            .into(),
         audit.canonical_complete_wire_certified.into(),
         audit.chunked_workspace_certified.into(),
         audit.sampler_wired_to_runtime.into(),
@@ -2489,6 +2526,11 @@ mod tests {
         assert_eq!(audit.challenge_shift_bound, 8_589_934_590);
         assert_eq!(audit.mask_coefficient_bound, 144_115_188_042_301_440);
         assert_eq!(audit.response_coefficient_bound, 144_115_179_452_366_850);
+        assert_eq!(
+            audit.max_fork_integer_lift_difference,
+            288_230_367_494_668_290
+        );
+        assert!(audit.max_fork_integer_lift_difference < (1_i64 << 58));
         assert_eq!(audit.minimum_rns_modulus, 1_152_921_504_409_190_401);
         assert!(audit.exact_common_box_hiding_certified);
         assert!(audit.retry_timing_distribution_witness_independent);
@@ -2499,10 +2541,22 @@ mod tests {
         assert!(audit.persistent_graph_specified);
         assert!(audit.t256_membership_backend_implemented);
         assert!(audit.generator_basis_kat_pinned);
-        assert_eq!(audit.blocker_mask, ALL_RELEASE_BLOCKERS_V1 & !0b11);
-        assert_eq!(audit.blocker_mask, 0xfc);
+        assert!(!audit.external_commitment_provenance_certified);
+        assert!(!audit.full_basis_mrep_crs_certified);
+        assert!(!audit.membership_argument_of_knowledge_certified);
+        assert!(!audit.membership_zero_knowledge_certified);
+        assert!(!audit.composite_rom_forking_certified);
+        assert!(!audit.full_ceremony_10_336_instance_composition_certified);
+        assert_eq!(
+            audit.blocker_mask,
+            ALL_RELEASE_BLOCKERS_V1 & !BLOCKER_GENERATOR_BASIS_KAT_V1
+        );
+        assert_eq!(audit.blocker_mask, 0xfd);
         assert!(!audit.release_available);
         assert_ne!(audit.digest, [0; 32]);
+        let source = include_str!("active_exact_binding.rs");
+        assert!(!source.contains(concat!("candidate_membership_union_", "soundness_bits")));
+        assert!(!source.contains(concat!("BLOCKER_T256_MEMBERSHIP_", "BACKEND_V1")));
         for forged in [
             ExactBindingAuditV1 {
                 t256_membership_backend_implemented: false,
@@ -2510,6 +2564,30 @@ mod tests {
             },
             ExactBindingAuditV1 {
                 generator_basis_kat_pinned: false,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                external_commitment_provenance_certified: true,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                full_basis_mrep_crs_certified: true,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                membership_argument_of_knowledge_certified: true,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                membership_zero_knowledge_certified: true,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                composite_rom_forking_certified: true,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                full_ceremony_10_336_instance_composition_certified: true,
                 ..audit
             },
             ExactBindingAuditV1 {
@@ -2981,7 +3059,6 @@ mod tests {
                 &set,
                 &direct_context,
                 0,
-                19,
             )
             .unwrap();
         let ephemeral = verified_ephemeral_binding_fixture(
@@ -2990,7 +3067,7 @@ mod tests {
             0,
             shares[0],
             &labels[0],
-            19,
+            25,
             wrapper_context.direct_context_digest(),
             wrapper_context.statement_digest(),
         );
@@ -3039,11 +3116,11 @@ mod tests {
             0,
             shares[0],
             &labels[0],
-            19,
+            25,
             wrapper_context.direct_context_digest(),
             wrapper_context.statement_digest(),
         );
-        altered_record.record_index = 20;
+        altered_record.record_index = 26;
         altered_record.identity_digest = verified_binding_identity_digest(&altered_record).unwrap();
         altered_record.verification_digest =
             verified_binding_verification_digest(&altered_record).unwrap();
@@ -3072,7 +3149,6 @@ mod tests {
                 &set,
                 &other_digit_context,
                 0,
-                19,
             )
             .unwrap();
         let context_specific = verified_ephemeral_binding_fixture(
@@ -3081,7 +3157,7 @@ mod tests {
             0,
             shares[0],
             &labels[0],
-            19,
+            33,
             other_wrapper_context.direct_context_digest(),
             other_wrapper_context.statement_digest(),
         );
@@ -3146,7 +3222,7 @@ mod tests {
             capability.ephemeral_source_statement_digest,
             wrapper_context.statement_digest()
         );
-        assert_eq!(capability.ephemeral_record_index, 19);
+        assert_eq!(capability.ephemeral_record_index, 25);
         assert!(
             direct_common_a_v1::DirectCommonAReplayV1::begin(other_digit_context, &capability,)
                 .is_err()
@@ -3442,6 +3518,12 @@ mod tests {
         assert!(!audit.split_decryption_wide_relation_certified);
         assert!(audit.t256_membership_backend_implemented);
         assert!(audit.generator_basis_kat_pinned);
+        assert!(!audit.external_commitment_provenance_certified);
+        assert!(!audit.full_basis_mrep_crs_certified);
+        assert!(!audit.membership_argument_of_knowledge_certified);
+        assert!(!audit.membership_zero_knowledge_certified);
+        assert!(!audit.composite_rom_forking_certified);
+        assert!(!audit.full_ceremony_10_336_instance_composition_certified);
         assert!(!audit.canonical_complete_wire_certified);
         assert!(!audit.sampler_wired_to_runtime);
         assert!(!audit.persistent_graph_wired_to_runtime);

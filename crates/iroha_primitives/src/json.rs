@@ -6,13 +6,13 @@
 //! decoding rejects alternate lexical spellings instead of normalizing a signed
 //! wire payload.
 use core::str::FromStr;
-use std::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use derive_more::Display;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 use norito::{
     Decode, Encode,
     json::{self, JsonDeserializeOwned, JsonSerialize, Parser, Value},
 };
+use std::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 /// Maximum UTF-8 byte length of one [`Json`] document.
 ///
 /// This fixed V1 protocol bound matches the ledger's default metadata-value
@@ -594,8 +594,9 @@ mod tests {
         let expected = value.get();
         assert_eq!(
             norito::json::to_json_bounded(&value, expected.len())
-                .expect("serialize Json at exact bound"),
-            expected
+                .expect("serialize Json at exact bound")
+                .as_str(),
+            expected.as_str()
         );
         assert_eq!(
             norito::json::to_json_bounded(&value, expected.len() - 1),

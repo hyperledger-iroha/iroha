@@ -67,6 +67,8 @@ use core::{
 use thiserror::Error;
 #[path = "cpk_relation_common_a.rs"]
 mod common_a;
+#[path = "cpk_relation/state_owned_secret_adapter_v1.rs"]
+pub(super) mod state_owned_secret_adapter_v1;
 pub(super) use common_a::{
     ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
     derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,

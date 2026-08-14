@@ -1,17 +1,7 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU32,
-    sync::{
-        Arc, Condvar, Mutex, Weak,
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        mpsc,
-    },
-    thread,
-};
+use super::*;
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    NetworkId,
     events::data::sorafs::SorafsModerationLedgerEvent,
     metadata::Metadata,
     prelude::Json,
@@ -32,8 +22,17 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU32,
+    sync::{
+        Arc, Condvar, Mutex, Weak,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        mpsc,
+    },
+    thread,
+};
 use tempfile::TempDir;
-use super::*;
 const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
 const TRANSACTION_SIGNER_HANDLE: &str = "moderation-hsm-primary";
 const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";

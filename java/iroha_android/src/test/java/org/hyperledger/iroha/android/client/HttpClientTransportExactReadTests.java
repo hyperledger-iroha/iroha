@@ -499,7 +499,7 @@ public final class HttpClientTransportExactReadTests {
 
   private static ToriiCanonicalRequestAuth privacyAuth(final String nonce) {
     return new ToriiCanonicalRequestAuth(
-        "alice",
+        "alice@universal",
         HttpClientTransportExactReadTests::signPrivacyRequest,
         Long.valueOf(1_700_000_000_000L),
         nonce);

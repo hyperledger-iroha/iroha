@@ -5,13 +5,13 @@
 //! change. It is primarily used for byte buffers or other data that is loaded
 //! once and then treated as read‑only for the remainder of the program's
 //! lifetime.
+use crate::ffi;
 use core::{ops::Deref, ptr};
-use std::{boxed::Box, format, io::Write, string::String, vec::Vec};
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize, core as ncore};
-use crate::ffi;
+use std::{boxed::Box, format, io::Write, string::String, vec::Vec};
 struct RealignedSlice {
     ptr: *mut u8,
     layout: std::alloc::Layout,
@@ -1143,17 +1143,17 @@ impl<T: Clone> ToConstVec for [T] {
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, io::Write};
-    use norito::{
-        NoritoDeserialize, NoritoSerialize,
-        codec::{self, Decode, Encode},
-    };
     use super::{
         ConstVec, RealignedSlice, ToConstVec, align_payload_for, decode_const_vec_from_slice,
         decode_const_vec_manual, decode_const_vec_manual_elem, decode_const_vec_manual_unpacked,
         decode_const_vec_realigned, decode_const_vec_recover, decode_streaming_fallback, ncore,
         payload_matches_ignoring_vec_lengths, reencode_and_verify,
     };
+    use norito::{
+        NoritoDeserialize, NoritoSerialize,
+        codec::{self, Decode, Encode},
+    };
+    use std::cell::Cell;
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactBytes(Vec<u8>);

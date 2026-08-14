@@ -8,9 +8,10 @@
 #[cfg(test)]
 use super::field::edwards_to_wei25519;
 use super::field::{
-    HELIOS_GENERATOR_COUNT_V1, SELENE_GENERATOR_COUNT_V1, SecretCycleScalarV1,
-    SecretEncodedScalarV1, encode_secret_field25519_scalar_v1, encode_secret_helioselene_scalar_v1,
-    helios_generators, helios_hash_initializer, selene_generators, selene_hash_initializer,
+    HELIOS_GENERATOR_COUNT_V1, SELENE_GENERATOR_COUNT_V1, SecretCycleCoordinatesV1,
+    SecretCycleScalarV1, SecretEncodedScalarV1, encode_secret_field25519_scalar_v1,
+    encode_secret_helioselene_scalar_v1, helios_generators, helios_hash_initializer,
+    selene_generators, selene_hash_initializer,
 };
 use super::{
     FCMP_LAYER_ONE_LEN_V1, FCMP_LAYER_TWO_LEN_V1, FCMP_MAX_TREE_LAYERS_V1,
@@ -28,7 +29,6 @@ use super::{
     field::{
         Field25519, HeliosPoint, HelioseleneField, SelenePoint, decode_secret_field25519_scalar_v1,
         decode_secret_helioselene_scalar_v1, secret_edwards_to_wei25519_v1,
-        validate_edwards_scalar,
     },
     membership::{
         TranscriptedInput, constrain_input, ed25519_curve, helios_curve, membership_context,
@@ -40,7 +40,10 @@ use super::{
         random_scalar_from_fcmp_rng, selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
-    sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
+    sal::{
+        FcmpSalSecretScalarEncodingV1, generator_t, generator_u, generator_v,
+        prove_fcmp_sal_with_checked_rng_v1,
+    },
     wire::{FCMP_PROOF_WIRE_MAGIC_V1, fcmp_plus_plus_wire_size_v1, ipa_rows},
 };
 use curve25519_dalek::{
@@ -49,7 +52,7 @@ use curve25519_dalek::{
     scalar::Scalar,
     traits::Identity,
 };
-use p256::elliptic_curve::subtle::{Choice, ConstantTimeEq as _};
+use p256::elliptic_curve::subtle::{Choice, ConstantTimeEq as _, ConstantTimeLess as _};
 use rand_core_06::{CryptoRng, RngCore};
 use zeroize::{Zeroize, Zeroizing};
 const MAX_PROVER_SCALAR_ATTEMPTS_V1: usize = 128;
@@ -101,12 +104,15 @@ std::thread_local! {
 }
 /// Clears one prover-owned scalar on success, error, and unwind.
 struct ProverSecretScalarV1<F: ProofScalar>(F);
+#[cfg(test)]
 struct BorrowedProverScalarSlotV1<'a, F: ProofScalar>(&'a mut F);
+#[cfg(test)]
 impl<F: ProofScalar> BorrowedProverScalarSlotV1<'_, F> {
     fn expose_copy(&self) -> F {
         *self.0
     }
 }
+#[cfg(test)]
 impl<F: ProofScalar> Drop for BorrowedProverScalarSlotV1<'_, F> {
     fn drop(&mut self) {
         self.0.clear_secret();
@@ -116,6 +122,10 @@ impl<F: ProofScalar> ProverSecretScalarV1<F> {
     fn copy_from_borrowed(value: &F) -> Self {
         Self(*value)
     }
+    fn negated_owner_v1(&self) -> Self {
+        Self(-self.0)
+    }
+    #[cfg(test)]
     fn take(value: &mut F) -> Self {
         let incoming = BorrowedProverScalarSlotV1(value);
         let owned = Self(incoming.expose_copy());
@@ -174,12 +184,15 @@ fn prover_secret_edwards_scalar_sum_v1(
     ProverSecretCopyValueV1::take(&mut sum)
 }
 struct ProverSecretPointV1<P: ProofPoint>(P);
+#[cfg(test)]
 struct BorrowedProverPointSlotV1<'a, P: ProofPoint>(&'a mut P);
+#[cfg(test)]
 impl<P: ProofPoint> BorrowedProverPointSlotV1<'_, P> {
     fn expose_copy(&self) -> P {
         *self.0
     }
 }
+#[cfg(test)]
 impl<P: ProofPoint> Drop for BorrowedProverPointSlotV1<'_, P> {
     fn drop(&mut self) {
         self.0.clear_secret();
@@ -191,6 +204,7 @@ impl<P: ProofPoint> ProverSecretPointV1<P> {
         point.move_into(&mut owned.0);
         owned
     }
+    #[cfg(test)]
     fn take(value: &mut P) -> Self {
         let incoming = BorrowedProverPointSlotV1(value);
         let owned = Self(incoming.expose_copy());
@@ -292,6 +306,27 @@ fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(
     }
     Ok(Zeroizing::new(values))
 }
+fn push_owned_secret_cycle_scalar_v1<F: ProofScalar + Zeroize>(
+    values: &mut Zeroizing<Vec<F>>,
+    value: SecretCycleScalarV1<F>,
+) -> Result<(), FcmpNativeErrorV1> {
+    let allocation_capacity = values.capacity();
+    let allocation_ptr = values.as_ptr();
+    let preflight = require_preallocated_push(values.len(), allocation_capacity);
+    if let Err(error) = preflight {
+        drop(value);
+        return Err(error);
+    }
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
+    values.push(F::ZERO);
+    let destination = values.len() - 1;
+    value.move_into(&mut values[destination]);
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
+    Ok(())
+}
+#[cfg(test)]
 fn push_secret_scalar_v1<F: ProofScalar + Zeroize>(
     values: &mut Zeroizing<Vec<F>>,
     mut value: F,
@@ -312,9 +347,29 @@ fn push_owned_secret_scalar_v1<F: ProofScalar + Zeroize>(
     }
     debug_assert_eq!(values.capacity(), allocation_capacity);
     debug_assert_eq!(values.as_ptr(), allocation_ptr);
-    values.push(value.0);
-    value.0.clear_secret();
+    // Install a public zero in the already-reserved destination, then swap the
+    // two owned slots. This transfers the secret directly into its final
+    // zeroizing vector owner without exposing a bare Copy value or moving a
+    // field out of the Drop-bearing source owner.
+    values.push(F::ZERO);
+    let destination = values.len() - 1;
+    core::mem::swap(&mut values[destination], &mut value.0);
     drop(value);
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
+    Ok(())
+}
+fn push_borrowed_secret_scalar_v1<F: ProofScalar + Zeroize>(
+    values: &mut Zeroizing<Vec<F>>,
+    value: &F,
+) -> Result<(), FcmpNativeErrorV1> {
+    let allocation_capacity = values.capacity();
+    let allocation_ptr = values.as_ptr();
+    require_preallocated_push(values.len(), allocation_capacity)?;
+    debug_assert_eq!(values.capacity(), allocation_capacity);
+    debug_assert_eq!(values.as_ptr(), allocation_ptr);
+    let value = ProverSecretScalarV1::copy_from_borrowed(value);
+    push_owned_secret_scalar_v1(values, value)?;
     debug_assert_eq!(values.capacity(), allocation_capacity);
     debug_assert_eq!(values.as_ptr(), allocation_ptr);
     Ok(())
@@ -353,15 +408,15 @@ fn prover_secret_key_image_id_v1(
 struct ProverSecretEdwardsCoordinateOwnerV1 {
     // Retain the coordinate tuple until its copied padding has entered the
     // zeroizing prover tape, including every downstream error or unwind.
-    _coordinates: ProverSecretCopyValueV1<(Field25519, Field25519)>,
+    _coordinates: SecretCycleCoordinatesV1<Field25519>,
     padding: ProverSecretCopyValueV1<[Field25519; 2]>,
 }
 fn prover_secret_edwards_coordinate_owner_v1(
     bytes: &[u8; 32],
 ) -> Result<ProverSecretEdwardsCoordinateOwnerV1, FcmpNativeErrorV1> {
-    let coordinates = ProverSecretCopyValueV1::new(secret_edwards_to_wei25519_v1(bytes)?);
-    let padding =
-        ProverSecretCopyValueV1::new([coordinates.expose_ref().0, coordinates.expose_ref().1]);
+    let coordinates = secret_edwards_to_wei25519_v1(bytes)?;
+    let (coordinate_x, coordinate_y) = coordinates.component_refs();
+    let padding = ProverSecretCopyValueV1::new([*coordinate_x, *coordinate_y]);
     Ok(ProverSecretEdwardsCoordinateOwnerV1 {
         _coordinates: coordinates,
         padding,
@@ -570,6 +625,131 @@ impl AdditionalBranch {
         }
     }
 }
+static PROVER_ED25519_SCALAR_MODULUS_LE_V1: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+];
+#[cfg(test)]
+std::thread_local! {
+    static PROVER_SECRET_EDWARDS_CANONICALITY_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static PROVER_SECRET_EDWARDS_WIDE_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+struct ProverSecretEdwardsCanonicalityStateV1 {
+    less: Choice,
+    greater: Choice,
+    byte_less: Choice,
+    byte_greater: Choice,
+    prefix_decided: Choice,
+    prefix_equal: Choice,
+    less_update: Choice,
+    greater_update: Choice,
+}
+impl ProverSecretEdwardsCanonicalityStateV1 {
+    fn new_v1() -> Self {
+        Self {
+            less: Choice::from(0),
+            greater: Choice::from(0),
+            byte_less: Choice::from(0),
+            byte_greater: Choice::from(0),
+            prefix_decided: Choice::from(0),
+            prefix_equal: Choice::from(0),
+            less_update: Choice::from(0),
+            greater_update: Choice::from(0),
+        }
+    }
+    fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
+        self.prefix_decided = self.less | self.greater;
+        self.prefix_equal = !self.prefix_decided;
+        self.byte_less = byte.ct_lt(modulus_byte);
+        self.byte_greater = modulus_byte.ct_lt(byte);
+        self.less_update = self.prefix_equal & self.byte_less;
+        self.greater_update = self.prefix_equal & self.byte_greater;
+        self.less |= self.less_update;
+        self.greater |= self.greater_update;
+    }
+}
+impl Drop for ProverSecretEdwardsCanonicalityStateV1 {
+    fn drop(&mut self) {
+        self.less = Choice::from(0);
+        self.greater = Choice::from(0);
+        self.byte_less = Choice::from(0);
+        self.byte_greater = Choice::from(0);
+        self.prefix_decided = Choice::from(0);
+        self.prefix_equal = Choice::from(0);
+        self.less_update = Choice::from(0);
+        self.greater_update = Choice::from(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.less);
+        let _ = core::hint::black_box(&mut self.greater);
+        let _ = core::hint::black_box(&mut self.byte_less);
+        let _ = core::hint::black_box(&mut self.byte_greater);
+        let _ = core::hint::black_box(&mut self.prefix_decided);
+        let _ = core::hint::black_box(&mut self.prefix_equal);
+        let _ = core::hint::black_box(&mut self.less_update);
+        let _ = core::hint::black_box(&mut self.greater_update);
+        #[cfg(test)]
+        let _ = PROVER_SECRET_EDWARDS_CANONICALITY_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+struct ProverValidatedSecretEdwardsScalarEncodingV1<'a>(&'a [u8; 32]);
+impl<'a> ProverValidatedSecretEdwardsScalarEncodingV1<'a> {
+    fn validate_v1(bytes: &'a [u8; 32]) -> Result<Self, FcmpNativeErrorV1> {
+        let mut canonicality = ProverSecretEdwardsCanonicalityStateV1::new_v1();
+        let mut index = PROVER_ED25519_SCALAR_MODULUS_LE_V1.len();
+        while index != 0 {
+            index -= 1;
+            let byte = &bytes[index];
+            let modulus_byte = &PROVER_ED25519_SCALAR_MODULUS_LE_V1[index];
+            canonicality.observe_byte_v1(byte, modulus_byte);
+        }
+        let is_canonical = bool::from(canonicality.less);
+        drop(canonicality);
+        if !is_canonical {
+            return Err(FcmpNativeErrorV1::ScalarEncoding);
+        }
+        Ok(Self(bytes))
+    }
+    fn into_scalar_owner_v1(self) -> ProverSecretCopyValueV1<Scalar> {
+        let wide = ProverSecretEdwardsWideInputV1::from_borrowed_v1(self.0);
+        let mut scalar = Scalar::from_bytes_mod_order_wide(&wide.0);
+        drop(wide);
+        ProverSecretCopyValueV1::take(&mut scalar)
+    }
+}
+struct ProverSecretEdwardsWideInputV1([u8; 64]);
+impl ProverSecretEdwardsWideInputV1 {
+    fn from_borrowed_v1(bytes: &[u8; 32]) -> Self {
+        let mut wide = Self([0_u8; 64]);
+        wide.0[..32].copy_from_slice(bytes);
+        wide
+    }
+}
+impl Drop for ProverSecretEdwardsWideInputV1 {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = PROVER_SECRET_EDWARDS_WIDE_INPUT_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+fn prover_secret_decode_nonzero_edwards_scalar_v1(
+    bytes: &[u8; 32],
+) -> Result<ProverSecretCopyValueV1<Scalar>, FcmpNativeErrorV1> {
+    let scalar =
+        ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(bytes)?.into_scalar_owner_v1();
+    let is_zero = bool::from(scalar.expose_ref().ct_eq(&Scalar::ZERO));
+    if is_zero {
+        return Err(FcmpNativeErrorV1::ScalarEncoding);
+    }
+    Ok(scalar)
+}
 /// Caller-selected rerandomization witness for one authoritative FCMP++
 /// public input.
 ///
@@ -607,23 +787,32 @@ impl FcmpInputRerandomizationV1 {
         rerandomization_blind: ProverSecretCopyValueV1<[u8; 32]>,
         commitment: ProverSecretCopyValueV1<[u8; 32]>,
     ) -> Result<Self, FcmpNativeErrorV1> {
-        let decode = |bytes: &[u8; 32]| {
-            validate_edwards_scalar(*bytes)?;
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
-                .filter(|scalar| *scalar != Scalar::ZERO)
-                .ok_or(FcmpNativeErrorV1::ScalarEncoding)
+        let mut output_scalar =
+            prover_secret_decode_nonzero_edwards_scalar_v1(output.expose_ref())?;
+        let mut linking_scalar =
+            prover_secret_decode_nonzero_edwards_scalar_v1(linking.expose_ref())?;
+        let mut rerandomization_blind_scalar =
+            prover_secret_decode_nonzero_edwards_scalar_v1(rerandomization_blind.expose_ref())?;
+        let mut commitment_scalar =
+            prover_secret_decode_nonzero_edwards_scalar_v1(commitment.expose_ref())?;
+        let mut rerandomization = Self {
+            output: Scalar::ZERO,
+            linking: Scalar::ZERO,
+            rerandomization_blind: Scalar::ZERO,
+            commitment: Scalar::ZERO,
         };
-        let output_scalar = ProverSecretCopyValueV1::new(decode(output.expose_ref())?);
-        let linking_scalar = ProverSecretCopyValueV1::new(decode(linking.expose_ref())?);
-        let rerandomization_blind_scalar =
-            ProverSecretCopyValueV1::new(decode(rerandomization_blind.expose_ref())?);
-        let commitment_scalar = ProverSecretCopyValueV1::new(decode(commitment.expose_ref())?);
-        Ok(Self {
-            output: output_scalar.expose_copy(),
-            linking: linking_scalar.expose_copy(),
-            rerandomization_blind: rerandomization_blind_scalar.expose_copy(),
-            commitment: commitment_scalar.expose_copy(),
-        })
+        core::mem::swap(&mut rerandomization.output, &mut output_scalar.0);
+        drop(output_scalar);
+        core::mem::swap(&mut rerandomization.linking, &mut linking_scalar.0);
+        drop(linking_scalar);
+        core::mem::swap(
+            &mut rerandomization.rerandomization_blind,
+            &mut rerandomization_blind_scalar.0,
+        );
+        drop(rerandomization_blind_scalar);
+        core::mem::swap(&mut rerandomization.commitment, &mut commitment_scalar.0);
+        drop(commitment_scalar);
+        Ok(rerandomization)
     }
     #[cfg(test)]
     fn duplicate_for_test(&self) -> Self {
@@ -647,9 +836,18 @@ impl Zeroize for FcmpInputRerandomizationV1 {
         self.commitment.zeroize();
     }
 }
+#[cfg(test)]
+std::thread_local! {
+    static FCMP_INPUT_RERANDOMIZATION_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 impl Drop for FcmpInputRerandomizationV1 {
     fn drop(&mut self) {
         self.zeroize();
+        #[cfg(test)]
+        let _ = FCMP_INPUT_RERANDOMIZATION_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
 }
 impl core::fmt::Debug for FcmpInputRerandomizationV1 {
@@ -684,9 +882,18 @@ impl Zeroize for FcmpProverInputV1 {
         self.additional_branches.zeroize();
     }
 }
+#[cfg(test)]
+std::thread_local! {
+    static FCMP_PROVER_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 impl Drop for FcmpProverInputV1 {
     fn drop(&mut self) {
         self.zeroize();
+        #[cfg(test)]
+        let _ = FCMP_PROVER_INPUT_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
 }
 impl core::fmt::Debug for FcmpProverInputV1 {
@@ -734,16 +941,12 @@ impl FcmpProverInputV1 {
     ) -> Result<Self, FcmpNativeErrorV1> {
         let mut leaves = Zeroizing::new(leaves);
         let additional_branches = Zeroizing::new(additional_branches);
-        validate_edwards_scalar(*spend_x_bytes.expose_ref())?;
-        validate_edwards_scalar(*output_y_bytes.expose_ref())?;
-        let spend_x_scalar = ProverSecretCopyValueV1::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*spend_x_bytes.expose_ref()))
-                .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
-        );
-        let output_y_scalar = ProverSecretCopyValueV1::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes.expose_ref()))
-                .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
-        );
+        let spend_x_encoding =
+            ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(spend_x_bytes.expose_ref())?;
+        let output_y_encoding =
+            ProverValidatedSecretEdwardsScalarEncodingV1::validate_v1(output_y_bytes.expose_ref())?;
+        let mut spend_x_scalar = spend_x_encoding.into_scalar_owner_v1();
+        let mut output_y_scalar = output_y_encoding.into_scalar_owner_v1();
         if leaves.is_empty()
             || leaves.len() > FCMP_LAYER_ONE_LEN_V1
             || additional_branches.len() + 1 > usize::from(FCMP_MAX_TREE_LAYERS_V1)
@@ -779,10 +982,8 @@ impl FcmpProverInputV1 {
                 let mut decoded_branch = Zeroizing::new(Vec::with_capacity(branch.len()));
                 for encoded in branch {
                     require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?;
-                    push_secret_scalar_v1(
-                        &mut decoded_branch,
-                        decode_secret_helioselene_scalar_v1(encoded)?,
-                    )?;
+                    let scalar = decode_secret_helioselene_scalar_v1(encoded)?;
+                    push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?;
                 }
                 decoded.push(AdditionalBranch::ToHelios(core::mem::take(
                     &mut *decoded_branch,
@@ -791,24 +992,27 @@ impl FcmpProverInputV1 {
                 let mut decoded_branch = Zeroizing::new(Vec::with_capacity(branch.len()));
                 for encoded in branch {
                     require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?;
-                    push_secret_scalar_v1(
-                        &mut decoded_branch,
-                        decode_secret_field25519_scalar_v1(encoded)?,
-                    )?;
+                    let scalar = decode_secret_field25519_scalar_v1(encoded)?;
+                    push_owned_secret_cycle_scalar_v1(&mut decoded_branch, scalar)?;
                 }
                 decoded.push(AdditionalBranch::ToSelene(core::mem::take(
                     &mut *decoded_branch,
                 )));
             }
         }
-        Ok(Self {
+        let mut input = Self {
             output,
-            spend_x: spend_x_scalar.expose_copy(),
-            output_y: output_y_scalar.expose_copy(),
+            spend_x: Scalar::ZERO,
+            output_y: Scalar::ZERO,
             rerandomization,
             leaves: core::mem::take(&mut *leaves),
             additional_branches: decoded,
-        })
+        };
+        core::mem::swap(&mut input.spend_x, &mut spend_x_scalar.0);
+        drop(spend_x_scalar);
+        core::mem::swap(&mut input.output_y, &mut output_y_scalar.0);
+        drop(output_y_scalar);
+        Ok(input)
     }
     #[cfg(test)]
     fn duplicate_for_test(&self) -> Self {
@@ -1120,7 +1324,9 @@ fn fcmp_fixture_rerandomization_v1(
 fn prover_secret_leaf_coordinates_v1(
     leaves: &[FcmpOutputTupleV1],
     padded_capacity: usize,
-    mut convert: impl FnMut(&[u8; 32]) -> Result<(Field25519, Field25519), FcmpNativeErrorV1>,
+    mut convert: impl FnMut(
+        &[u8; 32],
+    ) -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>,
 ) -> Result<Zeroizing<Vec<Field25519>>, FcmpNativeErrorV1> {
     let populated_len = leaves
         .len()
@@ -1133,9 +1339,10 @@ fn prover_secret_leaf_coordinates_v1(
     for leaf in leaves {
         let (output_key, linking_tag_generator, amount_commitment) = leaf.component_refs_v1();
         for point in [output_key, linking_tag_generator, amount_commitment] {
-            let coordinate_pair = ProverSecretCopyValueV1::new(convert(point)?);
-            push_secret_scalar_v1(&mut leaf_coordinates, coordinate_pair.expose_ref().0)?;
-            push_secret_scalar_v1(&mut leaf_coordinates, coordinate_pair.expose_ref().1)?;
+            let coordinate_pair = convert(point)?;
+            let (coordinate_x, coordinate_y) = coordinate_pair.component_refs();
+            push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_x)?;
+            push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_y)?;
         }
     }
     if leaf_coordinates.len() != populated_len {
@@ -1147,7 +1354,7 @@ fn prover_secret_leaf_coordinates_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn with_fcmp_fixture_leaf_coordinate_owners_v1<T>(
     leaves: &[FcmpOutputTupleV1],
-    convert: impl FnMut(&[u8; 32]) -> Result<(Field25519, Field25519), FcmpNativeErrorV1>,
+    convert: impl FnMut(&[u8; 32]) -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>,
     hash: impl FnOnce(&[Field25519]) -> Result<T, FcmpNativeErrorV1>,
 ) -> Result<T, FcmpNativeErrorV1> {
     let exact_capacity = leaves
@@ -1210,23 +1417,36 @@ fn prover_secret_helios_x_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_fcmp_fixture_secret_branch_v1(
     branches: &mut Zeroizing<Vec<Vec<[u8; 32]>>>,
-    encoded: SecretEncodedScalarV1,
+    mut encoded: SecretEncodedScalarV1,
 ) -> Result<(), FcmpNativeErrorV1> {
-    require_preallocated_push(branches.len(), branches.capacity())?;
+    let branches_capacity = branches.capacity();
+    let branches_pointer = branches.as_ptr();
+    let outer_preflight = require_preallocated_push(branches.len(), branches_capacity);
+    if let Err(error) = outer_preflight {
+        drop(encoded);
+        return Err(error);
+    }
     let mut branch = zeroizing_exact_secret_buffer_v1::<[u8; 32]>(1)?;
-    push_fcmp_fixture_secret_branch_scalar_v1(&mut branch, *encoded.as_ref())?;
+    let branch_capacity = branch.capacity();
+    let branch_pointer = branch.as_ptr();
+    let inner_preflight = require_preallocated_push(branch.len(), branch_capacity);
+    if let Err(error) = inner_preflight {
+        drop(encoded);
+        return Err(error);
+    }
+    let branch_index = branches.len();
     branches.push(core::mem::take(&mut *branch));
-    Ok(())
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn push_fcmp_fixture_secret_branch_scalar_v1(
-    branch: &mut Zeroizing<Vec<[u8; 32]>>,
-    mut encoded: [u8; 32],
-) -> Result<(), FcmpNativeErrorV1> {
-    let encoded = ProverSecretCopyValueV1::take(&mut encoded);
-    require_preallocated_push(branch.len(), branch.capacity())?;
-    branch.push(encoded.expose_copy());
+    debug_assert_eq!(branches.capacity(), branches_capacity);
+    debug_assert_eq!(branches.as_ptr(), branches_pointer);
+    let final_branch = &mut branches[branch_index];
+    debug_assert_eq!(final_branch.capacity(), branch_capacity);
+    debug_assert_eq!(final_branch.as_ptr(), branch_pointer);
+    final_branch.push([0; 32]);
+    let destination = final_branch.len() - 1;
+    core::mem::swap(&mut final_branch[destination], encoded.as_mut());
     drop(encoded);
+    debug_assert_eq!(final_branch.capacity(), branch_capacity);
+    debug_assert_eq!(final_branch.as_ptr(), branch_pointer);
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1355,18 +1575,46 @@ pub(crate) fn fcmp_release_fixture_v1(
 /// This is feature-only negative-test material. The public prover must reject
 /// it during deterministic path preflight before producing any proof.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn replace_first_secret_coordinate_v1<T: Copy + Zeroize>(
-    values: &mut [T],
-    replacement: impl FnOnce(&T) -> T,
+fn replace_first_secret_coordinate_v1(
+    branch: &mut AdditionalBranch,
 ) -> Result<(), FcmpNativeErrorV1> {
-    let destination = values
-        .first_mut()
-        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-    let original = ProverSecretCopyValueV1::take(destination);
-    let replacement = ProverSecretCopyValueV1::new(replacement(original.expose_ref()));
-    *destination = replacement.expose_copy();
-    drop(replacement);
-    drop(original);
+    match branch {
+        AdditionalBranch::ToHelios(values) => {
+            let destination = values
+                .first_mut()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            let original = ProverSecretCopyValueV1::take(destination);
+            let difference =
+                ProverSecretCopyValueV1::new(original.expose_ref().sub_ref(&HelioseleneField::ONE));
+            let mut replacement =
+                ProverSecretCopyValueV1::new(HelioseleneField::conditional_select(
+                    &HelioseleneField::ONE,
+                    &HelioseleneField::ONE.add_ref(&HelioseleneField::ONE),
+                    difference.expose_ref().ct_is_zero(),
+                ));
+            drop(difference);
+            core::mem::swap(destination, &mut replacement.0);
+            drop(replacement);
+            drop(original);
+        }
+        AdditionalBranch::ToSelene(values) => {
+            let destination = values
+                .first_mut()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            let original = ProverSecretCopyValueV1::take(destination);
+            let difference =
+                ProverSecretCopyValueV1::new(original.expose_ref().sub_ref(&Field25519::ONE));
+            let mut replacement = ProverSecretCopyValueV1::new(Field25519::conditional_select(
+                &Field25519::ONE,
+                &Field25519::ONE.add_ref(&Field25519::ONE),
+                difference.expose_ref().ct_is_zero(),
+            ));
+            drop(difference);
+            core::mem::swap(destination, &mut replacement.0);
+            drop(replacement);
+            drop(original);
+        }
+    }
     Ok(())
 }
 #[cfg(feature = "privacy-release-evidence")]
@@ -1386,26 +1634,7 @@ pub(crate) fn fcmp_release_invalid_path_fixture_v1() -> Result<
         .additional_branches
         .first_mut()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-    match first_branch {
-        AdditionalBranch::ToHelios(values) => {
-            replace_first_secret_coordinate_v1(values, |original| {
-                HelioseleneField::conditional_select(
-                    &HelioseleneField::ONE,
-                    &HelioseleneField::ONE.add_ref(&HelioseleneField::ONE),
-                    original.sub_ref(&HelioseleneField::ONE).ct_is_zero(),
-                )
-            })?;
-        }
-        AdditionalBranch::ToSelene(values) => {
-            replace_first_secret_coordinate_v1(values, |original| {
-                Field25519::conditional_select(
-                    &Field25519::ONE,
-                    &Field25519::ONE.add_ref(&Field25519::ONE),
-                    original.sub_ref(&Field25519::ONE).ct_is_zero(),
-                )
-            })?;
-        }
-    }
+    replace_first_secret_coordinate_v1(first_branch)?;
     Ok((inputs, outputs, root))
 }
 enum RootValues {
@@ -1519,7 +1748,7 @@ fn parse_path(
                     zeroizing_exact_secret_buffer_v1::<HelioseleneField>(FCMP_LAYER_TWO_LEN_V1)?;
                 let allocation_capacity = padded.capacity();
                 for coordinate in branch {
-                    push_secret_scalar_v1(&mut padded, *coordinate)?;
+                    push_borrowed_secret_scalar_v1(&mut padded, coordinate)?;
                 }
                 padded.resize(FCMP_LAYER_TWO_LEN_V1, HelioseleneField::ZERO);
                 debug_assert!(allocation_capacity >= FCMP_LAYER_TWO_LEN_V1);
@@ -1546,7 +1775,7 @@ fn parse_path(
                     zeroizing_exact_secret_buffer_v1::<Field25519>(FCMP_LAYER_ONE_LEN_V1)?;
                 let allocation_capacity = padded.capacity();
                 for coordinate in branch {
-                    push_secret_scalar_v1(&mut padded, *coordinate)?;
+                    push_borrowed_secret_scalar_v1(&mut padded, coordinate)?;
                 }
                 padded.resize(FCMP_LAYER_ONE_LEN_V1, Field25519::ZERO);
                 debug_assert!(allocation_capacity >= FCMP_LAYER_ONE_LEN_V1);
@@ -1623,13 +1852,11 @@ fn prepared_secret_point_v1<S: ProofSuite>(
 struct PreparedEdBlind {
     decomposition: Vec<u64>,
     divisor: NormalizedDivisor<Field25519>,
-    coordinates: (Field25519, Field25519),
+    coordinates: SecretCycleCoordinatesV1<Field25519>,
 }
 impl Drop for PreparedEdBlind {
     fn drop(&mut self) {
         self.decomposition.zeroize();
-        self.coordinates.0.zeroize();
-        self.coordinates.1.zeroize();
     }
 }
 fn prepare_ed_blind(
@@ -1641,13 +1868,13 @@ fn prepare_ed_blind(
     let mut decomposition = ed25519_scalar_decomposition(&scalar)?;
     let point = Zeroizing::new(&generator * &*scalar);
     let encoded_point = Zeroizing::new(point.compress().to_bytes());
-    let coordinates = Zeroizing::new(secret_edwards_to_wei25519_v1(&encoded_point)?);
+    let coordinates = secret_edwards_to_wei25519_v1(&encoded_point)?;
     let curve = ed25519_curve();
     let divisor = scalar_mul_divisor(curve.a, curve.b, generator, &decomposition, &point)?;
     Ok(PreparedEdBlind {
         decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        coordinates: *coordinates,
+        coordinates,
     })
 }
 struct PreparedSeleneBlind {
@@ -1817,7 +2044,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
             require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?;
             let blind = prepare_selene_blind(random_proof_scalar(rng)?)?;
-            push_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.expose_ref().neg_ref())?;
+            push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?;
             selene_blinds.push(blind);
         }
         let mut c2_non_root = Vec::with_capacity(path.c2_non_root.len());
@@ -1826,7 +2053,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
             require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?;
             let blind = prepare_helios_blind(random_proof_scalar(rng)?)?;
-            push_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.expose_ref().neg_ref())?;
+            push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?;
             helios_blinds.push(blind);
         }
         transcripted_paths.push(TranscriptedPath {
@@ -1872,22 +2099,21 @@ fn prove_fcmp_plus_plus_once_v1(
             linking_bytes,
             commitment_bytes,
         )?;
-        let input_blind_v_padding = ProverSecretCopyValueV1::new([
-            input_blind_v.coordinates.0,
-            input_blind_v.coordinates.1,
-        ]);
+        let (input_blind_v_x, input_blind_v_y) = input_blind_v.coordinates.component_refs();
+        let input_blind_v_padding =
+            ProverSecretCopyValueV1::new([*input_blind_v_x, *input_blind_v_y]);
         let (output_blind_claim, output_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &output_blind.decomposition,
             &output_blind.divisor,
-            &output_blind.coordinates,
+            output_blind.coordinates.component_pair_ref(),
             output_coordinates.output.padding.expose_ref().as_slice(),
         )?;
         let (input_blind_u_claim, linking_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &input_blind_u.decomposition,
             &input_blind_u.divisor,
-            &input_blind_u.coordinates,
+            input_blind_u.coordinates.component_pair_ref(),
             output_coordinates.linking.padding.expose_ref().as_slice(),
         )?;
         let (input_blind_v_divisor, _) = c1_tape.append_divisor(
@@ -1899,14 +2125,14 @@ fn prove_fcmp_plus_plus_once_v1(
             ED25519_DLOG_PARAMETERS,
             &input_blind_blind.decomposition,
             &input_blind_blind.divisor,
-            &input_blind_blind.coordinates,
+            input_blind_blind.coordinates.component_pair_ref(),
             input_blind_v_padding.expose_ref().as_slice(),
         )?;
         let (commitment_blind_claim, commitment_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &commitment_blind.decomposition,
             &commitment_blind.divisor,
-            &commitment_blind.coordinates,
+            commitment_blind.coordinates.component_pair_ref(),
             output_coordinates
                 .commitment
                 .padding
@@ -1926,18 +2152,21 @@ fn prove_fcmp_plus_plus_once_v1(
             divisor: input_blind_v_divisor,
         };
         let sal_y = prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output);
-        let sal_y_bytes = ProverSecretCopyValueV1::new(sal_y.expose_ref().to_bytes());
-        let sal_linking_bytes = ProverSecretCopyValueV1::new(rerandomization.linking.to_bytes());
-        let sal_spend_x_bytes = ProverSecretCopyValueV1::new(input.spend_x.to_bytes());
-        let sal_rerandomization_blind_bytes =
-            ProverSecretCopyValueV1::new(rerandomization.rerandomization_blind.to_bytes());
-        let sal_witness = FcmpSalWitnessV1::new(
-            sal_spend_x_bytes.expose_copy(),
-            sal_y_bytes.expose_copy(),
-            sal_linking_bytes.expose_copy(),
-            sal_rerandomization_blind_bytes.expose_copy(),
+        let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(sal_y.expose_ref());
+        let sal_linking_bytes =
+            FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking);
+        let sal_spend_x_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&input.spend_x);
+        let sal_rerandomization_blind_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(
+            &rerandomization.rerandomization_blind,
+        );
+        let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(
+            sal_spend_x_bytes,
+            sal_y_bytes,
+            sal_linking_bytes,
+            sal_rerandomization_blind_bytes,
         )?;
         let sal = prove_fcmp_sal_with_checked_rng_v1(rng, context_hash, &public, &sal_witness)?;
+        drop(sal_witness);
         prepared_inputs.push(PreparedInput {
             public,
             sal,

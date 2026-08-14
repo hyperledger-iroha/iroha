@@ -1,11 +1,8 @@
 //! Host-side validation for the non-shipping Android candidate-lab seed set.
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    fs::{self, OpenOptions},
-    io::Read as _,
-    ops::Deref,
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
-    path::Path,
+use super::{
+    KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
+    KagemushaRecipientOutputProverMaterialV2, decode_canonical_kagemusha_archive,
+    derive_kagemusha_owned_note_v2,
 };
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
@@ -16,12 +13,15 @@ use iroha_data_model::{
     },
 };
 use sha2::{Digest as _, Sha256};
-use zeroize::{Zeroize as _, Zeroizing};
-use super::{
-    KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
-    KagemushaRecipientOutputProverMaterialV2, decode_canonical_kagemusha_archive,
-    derive_kagemusha_owned_note_v2,
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    fs::{self, OpenOptions},
+    io::Read as _,
+    ops::Deref,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
+    path::Path,
 };
+use zeroize::{Zeroize as _, Zeroizing};
 const REPORT_SCHEMA: &str = "iroha.kagemusha.android_candidate_scenario_validation.v1";
 const INVENTORY_DOMAIN: &[u8] = b"iroha.kagemusha.android-candidate-scenario-inventory.v1\0";
 const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024;
@@ -151,8 +151,8 @@ pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>,
 }
 #[cfg(test)]
 mod bounded_read_tests {
-    use std::io::Cursor;
     use super::read_at_most;
+    use std::io::Cursor;
     #[test]
     fn reader_cannot_append_beyond_the_admitted_size() {
         let mut reader = Cursor::new(vec![0xA5; 9]);

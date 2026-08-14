@@ -8947,36 +8947,6 @@ def build_cross_tool_evidence(
     }
 
 
-def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str | None:
-    """Return the first path at which two evidence values differ."""
-
-    if type(expected) is not type(observed):
-        return path
-    if isinstance(expected, dict):
-        if set(expected) != set(observed):
-            return path
-        for key in sorted(expected):
-            mismatch = _first_json_mismatch(
-                expected[key], observed[key], f"{path}.{key}"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    if isinstance(expected, list):
-        if len(expected) != len(observed):
-            return path
-        # Exact lengths were checked above; plain zip keeps this verifier
-        # compatible with the repository's Python 3.9 floor.
-        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
-            mismatch = _first_json_mismatch(
-                expected_item, observed_item, f"{path}[{index}]"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    return None if expected == observed else path
-
-
 def _cross_tool_evidence_errors(
     ledger: dict[str, Any],
     cross_tool_evidence: dict[str, Any] | None,
@@ -15057,6 +15027,7 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
         "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs": (
             "v2_worker_reply_route_cases.rs",
             "v2_worker_backpressure_cases.rs",
+            "v2_worker_recovered_lifecycle_output_cases.rs",
             "v2_worker_nonzero_view_restart.rs",
         ),
         "crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs": (
@@ -15116,7 +15087,11 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (),
                 f"included worker regression {name}",
                 errors,
-                expected_attributes=("#[test]",),
+                expected_attributes=(
+                    ("#[test]", "#[allow(clippy::too_many_lines)]")
+                    if name == "cold_durable_proposal_refanout_atomically_owns_control_and_chunks"
+                    else ("#[test]",)
+                ),
             )
     return errors
 
@@ -15990,7 +15965,7 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             len(serve_projection_positions) != 1
             or len(leader_projection_positions) != 1
             or len(candidate_positions) != 1
-            or len(predicate_positions) != 2
+            or len(predicate_positions) != 1
             or len(drop_positions) != 1
             or len(relock_positions) != 2
             or len(dequeue_positions) != 1
@@ -44083,7 +44058,7 @@ if executor.retained_response_may_admit_certified_fence_escape() {
         &mut executor,
         &mut services,
         &mut lane_work,
-        output_guard.as_ref(),
+        &output_guard,
         kura.as_ref(),
         &common_config.key_pair,
         block_sync_server
@@ -44101,7 +44076,7 @@ drain_v2_ingress(
     &mut executor,
     &mut services,
     &mut lane_work,
-    output_guard.as_ref(),
+    &output_guard,
     kura.as_ref(),
     &common_config.key_pair,
     block_sync_server
@@ -49355,7 +49330,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
@@ -60261,6 +60236,12 @@ def _exact_output_production_source_fidelity_errors(
         errors,
         "production exact-output runner source",
     )
+    ordinary_consumer_path, ordinary_consumer_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        errors,
+        "production exact-output ordinary ingress consumer source",
+    )
     required_sources = (
         (network_message_path, "production network-message carrier source"),
         (merge_path, "production merge-sidecar source"),
@@ -68925,6 +68906,44 @@ let ownership_unit_capacity = shared_ownership_unit_capacity
         "reply-control units",
         errors,
     )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;",
+        "one atomic Proposal admission may drive exactly its proposal and chunk fanouts",
+        errors,
+        count=1,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+let drive_attempt_budget = max_peers_per_fanout
+    .max(super::v2_core::MAX_EFFECTS_PER_STEP)
+    .checked_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)
+    .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
+""",
+        "exact-output construction must deterministically checked-multiply the two-fanout atomic Proposal drive budget by the larger protocol service bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+drive_attempt_budget,
+max_messages_per_fanout,
+max_peers_per_fanout,
+""",
+        "exact-output construction must retain its checked atomic Proposal drive budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::drive_bounded_with_ack"),
+        "self.drive_with_budget_ack(self.drive_attempt_budget, attempt)",
+        "the production exact-output driver must consume the checked atomic Proposal drive budget",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         reservation_items.get("PendingExactOutput::ownership_addition_load"),
@@ -69253,6 +69272,21 @@ Self::start_inner(""",
     )
     _require_rust_token_sequence(
         worker_path,
+        reservation_items.get("ProductionV2Services::start"),
+        """
+chunk_root,
+body_store,
+None,
+state,
+kura,
+apply_service,
+consensus_io_capacity,
+""",
+        "ordinary startup must explicitly omit recovered Certified-Serve payload-store identity while transferring the live body and Apply owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
         reservation_items.get("ProductionV2Services::start_inner"),
         """
 let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
@@ -69280,6 +69314,28 @@ let pending_exact_output = PendingExactOutput::new(
 )?;
 """,
         "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+body_store: V2BodyStore,
+lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
+state: Arc<crate::state::State>,
+""",
+        "the shared worker constructor must receive recovered Certified-Serve payload-store identity beside the transferred body-store owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+lifecycle_payload_store_identity,
+fetches: BTreeMap::new(),
+""",
+        "the live worker must retain both exact recovered lifecycle store identities before accepting fetch work",
         errors,
     )
     _require_rust_token_sequence(
@@ -71227,6 +71283,22 @@ if let Err(error) = self.retire() {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+    ordinary_consumer = _require_rust_item(
+        ordinary_consumer_path,
+        ordinary_consumer_source,
+        "consume_prepared_dequeued_v2_ingress",
+        errors,
+    )
+    _require_rust_item_context(
+        ordinary_consumer_path,
+        ordinary_consumer,
+        (),
+        "exact-output ordinary ingress post-dequeue consumer",
+        errors,
+        expected_attributes=(
+            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+        ),
+    )
     runner = runner_items.get("run_inner")
     _require_rust_token_sequence(
         runner_path,
@@ -71443,7 +71515,7 @@ let barrier_bypass = match mode {
         FairV2IngressBarrierBypass::None
     }
 };
-let Some((mut inbound, dequeue_disposition)) = receiver
+let Some((inbound, dequeue_disposition)) = receiver
     .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
         barrier_bypass,
         |inbound| {
@@ -71482,130 +71554,41 @@ let Some((mut inbound, dequeue_disposition)) = receiver
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("drain_v2_ingress"),
-        """
-let Some(sender) = inbound.sender() else {
-    prepared_serve = Some(PreparedCertifiedServe::Service(
-        "reserved certified-body ingress lost its authenticated sender".to_owned(),
-    ));
-    return true;
-};
-let Some(authenticated_via) = inbound.via() else {
-    prepared_serve = Some(PreparedCertifiedServe::Service(
-        "reserved certified-body ingress lost its authenticated source".to_owned(),
-    ));
-    return true;
-};
-let Some(reply_routes) = inbound.reply_routes() else {
-    prepared_serve = Some(PreparedCertifiedServe::Service(
-        "reserved certified-body ingress lost its reply capability".to_owned(),
-    ));
-    return true;
-};
-let Some(ingress_ownership) = inbound.ingress_ownership() else {
-    prepared_serve = Some(PreparedCertifiedServe::Service(
-        "reserved certified-body ingress lost its ownership evidence".to_owned(),
-    ));
-    return true;
-};
-if reply_routes.semantic_target() != sender
-    || !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(inbound.message())
-    || !ingress_ownership.matches_semantic_origin(Some(sender))
-    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-{
-    prepared_serve = Some(PreparedCertifiedServe::Service(
-        "reserved certified-body ingress changed its transport ownership"
-            .to_owned(),
-    ));
-    return true;
-}
-let authenticated =
-    match executor.authenticate_certified_body_request(request.clone(), sender) {
-        Ok(authenticated) => authenticated,
-        Err(error) => {
-            prepared_serve = Some(
-                match services.stage_certified_serve_rejection(
-                    HashOf::new(request),
-                    CertifiedServeNegativeOutcome::InvalidCertificate,
-                ) {
-                    Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
-                    Err(reason) => PreparedCertifiedServe::Service(reason),
-                },
-            );
-            return true;
-        }
-    };
-if superseded_by_decision {
-    let decided = terminal_subject.expect(
-        "Decision supersession requires the durable exact terminal subject",
-    );
-    prepared_serve = Some(
-        match services.stage_certified_serve_rejection(
-            authenticated.request_hash(),
-            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-        ) {
-            Ok(()) => PreparedCertifiedServe::Rejected(
-                "certified body request was superseded by durable Decision"
-                    .to_owned(),
-            ),
-            Err(reason) => PreparedCertifiedServe::Service(reason),
-        },
-    );
-    return true;
-}
-match services.prepare_certified_request(authenticated_via, authenticated) {
-    Ok(admission) => {
-        prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
-        true
-    }
-    Err(CertifiedServePrepareError::Backpressure) => {
-        false
-    }
-    Err(CertifiedServePrepareError::Rejected(reason)) => {
-        prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
-        true
-    }
-    Err(CertifiedServePrepareError::Service(reason)) => {
-        prepared_serve = Some(PreparedCertifiedServe::Service(reason));
-        true
-    }
-}
-""",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["certified_serve_preparation"],
         "exact Serve ingress must validate complete transport ownership, durably stage invalid or Decision-superseded negative outcomes, and reserve or coalesce before the selected head drains",
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
     admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-    continue;
+    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
 }
 """,
         "KuraReplicaAdvert ingress must bypass both consensus reducers through its exact durable admission seam",
         errors,
     )
-    drain_item = runner_items.get("drain_v2_ingress")
-    if drain_item is not None:
-        drain_tokens = rust_code_tokens(drain_item.body)
+    if ordinary_consumer is not None:
+        ordinary_consumer_tokens = rust_code_tokens(ordinary_consumer.body)
         kura_terminal_positions = _token_sequence_positions(
-            drain_tokens,
+            ordinary_consumer_tokens,
             rust_code_tokens(
                 """
 if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
     admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-    continue;
+    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
 }
 """
             ),
         )
         lane_local_positions = _token_sequence_positions(
-            drain_tokens,
+            ordinary_consumer_tokens,
             rust_code_tokens("if inbound.message().is_lane_local()"),
         )
         consensus_owner_positions = _token_sequence_positions(
-            drain_tokens,
+            ordinary_consumer_tokens,
             rust_code_tokens(
                 "let mut ingress_ownership = inbound.take_ingress_ownership()"
             ),
@@ -71621,13 +71604,13 @@ if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
             )
         ):
             errors.append(
-                f"{runner_path}:{drain_item.line}: KuraReplicaAdvert ingress "
+                f"{ordinary_consumer_path}:{ordinary_consumer.line}: KuraReplicaAdvert ingress "
                 "must bypass both consensus reducers through its exact durable "
                 "admission seam before lane-local or leader-wire dispatch"
             )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
     V2RunnerError::Service(
@@ -71650,8 +71633,8 @@ receiver
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 if dequeue_disposition == FairV2IngressDequeueDisposition::RetireObsolete {
     let receipt = ingress_ownership
@@ -71663,7 +71646,7 @@ if dequeue_disposition == FairV2IngressDequeueDisposition::RetireObsolete {
         })?;
     let token = receipt.token();
     iroha_logger::debug!(
-        message_kind = ?super::FairV2IngressMessageKind::classify(inbound.message()),
+        message_kind = ?super::super::FairV2IngressMessageKind::classify(inbound.message()),
         semantic_origin = ?inbound.sender(),
         authenticated_via = ?inbound.via(),
         obsolete_view = token.view(),
@@ -71673,15 +71656,15 @@ if dequeue_disposition == FairV2IngressDequeueDisposition::RetireObsolete {
     receiver
         .mark_obsolete_leader_wire_volatile_terminal(receipt)
         .map_err(V2RunnerError::Service)?;
-    continue;
+    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
 }
 """,
         "a WAL-obsolete checked dequeue must consume its exact Runtime receipt into a volatile terminal before any payload dispatch",
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
 if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
@@ -71690,30 +71673,30 @@ if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
+        "Some(ProductionPreparedCertifiedServeV1::Admitted(_)) | None => { "
+        'return Err(V2RunnerError::Service("".to_owned(),)); }',
+        "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 match prepared_serve.take() {
-    Some(PreparedCertifiedServe::Admitted(admission)) => {
-        services
-            .serve_certified_request_on_routes(
-                admission,
-                reply_routes,
-                ingress_ownership,
-            )
-            .map_err(V2RunnerError::Service)?;
+    Some(ProductionPreparedCertifiedServeV1::Admitted(admission)) => {
+        services.serve_certified_request_on_routes(
+            admission, reply_routes, ingress_ownership,
+        ).map_err(V2RunnerError::Service)?;
     }
-    Some(PreparedCertifiedServe::Rejected(reason)) => {
-        iroha_logger::debug!(%reason, "rejected certified body request");
-        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+    Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) => {
+        iroha_logger::debug!(%reason, "rejected certified body request"); mark_leader_wire_volatile(receiver, &ingress_ownership)?;
     }
-    Some(PreparedCertifiedServe::Service(reason)) => {
-        return Err(V2RunnerError::Service(reason));
-    }
+    Some(ProductionPreparedCertifiedServeV1::Service(reason)) => { return Err(V2RunnerError::Service(reason)); }
     None => {
         return Err(V2RunnerError::Service(
-            "current-height certified-body ingress crossed fair removal without an atomic Serve admission"
-                .to_owned(),
+            "current-height certified-body ingress crossed fair removal without an atomic Serve admission".to_owned(),
         ));
     }
 }
@@ -71722,15 +71705,15 @@ match prepared_serve.take() {
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["historical_body_guard"],
         "historical body route must reconstruct from Kura under the output guard",
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 services.post_durable_history_response_on_reply_routes_with_permit(
     response_peer,
@@ -71745,8 +71728,8 @@ services.post_durable_history_response_on_reply_routes_with_permit(
         count=2,
     )
     _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
+        ordinary_consumer_path,
+        ordinary_consumer,
         """
 if reply_routes.semantic_target() != &sender {
 """,

@@ -1,14 +1,10 @@
 //! Configuration handling for the SoraNet relay daemon.
-use std::{
-    fmt,
-    fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, Read as _},
-    net::SocketAddr,
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+use crate::{
+    capability::{self, ConstantRateMode, GreaseEntry},
+    checked_ed25519_verifying_key_from_bytes,
+    constant_rate::{CONSTANT_RATE_CELL_BYTES, ConstantRateProfileName},
+    incentive_log::IncentiveLogConfig,
+    token_tool::read_revocation_file,
 };
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
@@ -31,14 +27,18 @@ use norito::{
     json,
 };
 use soranet_pq::MlDsaSuite;
-use thiserror::Error;
-use crate::{
-    capability::{self, ConstantRateMode, GreaseEntry},
-    checked_ed25519_verifying_key_from_bytes,
-    constant_rate::{CONSTANT_RATE_CELL_BYTES, ConstantRateProfileName},
-    incentive_log::IncentiveLogConfig,
-    token_tool::read_revocation_file,
+use std::{
+    fmt,
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
+    io::{self, Read as _},
+    net::SocketAddr,
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
 };
+use thiserror::Error;
 const DEFAULT_SELF_SIGNED_SUBJECT: &str = "soranet-relay.local";
 const ML_KEM_768_PUBLIC_LEN: usize = 1_184;
 const ML_KEM_768_SECRET_LEN: usize = 2_400;
@@ -233,6 +233,32 @@ fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool
 fn config_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
     false
 }
+#[cfg(unix)]
+fn validate_private_file_permissions(metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} must have no group or other permissions on Unix"),
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn validate_private_file_permissions(_metadata: &FsMetadata, _artifact: &str) -> io::Result<()> {
+    Ok(())
+}
+fn validate_direct_regular_file_policy(
+    metadata: &FsMetadata,
+    artifact: &str,
+    require_private_permissions: bool,
+) -> io::Result<()> {
+    validate_direct_regular_file(metadata, artifact)?;
+    if require_private_permissions {
+        validate_private_file_permissions(metadata, artifact)?;
+    }
+    Ok(())
+}
 #[cfg(test)]
 static BOUNDED_FILE_READ_REPLACEMENT: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 #[cfg(test)]
@@ -260,8 +286,30 @@ pub fn read_bounded_direct_regular_file(
     maximum: usize,
     artifact: &str,
 ) -> io::Result<Vec<u8>> {
+    read_bounded_direct_regular_file_with_policy(path, maximum, artifact, false)
+}
+/// Read one immutable private-file snapshot with the same bounds and direct
+/// identity checks as [`read_bounded_direct_regular_file`].
+///
+/// On Unix, every metadata observation in the open/read chain must have no
+/// group or other permission bits. This binds the permission decision to the
+/// descriptor that supplies the returned bytes instead of trusting a separate
+/// path inspection.
+pub fn read_bounded_private_regular_file(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
+) -> io::Result<Vec<u8>> {
+    read_bounded_direct_regular_file_with_policy(path, maximum, artifact, true)
+}
+fn read_bounded_direct_regular_file_with_policy(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
+    require_private_permissions: bool,
+) -> io::Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
-    validate_direct_regular_file(&before, artifact)?;
+    validate_direct_regular_file_policy(&before, artifact, require_private_permissions)?;
     let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
     if before.len() > maximum_u64 {
         return Err(io::Error::new(
@@ -276,7 +324,7 @@ pub fn read_bounded_direct_regular_file(
     replace_bounded_file_for_test(path)?;
     let mut file = open_direct_regular_file(path)?;
     let opened = file.metadata()?;
-    validate_direct_regular_file(&opened, artifact)?;
+    validate_direct_regular_file_policy(&opened, artifact, require_private_permissions)?;
     if !config_file_metadata_unchanged(&before, &opened) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -322,8 +370,8 @@ pub fn read_bounded_direct_regular_file(
     }
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
-    validate_direct_regular_file(&after_file, artifact)?;
-    validate_direct_regular_file(&after_path, artifact)?;
+    validate_direct_regular_file_policy(&after_file, artifact, require_private_permissions)?;
+    validate_direct_regular_file_policy(&after_path, artifact, require_private_permissions)?;
     if !config_file_metadata_unchanged(&opened, &after_file)
         || !config_file_metadata_unchanged(&opened, &after_path)
     {

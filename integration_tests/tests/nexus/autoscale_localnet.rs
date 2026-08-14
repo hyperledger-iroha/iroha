@@ -5750,7 +5750,7 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
     ensure!(
         qc.message_digest
             == merge_qc_message_digest(
-                chain_id,
+                network_id,
                 &candidate,
                 qc.validator_set_hash_version,
                 qc.validator_set_hash,

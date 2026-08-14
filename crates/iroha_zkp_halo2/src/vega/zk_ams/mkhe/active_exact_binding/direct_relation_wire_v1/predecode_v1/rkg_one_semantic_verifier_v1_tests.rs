@@ -431,6 +431,12 @@ fn candidate_completion_cannot_mint_release_authority() {
     }
     let active = include_str!("../../../active_exact_binding.rs");
     for closed_gate in [
+        "let external_commitment_provenance_certified = false;",
+        "let full_basis_mrep_crs_certified = false;",
+        "let membership_argument_of_knowledge_certified = false;",
+        "let membership_zero_knowledge_certified = false;",
+        "let composite_rom_forking_certified = false;",
+        "let full_ceremony_10_336_instance_composition_certified = false;",
         "let canonical_complete_wire_certified = false;",
         "let chunked_workspace_certified = false;",
         "let sampler_wired_to_runtime = false;",
@@ -440,6 +446,9 @@ fn candidate_completion_cannot_mint_release_authority() {
     ] {
         assert!(active.contains(closed_gate));
     }
+    assert!(!active.contains("candidate_membership_union_soundness_bits"));
+    assert!(!active.contains("BLOCKER_T256_MEMBERSHIP_BACKEND_V1"));
+    assert!(active.contains("BLOCKER_T256_MEMBERSHIP_SECURITY_V1"));
     let public_verifier = active
         .split("pub(super) fn verify_and_consume_direct_relation_use_v1")
         .nth(1)
@@ -447,5 +456,5 @@ fn candidate_completion_cannot_mint_release_authority() {
         .unwrap();
     assert!(public_verifier.contains("Err(ZkAmsMkheErrorV1::ReleaseUnavailable)"));
     assert!(!public_verifier.contains("verify_direct_rkg_one_semantic_candidate_v1"));
-    assert!(active.contains("assert_eq!(audit.blocker_mask, 0xfc);"));
+    assert!(active.contains("assert_eq!(audit.blocker_mask, 0xfd);"));
 }

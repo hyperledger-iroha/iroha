@@ -962,6 +962,9 @@ def _successor_production_recovery_source_fidelity_errors(
         launch_path, launch_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
         )
+        launch_tests_path, launch_tests_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"
+        )
         kura_path, kura_source = load("crates/iroha_core/src/kura.rs")
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
@@ -1040,6 +1043,31 @@ def _successor_production_recovery_source_fidelity_errors(
             and state_source
             and apply_source
         ):
+            require_literal_count(
+                launch_path,
+                "split lifecycle-launch test module wiring",
+                launch_source,
+                '#[cfg(test)]\n#[path = "v2_lifecycle_launch_tests.rs"]\nmod tests;',
+                1,
+            )
+            for test_name in (
+                "launch_local_identity_requires_the_bound_key_and_exact_roster_position",
+                "recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation",
+            ):
+                test_item = _require_rust_item(
+                    launch_tests_path,
+                    launch_tests_source,
+                    test_name,
+                    errors,
+                )
+                _require_rust_item_context(
+                    launch_tests_path,
+                    test_item,
+                    (),
+                    f"split lifecycle-launch regression {test_name}",
+                    errors,
+                    expected_attributes=("#[test]",),
+                )
             lifecycle_launch_item = _require_qualified_rust_item(
                 launch_path,
                 launch_source,
@@ -1053,6 +1081,51 @@ def _successor_production_recovery_source_fidelity_errors(
                 lifecycle_launch_item.source
                 if lifecycle_launch_item is not None
                 else ""
+            )
+            recovered_service_start = _require_qualified_rust_item(
+                worker_path,
+                worker_source,
+                "ProductionV2Services",
+                "start_with_apply_service",
+                errors,
+                "recovered Certified-Serve payload-store identity transfer",
+                expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+            )
+            _require_rust_token_sequence(
+                worker_path,
+                recovered_service_start,
+                """
+chunk_root,
+body_store,
+Some(payload_store_identity),
+state,
+kura,
+apply_service,
+consensus_io_capacity,
+""",
+                "recovered startup must transfer the exact Certified-Serve payload-store identity into the shared worker constructor",
+                errors,
+            )
+            payload_store_match = _require_qualified_rust_item(
+                worker_path,
+                worker_source,
+                "ProductionV2Services",
+                "matches_lifecycle_payload_store",
+                errors,
+                "live recovered Certified-Serve payload-store identity oracle",
+            )
+            _require_rust_token_sequence(
+                worker_path,
+                payload_store_match,
+                """
+self.io.is_some()
+    && self
+        .lifecycle_payload_store_identity
+        .as_ref()
+        .is_some_and(|service_identity| service_identity.same_instance(owner_identity))
+""",
+                "the live service must require its retained exact Certified-Serve payload-store instance",
+                errors,
             )
             require_order(
                 launch_path,
@@ -1072,13 +1145,19 @@ def _successor_production_recovery_source_fidelity_errors(
                     "ProductionLeaderWireIngressBindingV1::bind(",
                     "self.adapter_startup.take()",
                     "self.body_store.take()",
+                    "let payload_store_identity = self.payload_store.instance_identity()",
                     "self.apply_service.take()",
                     "V2EffectExecutor::open_with_body_store(",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
                     "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "body_store,",
+                    "payload_store_identity.clone(),",
                     "apply_service,",
+                    "services.matches_lifecycle_executor_output_guard(&executor)",
+                    "services.matches_lifecycle_body_store(&body_store_identity)",
+                    "services.matches_lifecycle_payload_store(&payload_store_identity)",
                     "services.certified_serve_ingress_gate()",
                     "leader_wire_ingress_binding.bind_certified_serve(certified_serve_gate)",
                 ),
@@ -1423,7 +1502,6 @@ def _successor_production_recovery_source_fidelity_errors(
                     "fn launch_local_identity_matches(",
                     "local_peer.public_key() != key_pair.public_key()",
                     "local_validator.is_none_or(|observed| roster_position == Some(observed))",
-                    "fn launch_local_identity_requires_the_bound_key_and_exact_roster_position()",
                 ),
             )
             require_token_count(
@@ -3520,14 +3598,6 @@ def _successor_production_recovery_source_fidelity_errors(
                 effects_source,
                 '"a foreign Ingress cursor cannot change the recovered Fetch lease or registry row"',
                 1,
-            )
-            require_tokens(
-                launch_path,
-                "recovered Decision Fetch source-order regression",
-                launch_source,
-                (
-                    "fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation()",
-                ),
             )
             recovered_fetch_ready = region(
                 registry_validate_path,

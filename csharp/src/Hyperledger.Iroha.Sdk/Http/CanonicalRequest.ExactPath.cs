@@ -6,9 +6,9 @@ public static partial class CanonicalRequest
     /// Builds canonical request headers for a caller-validated exact URI path.
     /// </summary>
     /// <remarks>
-    /// This internal entry point exists for closed Torii routes whose approved
-    /// path-segment alphabet includes a literal colon. General callers must use
-    /// <see cref="BuildHeaders"/>.
+    /// This internal entry point exists for closed Torii routes that validate
+    /// their path segments before canonical signing. It applies the same exact
+    /// ASCII wire-path checks as <see cref="BuildHeaders"/>.
     /// </remarks>
     internal static CanonicalRequestHeaders BuildHeadersForExactPath(
         NetworkId networkId,
@@ -56,6 +56,7 @@ public static partial class CanonicalRequest
     {
         var exact = RequireExactNonBlank(value, paramName);
         RequireCanonicalPathByteLength(exact, paramName);
+        RequireCanonicalPathAsciiWireSpelling(exact, paramName);
         if (exact[0] != '/' || (exact.Length > 1 && exact[1] == '/'))
         {
             throw new ArgumentException(
@@ -71,6 +72,7 @@ public static partial class CanonicalRequest
                 paramName);
         }
 
+        RequireUriStablePath(exact, paramName);
         return exact;
     }
 }

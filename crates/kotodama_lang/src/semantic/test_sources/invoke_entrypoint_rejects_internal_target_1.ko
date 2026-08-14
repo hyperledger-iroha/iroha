@@ -1,0 +1,10 @@
+
+            seiyaku Demo {
+                fn helper() -> int { return 7; }
+
+                #[test]
+                fn drive_run() {
+                    let _next = test::invoke_kotoage("helper", Json::parse("{}"));
+                }
+            }
+            

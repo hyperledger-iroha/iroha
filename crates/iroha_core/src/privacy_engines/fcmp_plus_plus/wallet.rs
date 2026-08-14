@@ -636,9 +636,9 @@ mod tests {
         let owner = WalletSecretCopyValueV1::copy_from_ref(&borrowed);
         assert_eq!(borrowed.0, 11);
         assert_eq!(owner.expose_ref().0, 11);
-        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 0);
-        drop(owner);
         assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
+        drop(owner);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 2);
     }
     #[test]
     fn wallet_secret_sha256_matches_the_frozen_note_kdf() {
@@ -651,16 +651,12 @@ mod tests {
         expected.update(aad);
         let expected: [u8; 32] = expected.finalize().into();
         assert_eq!(actual.expose_ref(), &expected);
-        let frozen: [u8; 32] = hex::decode(
-            "69e939fa1441f1353609cf5a5df72e60782976a166884df190e9093b6af54333",
-        )
-        .expect("literal SHA-256")
-        .try_into()
-        .expect("32-byte SHA-256");
-        assert_eq!(
-            expected,
-            frozen
-        );
+        let frozen: [u8; 32] =
+            hex::decode("69e939fa1441f1353609cf5a5df72e60782976a166884df190e9093b6af54333")
+                .expect("literal SHA-256")
+                .try_into()
+                .expect("32-byte SHA-256");
+        assert_eq!(expected, frozen);
     }
     #[test]
     fn wallet_note_constructor_takes_inputs_before_validation_and_owns_products() {

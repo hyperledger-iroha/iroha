@@ -380,6 +380,7 @@ impl ProverTranscript {
     pub(super) fn challenge<S: ProofSuite>(&mut self) -> Result<S::Scalar, FcmpNativeErrorV1> {
         challenge::<S>(&mut self.digest)
     }
+    #[cfg(test)]
     pub(super) fn write_commitments<S: ProofSuite>(
         &mut self,
         vector: Vec<S::Point>,

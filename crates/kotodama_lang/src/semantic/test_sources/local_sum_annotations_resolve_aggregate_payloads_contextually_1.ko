@@ -1,0 +1,13 @@
+seiyaku C {
+                struct Pair { int count, bool ready }
+                fn values() {
+                    let Option<Pair> some = Option::some(Pair { count: 1, ready: true });
+                    let Option<Pair> none = Option::none;
+                    let Result<Pair, Pair> ok = Result::ok(Pair { count: 2, ready: true });
+                    let Result<Pair, Pair> err = Result::err(Pair { count: 3, ready: false });
+                    var Option<Pair> changing_option = Option::some(Pair { count: 4, ready: true });
+                    changing_option = Option::none;
+                    var Result<Pair, Pair> changing_result = Result::ok(Pair { count: 5, ready: true });
+                    changing_result = Result::err(Pair { count: 6, ready: false });
+                }
+            }

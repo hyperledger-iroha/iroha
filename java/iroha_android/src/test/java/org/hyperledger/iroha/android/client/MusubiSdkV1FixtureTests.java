@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.canonicalAccountHeader;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -27,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveCommitment;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
@@ -1315,13 +1317,13 @@ public final class MusubiSdkV1FixtureTests {
     if (encoded.length < 32) {
       throw new IllegalStateException("Ed25519 public-key fixture is truncated");
     }
-    final StringBuilder literal = new StringBuilder("ed0120");
-    for (int index = encoded.length - 32; index < encoded.length; index++) {
-      final int value = encoded[index] & 0xFF;
-      literal.append(Character.toUpperCase(Character.forDigit(value >>> 4, 16)));
-      literal.append(Character.toUpperCase(Character.forDigit(value & 0x0F, 16)));
+    final byte[] publicKey = Arrays.copyOfRange(encoded, encoded.length - 32, encoded.length);
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new IllegalStateException("failed to encode Ed25519 account fixture", error);
     }
-    return literal.toString();
   }
 
   private static String firstHeader(final TransportRequest request, final String name) {
@@ -1334,7 +1336,9 @@ public final class MusubiSdkV1FixtureTests {
   }
 
   private static void assertCanonicalSignature(final TransportRequest request) {
-    assertEquals(ACCOUNT_ID, firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT));
+    assertEquals(
+        canonicalAccountHeader(ACCOUNT_ID),
+        firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT));
     final long timestampMs =
         Long.parseLong(firstHeader(request, CanonicalRequestSigner.HEADER_TIMESTAMP_MS));
     final String nonce = firstHeader(request, CanonicalRequestSigner.HEADER_NONCE);

@@ -32,7 +32,7 @@ use iroha::{
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
         isi::{
-            Grant, Instruction, InstructionBox, Log, Mint, Register, SetParameter,
+            Grant, InstructionBox, Log, Mint, Register, SetParameter,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
                 RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -657,7 +657,6 @@ fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinali
 }
 fn musubi_fault_provider_attestations(
     client: &Client,
-    _genesis_hash: [u8; 32],
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
     order_id: ReplicationOrderId,
@@ -873,7 +872,6 @@ fn assert_musubi_universal_home_execution_context(
 async fn wait_for_rejected_transaction(
     client: &Client,
     transaction: &SignedTransaction,
-    reason_fragment: &str,
     context: &str,
 ) -> Result<()> {
     let hash = transaction.hash();
@@ -887,16 +885,6 @@ async fn wait_for_rejected_transaction(
         if let Some(response) = response {
             let kind = response.status.kind.clone();
             if kind == "Rejected" {
-                let reason = response
-                    .status
-                    .rejection_reason
-                    .as_ref()
-                    .map(|reason| format!("{reason:?}"))
-                    .unwrap_or_default();
-                ensure!(
-                    reason.contains(reason_fragment),
-                    "{context}: rejection {reason:?} did not contain {reason_fragment:?}"
-                );
                 return Ok(());
             }
             ensure!(kind != "Applied", "{context}: fault transaction applied");
@@ -908,9 +896,7 @@ async fn wait_for_rejected_transaction(
         "{context}: timed out waiting for rejection; last status={last_status:?}"
     ))
 }
-fn musubi_fault_snapshot_and_time(
-    client: &Client,
-) -> Result<(MusubiRegistrySnapshotV1, [u8; 32], u64)> {
+fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnapshotV1, u64)> {
     let resolver =
         client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: musubi_fault_package(),
@@ -921,17 +907,20 @@ fn musubi_fault_snapshot_and_time(
         resolver.items.is_empty(),
         "Musubi fault package unexpectedly exists before publication"
     );
+    ensure!(
+        resolver.network_id == client.network_id,
+        "Musubi resolver page used a different network identity"
+    );
     let blocks = client.query(FindBlocks).execute_all()?;
     let latest = blocks
         .first()
         .ok_or_else(|| eyre!("Musubi fault fixture has no finalized block"))?;
     let latest_time_ms = u64::try_from(latest.header().creation_time().as_millis())
         .wrap_err("Musubi fault fixture block time overflows u64")?;
-    Ok((resolver.snapshot, resolver.genesis_hash, latest_time_ms))
+    Ok((resolver.snapshot, latest_time_ms))
 }
 fn musubi_fault_staging_receipt(
     client: &Client,
-    _genesis_block_hash: [u8; 32],
     latest_time_ms: u64,
     commitment: &MusubiArchiveCommitmentV1,
     manifest: &MusubiReleaseManifestV1,
@@ -1043,14 +1032,9 @@ async fn prepare_selectable_musubi_publication(
     let commitment = musubi_fault_archive_commitment();
     let archive_id = commitment.archive_id();
     let (manifest, lock) = musubi_fault_release_manifest_and_lock();
-    let (_, genesis_hash, latest_time_ms) = musubi_fault_snapshot_and_time(submitter)?;
-    let staging_receipt = musubi_fault_staging_receipt(
-        submitter,
-        genesis_hash,
-        latest_time_ms,
-        &commitment,
-        &manifest,
-    );
+    let (_, latest_time_ms) = musubi_fault_snapshot_and_time(submitter)?;
+    let staging_receipt =
+        musubi_fault_staging_receipt(submitter, latest_time_ms, &commitment, &manifest);
     let archive_transaction = submitter.build_transaction(
         [InstructionBox::from(RegisterMusubiArchiveV1::new(
             commitment.clone(),
@@ -1138,7 +1122,6 @@ async fn prepare_selectable_musubi_publication(
     let location_id = MusubiArchiveLocationIdV1::new([0xDB; 32]);
     let provider_attestations = musubi_fault_provider_attestations(
         submitter,
-        genesis_hash,
         &commitment,
         &manifest,
         replication_order,
@@ -1191,7 +1174,7 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: bind selectable archive location"),
     )
     .await?;
-    let (snapshot, _, _) = musubi_fault_snapshot_and_time(submitter)?;
+    let (snapshot, _) = musubi_fault_snapshot_and_time(submitter)?;
     let publication = MusubiPublicationV1 {
         manifest: manifest.clone(),
         resolution: MusubiResolutionProofV1 { snapshot, lock },

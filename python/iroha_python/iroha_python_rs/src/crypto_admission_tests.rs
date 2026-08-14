@@ -1,10 +1,11 @@
 //! Adversarial signature, key, numeric, and confidential-input admission tests.
+use super::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
     Python,
     types::{PyBytes, PyDict},
 };
-use super::*;
+use sorafs_manifest::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1;
 fn ensure_python() {
     static INIT: OnceCell<()> = OnceCell::new();
     INIT.get_or_init(|| {

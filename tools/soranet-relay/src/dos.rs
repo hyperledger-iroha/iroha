@@ -1,4 +1,21 @@
 //! DoS and abuse mitigation utilities for the relay handshake path.
+use crate::{
+    capability,
+    config::{
+        AdaptiveDifficultyConfig, ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
+        RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1, RelayMode, SlowlorisConfig, TokenPolicySource,
+        read_bounded_direct_regular_file,
+    },
+    metrics::Metrics,
+};
+use blake3::Hasher;
+use hex;
+use iroha_crypto::soranet::{
+    pow::Parameters,
+    puzzle,
+    token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
+};
+use norito::{DecodeLimits, derive::JsonDeserialize, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -11,25 +28,8 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
-use blake3::Hasher;
-use hex;
-use iroha_crypto::soranet::{
-    pow::Parameters,
-    puzzle,
-    token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
-};
-use norito::{DecodeLimits, derive::JsonDeserialize, json};
 use thiserror::Error;
 use tracing::warn;
-use crate::{
-    capability,
-    config::{
-        AdaptiveDifficultyConfig, ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
-        RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1, RelayMode, SlowlorisConfig, TokenPolicySource,
-        read_bounded_direct_regular_file,
-    },
-    metrics::Metrics,
-};
 // First-release bounds for the operator-reloadable emergency descriptor set.
 // The entry ceiling is shared with the inline relay-config list. A fully
 // escaped 64-byte descriptor string can occupy 386 source bytes, so 4 MiB
@@ -635,6 +635,7 @@ impl EmergencyThrottle {
         })
     }
 }
+#[derive(Debug)]
 struct LoadedEmergencyThrottle {
     descriptors: HashSet<[u8; 16]>,
     cooldown_override_secs: Option<u64>,
@@ -1061,20 +1062,20 @@ impl SlowlorisDetector {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        config::{PuzzleConfig, ReplayFilterConfig, TokenConfig},
+        metrics::TokenOutcomeKey,
+    };
+    use iroha_crypto::soranet::token::compute_issuer_fingerprint;
+    use rand::{SeedableRng, rngs::StdRng};
     use std::{
         fs,
         net::SocketAddr,
         thread,
         time::{Duration as StdDuration, UNIX_EPOCH},
     };
-    use iroha_crypto::soranet::token::compute_issuer_fingerprint;
-    use rand::{SeedableRng, rngs::StdRng};
     use tempfile::tempdir;
-    use super::*;
-    use crate::{
-        config::{PuzzleConfig, ReplayFilterConfig, TokenConfig},
-        metrics::TokenOutcomeKey,
-    };
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))
     }

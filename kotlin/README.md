@@ -62,7 +62,18 @@ canonical signed transaction or a closed typed signed intent.
 
 Canonical request builders keep I105 as the semantic SDK identity but emit its lowercase
 canonical-hex address in `X-Iroha-Account`, which is safe on strict ASCII HTTP stacks. Active
-printable-ASCII aliases are emitted unchanged; signed JSON `account_id` fields remain I105.
+canonical ASCII aliases are emitted unchanged. Signed JSON `account_id` fields retain the caller's
+exact canonical spelling: I105 remains I105, and a canonical body-auth alias remains unchanged.
+Alias inputs must already use the exact canonical `label@dataspace` or
+`label@domain.dataspace` lowercase-ASCII shape. The signer applies only bounded
+structural preflight; Torii remains authoritative for UTS-46, active bindings,
+and controller verification.
+The first-release signing domain is an exact genesis-derived
+`hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` `NetworkId` whose decoded 32-byte
+value carries the V1 marker bit. Canonical nonces contain 1--256 visible ASCII bytes. Methods are
+non-empty ASCII HTTP tokens of at most 32 bytes, and URI signers require an exact root-relative
+ASCII raw path of at most 64 KiB; absolute inputs must be hierarchical HTTP(S) URIs with an
+authority and no fragment.
 
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
 `ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The transport signs the exact

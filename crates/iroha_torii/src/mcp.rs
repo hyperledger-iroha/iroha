@@ -20,12 +20,13 @@ use axum::{
 use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use http_body_util::BodyExt as _;
+use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountAddress;
 use iroha_torii_shared::route_catalog::{
     self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
 };
-use norito::json::{self, Map, Value};
+use norito::json::{self, BoundedJsonError, FastJsonWrite, JsonWriteSink, Map, Value};
 use std::{
     collections::BTreeSet,
     fmt::Write as _,
@@ -61,11 +62,24 @@ const HEADER_X_IROHA_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_X_IROHA_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
 const HEADER_X_IROHA_NONCE: &str = "x-iroha-nonce";
 const HEADER_X_IROHA_WITNESS: &str = "x-iroha-witness";
+const CANONICAL_PADDED_BASE64_PATTERN: &str =
+    "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$";
+const CANONICAL_ACCOUNT_HEADER_PATTERN: &str = "^(?:0x(?:[0-9a-f]{2})+|[!-~]+@[!-~]+)$";
+const CANONICAL_SIGNATURE_MAX_ENCODED_BYTES: usize =
+    ((crate::app_auth::CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 + 2) / 3) * 4;
+const CANONICAL_WITNESS_MAX_ENCODED_BYTES: usize =
+    ((crate::app_auth::CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1 + 2) / 3) * 4;
+// Canonical public keys allow the longest 28-byte algorithm prefix, a colon,
+// two at-most-two-byte multihash varints, and the bounded hex payload.
+const OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES: usize =
+    28 + 1 + 2 * (2 + 2 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
 const HEADER_X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const DEFAULT_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 600_000;
 const DEFAULT_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 500;
 const MIN_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 50;
+const CANONICAL_TRANSACTION_HASH_HEX_BYTES: usize = iroha_crypto::Hash::LENGTH * 2;
+const QUERY_PROJECTION_SHARD_CATALOG_FIELDS: &[&str] = &["asset_definition_id", "limit", "offset"];
 const DEFAULT_TX_SUBMIT_WAIT_TERMINAL_STATUSES: &[&str] = &["Applied"];
 const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
     "Queued",
@@ -649,11 +663,140 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     // Keep this final guard so a custom dispatcher cannot bypass the catalog.
     retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     apply_catalog_operator_effects_to_manual_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
+    apply_catalog_auth_schemas_to_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     if let Err(error) = validate_tool_registry(&tools, CATALOG_PROJECTION_GROUPS) {
         panic!("invalid Torii MCP tool registry: {error}");
     }
     tools
+}
+
+fn canonical_signature_tuple_headers_schema(description: &str) -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce"
+        ],
+        "properties": {
+            "X-Iroha-Account": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": (crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1),
+                "pattern": (CANONICAL_ACCOUNT_HEADER_PATTERN),
+                "description": "Exact lowercase canonical 0x account-address hex or exact canonical printable-ASCII account alias; I105 is not an HTTP header encoding. The pattern is a lexical prefilter; Torii performs exact canonical address or alias parsing before dispatch."
+            },
+            "X-Iroha-Signature": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": (CANONICAL_SIGNATURE_MAX_ENCODED_BYTES),
+                "pattern": (CANONICAL_PADDED_BASE64_PATTERN)
+            },
+            "X-Iroha-Timestamp-Ms": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "X-Iroha-Nonce": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[!-~]+$"
+            }
+        },
+        "description": description
+    })
+}
+
+fn canonical_account_auth_headers_schema(description: &str) -> Value {
+    let mut schema = canonical_signature_tuple_headers_schema(description);
+    let object = schema
+        .as_object_mut()
+        .expect("canonical authentication header schema is an object");
+    object.remove("required");
+    let properties = object
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("canonical authentication header properties are an object");
+    properties.insert(
+        crate::HEADER_WITNESS.to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 4,
+            "maxLength": (CANONICAL_WITNESS_MAX_ENCODED_BYTES),
+            "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+            "description": "Canonical padded-base64 Norito V1 canonical-request witness."
+        }),
+    );
+    object.insert(
+        "oneOf".to_owned(),
+        norito::json!([
+            {
+                "required": [
+                    "X-Iroha-Account",
+                    "X-Iroha-Signature",
+                    "X-Iroha-Timestamp-Ms",
+                    "X-Iroha-Nonce"
+                ],
+                "not": { "required": ["X-Iroha-Witness"] }
+            },
+            {
+                "required": ["X-Iroha-Witness"],
+                "not": {
+                    "anyOf": [
+                        { "required": ["X-Iroha-Signature"] },
+                        { "required": ["X-Iroha-Timestamp-Ms"] },
+                        { "required": ["X-Iroha-Nonce"] }
+                    ]
+                }
+            }
+        ]),
+    );
+    schema
+}
+fn operator_auth_headers_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature"
+        ],
+        "properties": {
+            "X-Iroha-Operator-Public-Key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": (OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES),
+                "pattern": "^[!-~]+$",
+                "description": "Canonical Iroha multihash public-key literal. The pattern is a lexical prefilter; Torii performs exact canonical public-key parsing."
+            },
+            "X-Iroha-Operator-Timestamp-Ms": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "X-Iroha-Operator-Nonce": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[!-~]+$"
+            },
+            "X-Iroha-Operator-Signature": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": (CANONICAL_SIGNATURE_MAX_ENCODED_BYTES),
+                "pattern": (CANONICAL_PADDED_BASE64_PATTERN)
+            }
+        },
+        "description": "Complete exact-network operator signature tuple for the exact target method, path, query, and body."
+    })
 }
 fn visible_tools_for_policy<'a>(
     cfg: &iroha_config::parameters::actual::ToriiMcp,
@@ -880,6 +1023,14 @@ pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
 pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
     jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, message, None)
 }
+pub(crate) fn jsonrpc_allocation_failed(message: &str) -> Value {
+    jsonrpc_error_response(
+        None,
+        JSONRPC_INTERNAL_ERROR,
+        message,
+        Some(norito::json!({ "error_code": "allocation_failed" })),
+    )
+}
 pub(crate) fn jsonrpc_rate_limited() -> Value {
     jsonrpc_error_response(
         None,
@@ -896,19 +1047,19 @@ pub(crate) async fn handle_jsonrpc_request(
     inbound_headers: &HeaderMap,
     request: Value,
 ) -> Value {
-    let Some(req_obj) = request.as_object() else {
+    let Value::Object(mut req_obj) = request else {
         return jsonrpc_invalid_request("request must be an object");
     };
+    let id = req_obj.remove("id");
     if req_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return jsonrpc_error_response(
-            req_obj.get("id").cloned(),
+            id,
             JSONRPC_INVALID_REQUEST,
             "jsonrpc must be \"2.0\"",
             None,
         );
     }
-    let id = req_obj.get("id").cloned();
-    let Some(method) = req_obj.get("method").and_then(Value::as_str) else {
+    let Some(Value::String(method)) = req_obj.remove("method") else {
         return jsonrpc_error_response(
             id,
             JSONRPC_INVALID_REQUEST,
@@ -916,12 +1067,11 @@ pub(crate) async fn handle_jsonrpc_request(
             None,
         );
     };
-    let params = req_obj
-        .get("params")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    match method {
+    let params = match req_obj.remove("params") {
+        Some(Value::Object(params)) => params,
+        _ => Map::new(),
+    };
+    match method.as_str() {
         "initialize" => {
             let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
             jsonrpc_result_response(id, capabilities_payload(&visible_tools))
@@ -998,6 +1148,21 @@ async fn handle_tools_call(
             None,
         );
     };
+    let empty_arguments = Map::new();
+    let arguments = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty_arguments);
+    handle_named_tool_call(id, app, inbound_headers, name, arguments).await
+}
+
+async fn handle_named_tool_call(
+    id: Option<Value>,
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    name: &str,
+    arguments: &Map,
+) -> Value {
     let Some(tool_spec) = find_tool_spec_by_name(app.mcp_tools.as_slice(), name) else {
         return jsonrpc_error_response(
             id,
@@ -1014,101 +1179,95 @@ async fn handle_tools_call(
             Some(norito::json!({ "name": name, "error_code": MCP_TOOL_NOT_ALLOWED })),
         );
     }
-    let arguments = params
-        .get("arguments")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
     let tool_result = match name {
         "connect.ws.ticket" | "iroha.connect.ws.ticket" => {
-            build_connect_ws_ticket(&arguments, inbound_headers)
+            build_connect_ws_ticket(arguments, inbound_headers)
                 .map(mcp_tool_success)
                 .unwrap_or_else(mcp_tool_error)
         }
         "connect.session.create" | "iroha.connect.session.create" => {
-            match dispatch_connect_session_create(&app, inbound_headers, &arguments).await {
+            match dispatch_connect_session_create(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "connect.session.create_and_ticket" | "iroha.connect.session.create_and_ticket" => {
-            match dispatch_connect_session_create_and_ticket(&app, inbound_headers, &arguments)
-                .await
+            match dispatch_connect_session_create_and_ticket(&app, inbound_headers, arguments).await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "connect.session.delete" | "iroha.connect.session.delete" => {
-            match dispatch_connect_session_delete(&app, inbound_headers, &arguments).await {
+            match dispatch_connect_session_delete(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "connect.session.status" | "iroha.connect.session.status" => {
-            match dispatch_connect_session_status(&app, inbound_headers, &arguments).await {
+            match dispatch_connect_session_status(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.profile" => {
-            match dispatch_iroha_vpn_profile(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_profile(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.quotes.create" => {
-            match dispatch_iroha_vpn_quotes_create(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_quotes_create(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.sessions.create" => {
-            match dispatch_iroha_vpn_sessions_create(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_sessions_create(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.sessions.get" => {
-            match dispatch_iroha_vpn_sessions_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_sessions_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.sessions.delete" => {
-            match dispatch_iroha_vpn_sessions_delete(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_sessions_delete(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.receipts.list" => {
-            match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.vpn.receipts.submit" => {
-            match dispatch_iroha_vpn_receipts_submit(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_vpn_receipts_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.health" => match dispatch_iroha_health(&app, inbound_headers, &arguments).await {
+        "iroha.health" => match dispatch_iroha_health(&app, inbound_headers, arguments).await {
             Ok(result) => mcp_tool_success(result),
             Err(err) => mcp_tool_error(err),
         },
-        "iroha.status" => match dispatch_iroha_status(&app, inbound_headers, &arguments).await {
+        "iroha.status" => match dispatch_iroha_status(&app, inbound_headers, arguments).await {
             Ok(result) => mcp_tool_success(result),
             Err(err) => mcp_tool_error(err),
         },
         "iroha.parameters.get" => {
-            match dispatch_iroha_parameters_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_parameters_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.node.capabilities" => {
-            match dispatch_iroha_node_capabilities(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1117,7 +1276,7 @@ async fn handle_tools_call(
             match dispatch_iroha_node_query_projection_checkpoint_plan(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
             )
             .await
             {
@@ -1129,7 +1288,7 @@ async fn handle_tools_call(
             match dispatch_iroha_node_query_projection_checkpoint_publish(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
             )
             .await
             {
@@ -1141,7 +1300,7 @@ async fn handle_tools_call(
             match dispatch_iroha_node_query_projection_shard_catalog(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
             )
             .await
             {
@@ -1150,190 +1309,187 @@ async fn handle_tools_call(
             }
         }
         "iroha.node.query_projection_checkpoint" => {
-            match dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, &arguments)
+            match dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.time.now" => {
-            match dispatch_iroha_time_now(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.time.now" => match dispatch_iroha_time_now(&app, inbound_headers, arguments).await {
+            Ok(result) => mcp_tool_success(result),
+            Err(err) => mcp_tool_error(err),
+        },
         "iroha.sumeragi.pacemaker" => {
-            match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.sumeragi.phases" => {
-            match dispatch_iroha_sumeragi_phases(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_sumeragi_phases(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.ingest" => {
-            match dispatch_iroha_da_ingest(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_ingest(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.proof_policies" => {
-            match dispatch_iroha_da_proof_policies(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_proof_policies(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.proof_policy_snapshot" => {
-            match dispatch_iroha_da_proof_policy_snapshot(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_proof_policy_snapshot(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.manifests.get" => {
-            match dispatch_iroha_da_manifests_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_manifests_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.commitments.list" => {
-            match dispatch_iroha_da_commitments_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_commitments_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.commitments.prove" => {
-            match dispatch_iroha_da_commitments_prove(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_commitments_prove(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.commitments.verify" => {
-            match dispatch_iroha_da_commitments_verify(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_commitments_verify(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.pin_intents.list" => {
-            match dispatch_iroha_da_pin_intents_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_pin_intents_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.pin_intents.prove" => {
-            match dispatch_iroha_da_pin_intents_prove(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_pin_intents_prove(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.da.pin_intents.verify" => {
-            match dispatch_iroha_da_pin_intents_verify(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_da_pin_intents_verify(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.abi.active" => {
-            match dispatch_iroha_runtime_abi_active(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_abi_active(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.abi.hash" => {
-            match dispatch_iroha_runtime_abi_hash(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_abi_hash(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.metrics" => {
-            match dispatch_iroha_runtime_metrics(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_metrics(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.upgrades.list" => {
-            match dispatch_iroha_runtime_upgrades_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_upgrades_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.upgrades.propose" => {
-            match dispatch_iroha_runtime_upgrades_propose(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_upgrades_propose(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.upgrades.activate" => {
-            match dispatch_iroha_runtime_upgrades_activate(&app, inbound_headers, &arguments).await
-            {
+            match dispatch_iroha_runtime_upgrades_activate(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.runtime.upgrades.cancel" => {
-            match dispatch_iroha_runtime_upgrades_cancel(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_runtime_upgrades_cancel(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.ledger.headers" => {
-            match dispatch_iroha_ledger_headers(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_ledger_headers(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.ledger.state_root" => {
-            match dispatch_iroha_ledger_state_root(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_ledger_state_root(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.ledger.state_proof" => {
-            match dispatch_iroha_ledger_state_proof(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_ledger_state_proof(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.ledger.block_proof" => {
-            match dispatch_iroha_ledger_block_proof(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_ledger_block_proof(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.bridge.finality.proof" => {
-            match dispatch_iroha_bridge_finality_proof(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_bridge_finality_proof(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.bridge.finality.bundle" => {
-            match dispatch_iroha_bridge_finality_bundle(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_bridge_finality_bundle(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.proofs.get" => {
-            match dispatch_iroha_proofs_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_proofs_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.proofs.query" => {
-            match dispatch_iroha_proofs_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_proofs_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.contract.get" => {
-            match dispatch_iroha_gov_contract_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_contract_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.proposals.deploy_contract" => {
-            match dispatch_iroha_gov_proposals_deploy_contract(&app, inbound_headers, &arguments)
+            match dispatch_iroha_gov_proposals_deploy_contract(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
@@ -1341,37 +1497,37 @@ async fn handle_tools_call(
             }
         }
         "iroha.gov.proposals.get" => {
-            match dispatch_iroha_gov_proposals_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_proposals_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.locks.get" => {
-            match dispatch_iroha_gov_locks_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_locks_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.referenda.get" => {
-            match dispatch_iroha_gov_referenda_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_referenda_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.tally.get" => {
-            match dispatch_iroha_gov_tally_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_tally_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.ballots.zk_v1" => {
-            match dispatch_iroha_gov_ballots_zk_v1(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_ballots_zk_v1(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.ballots.zk_v1.ballot_proof" => {
-            match dispatch_iroha_gov_ballots_zk_v1_ballot_proof(&app, inbound_headers, &arguments)
+            match dispatch_iroha_gov_ballots_zk_v1_ballot_proof(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
@@ -1379,13 +1535,13 @@ async fn handle_tools_call(
             }
         }
         "iroha.gov.ballots.plain" => {
-            match dispatch_iroha_gov_ballots_plain(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_ballots_plain(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.protected_namespaces.list" => {
-            match dispatch_iroha_gov_protected_namespaces_list(&app, inbound_headers, &arguments)
+            match dispatch_iroha_gov_protected_namespaces_list(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
@@ -1393,7 +1549,7 @@ async fn handle_tools_call(
             }
         }
         "iroha.gov.protected_namespaces.update" => {
-            match dispatch_iroha_gov_protected_namespaces_update(&app, inbound_headers, &arguments)
+            match dispatch_iroha_gov_protected_namespaces_update(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
@@ -1401,370 +1557,366 @@ async fn handle_tools_call(
             }
         }
         "iroha.gov.unlocks.stats" => {
-            match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.council.current" => {
-            match dispatch_iroha_gov_council_current(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_council_current(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.citizens.count" => {
-            match dispatch_iroha_gov_citizens_count(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_citizens_count(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.enact" => {
-            match dispatch_iroha_gov_enact(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_enact(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.gov.finalize" => {
-            match dispatch_iroha_gov_finalize(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_gov_finalize(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.aliases.resolve" => {
-            match dispatch_iroha_aliases_resolve(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_aliases_resolve(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.aliases.resolve_index" => {
-            match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.aliases.by_account" => {
-            match dispatch_iroha_aliases_by_account(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_aliases_by_account(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.contracts.code.get" => {
-            match dispatch_iroha_contracts_code_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_contracts_code_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.contracts.code.bytes.get" => {
-            match dispatch_iroha_contracts_code_bytes_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_contracts_code_bytes_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.contracts.call" => {
-            match dispatch_iroha_contracts_call(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_contracts_call(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.contracts.call_and_wait" => {
-            match dispatch_iroha_contracts_call_and_wait(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_contracts_call_and_wait(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.contracts.state.get" => {
-            match dispatch_iroha_contracts_state_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_contracts_state_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.list" => {
-            match dispatch_iroha_accounts_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.get" => {
-            match dispatch_iroha_accounts_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.qr" => {
-            match dispatch_iroha_accounts_qr(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_qr(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.query" => {
-            match dispatch_iroha_accounts_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.onboard" => {
-            match dispatch_iroha_accounts_onboard(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_onboard(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.onboard.plan" => {
-            match dispatch_iroha_accounts_onboard_plan(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_onboard_plan(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.faucet" => {
-            match dispatch_iroha_accounts_faucet(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_accounts_faucet(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.transactions" => {
-            match dispatch_iroha_account_transactions(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_transactions(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.history" => {
-            match dispatch_iroha_account_history(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_history(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.transactions.query" => {
-            match dispatch_iroha_account_transactions_query(&app, inbound_headers, &arguments).await
+            match dispatch_iroha_account_transactions_query(&app, inbound_headers, arguments).await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.query" => {
-            match dispatch_iroha_transactions_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.visible.query" => {
-            match dispatch_iroha_transactions_visible_query(&app, inbound_headers, &arguments).await
+            match dispatch_iroha_transactions_visible_query(&app, inbound_headers, arguments).await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.assets" => {
-            match dispatch_iroha_account_assets(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_assets(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.assets.query" => {
-            match dispatch_iroha_account_assets_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_assets_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.permissions" => {
-            match dispatch_iroha_account_permissions(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_permissions(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.accounts.portfolio" => {
-            match dispatch_iroha_account_portfolio(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_account_portfolio(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.domains.list" => {
-            match dispatch_iroha_domains_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_domains_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.domains.get" => {
-            match dispatch_iroha_domains_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_domains_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.domains.query" => {
-            match dispatch_iroha_domains_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_domains_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         name if musubi_v1_tool_definition(name).is_some() => {
-            match dispatch_iroha_musubi_v1(&app, inbound_headers, name, &arguments).await {
+            match dispatch_iroha_musubi_v1(&app, inbound_headers, name, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.plans.list" => {
-            match dispatch_iroha_subscriptions_plans_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_plans_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.plans.create" => {
-            match dispatch_iroha_subscriptions_plans_create(&app, inbound_headers, &arguments).await
+            match dispatch_iroha_subscriptions_plans_create(&app, inbound_headers, arguments).await
             {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.list" => {
-            match dispatch_iroha_subscriptions_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.create" => {
-            match dispatch_iroha_subscriptions_create(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_create(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.get" => {
-            match dispatch_iroha_subscriptions_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.pause" => {
-            match dispatch_iroha_subscriptions_pause(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_pause(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.resume" => {
-            match dispatch_iroha_subscriptions_resume(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_resume(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.cancel" => {
-            match dispatch_iroha_subscriptions_cancel(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_cancel(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.keep" => {
-            match dispatch_iroha_subscriptions_keep(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_keep(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.usage" => {
-            match dispatch_iroha_subscriptions_usage(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_usage(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.subscriptions.charge_now" => {
-            match dispatch_iroha_subscriptions_charge_now(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_subscriptions_charge_now(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.definitions" => {
-            match dispatch_iroha_asset_definitions(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_asset_definitions(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.definitions.get" => {
-            match dispatch_iroha_asset_definitions_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_asset_definitions_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.definitions.query" => {
-            match dispatch_iroha_asset_definitions_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_asset_definitions_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.holders" => {
-            match dispatch_iroha_asset_holders(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_asset_holders(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.holders.query" => {
-            match dispatch_iroha_asset_holders_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_asset_holders_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.list" => {
-            match dispatch_iroha_assets_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_assets_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.assets.get" => {
-            match dispatch_iroha_assets_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_assets_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.nfts.chain.list" => {
-            match dispatch_iroha_nfts_chain_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_nfts_chain_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.nfts.list" => {
-            match dispatch_iroha_nfts_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_nfts_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.nfts.get" => {
-            match dispatch_iroha_nfts_get(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.nfts.get" => match dispatch_iroha_nfts_get(&app, inbound_headers, arguments).await {
+            Ok(result) => mcp_tool_success(result),
+            Err(err) => mcp_tool_error(err),
+        },
         "iroha.nfts.query" => {
-            match dispatch_iroha_nfts_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_nfts_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.rwas.chain.list" => {
-            match dispatch_iroha_rwas_chain_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_rwas_chain_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.rwas.list" => {
-            match dispatch_iroha_rwas_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_rwas_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.rwas.get" => {
-            match dispatch_iroha_rwas_get(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.rwas.get" => match dispatch_iroha_rwas_get(&app, inbound_headers, arguments).await {
+            Ok(result) => mcp_tool_success(result),
+            Err(err) => mcp_tool_error(err),
+        },
         "iroha.rwas.query" => {
-            match dispatch_iroha_rwas_query(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_rwas_query(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.iso20022.pacs008.submit" => {
-            match dispatch_iroha_iso20022_pacs008_submit(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_iso20022_pacs008_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.iso20022.pacs009.submit" => {
-            match dispatch_iroha_iso20022_pacs009_submit(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_iso20022_pacs009_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1773,7 +1925,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/pacs002",
             )
             .await
@@ -1786,7 +1938,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/pacs004",
             )
             .await
@@ -1799,7 +1951,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/camt056",
             )
             .await
@@ -1812,7 +1964,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/sese023",
             )
             .await
@@ -1825,7 +1977,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/sese024",
             )
             .await
@@ -1838,7 +1990,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/sese025",
             )
             .await
@@ -1851,7 +2003,7 @@ async fn handle_tools_call(
             match dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
-                &arguments,
+                arguments,
                 "/v1/iso20022/colr012",
             )
             .await
@@ -1861,61 +2013,61 @@ async fn handle_tools_call(
             }
         }
         "iroha.iso20022.status.get" => {
-            match dispatch_iroha_iso20022_status_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_iso20022_status_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.queries.submit" => {
-            match dispatch_iroha_queries_submit(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_queries_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.list" => {
-            match dispatch_iroha_transactions_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.get" => {
-            match dispatch_iroha_transactions_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.instructions.list" => {
-            match dispatch_iroha_instructions_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_instructions_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.instructions.get" => {
-            match dispatch_iroha_instructions_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_instructions_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.blocks.list" => {
-            match dispatch_iroha_blocks_list(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_blocks_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.blocks.get" => {
-            match dispatch_iroha_blocks_get(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_blocks_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.submit" => {
-            match dispatch_iroha_transactions_submit(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.submit_and_wait" => {
-            match dispatch_iroha_transactions_submit_and_wait(&app, inbound_headers, &arguments)
+            match dispatch_iroha_transactions_submit_and_wait(&app, inbound_headers, arguments)
                 .await
             {
                 Ok(result) => mcp_tool_success(result),
@@ -1923,18 +2075,18 @@ async fn handle_tools_call(
             }
         }
         "iroha.transactions.wait" => {
-            match dispatch_iroha_transactions_wait(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_wait(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
         "iroha.transactions.status" => {
-            match dispatch_iroha_transactions_status(&app, inbound_headers, &arguments).await {
+            match dispatch_iroha_transactions_status(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        _ => match dispatch_openapi_tool(&app, inbound_headers, tool_spec, &arguments).await {
+        _ => match dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments).await {
             Ok(result) => mcp_tool_success(result),
             Err(err) => mcp_tool_error(err),
         },
@@ -1955,7 +2107,15 @@ async fn handle_tools_call_batch(
             None,
         );
     };
-    let mut results = Vec::with_capacity(calls.len());
+    let mut results = Vec::new();
+    if results.try_reserve_exact(calls.len()).is_err() {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INTERNAL_ERROR,
+            "failed to reserve MCP batch result storage",
+            Some(norito::json!({ "error_code": "allocation_failed" })),
+        );
+    }
     for call in calls {
         let Some(call_obj) = call.as_object() else {
             results.push(norito::json!({
@@ -1977,21 +2137,27 @@ async fn handle_tools_call_batch(
             }));
             continue;
         };
-        let args = call_obj
+        let empty_arguments = Map::new();
+        let arguments = call_obj
             .get("arguments")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let mut call_params = Map::new();
-        call_params.insert("name".into(), Value::String(name.to_owned()));
-        call_params.insert("arguments".into(), Value::Object(args));
-        let response = handle_tools_call(None, app.clone(), inbound_headers, &call_params).await;
-        if let Some(result) = response.get("result") {
-            let result_value = result.clone();
-            results.push(norito::json!({ "result": result_value }));
-        } else if let Some(error) = response.get("error") {
-            let error_value = error.clone();
-            results.push(norito::json!({ "error": error_value }));
+            .unwrap_or(&empty_arguments);
+        let response =
+            handle_named_tool_call(None, app.clone(), inbound_headers, name, arguments).await;
+        let Value::Object(mut response) = response else {
+            results.push(norito::json!({
+                "error": {
+                    "code": JSONRPC_INTERNAL_ERROR,
+                    "message": "batch item returned malformed response",
+                    "data": { "error_code": "internal_error" }
+                }
+            }));
+            continue;
+        };
+        if let Some(result) = response.remove("result") {
+            results.push(norito::json!({ "result": result }));
+        } else if let Some(error) = response.remove("error") {
+            results.push(norito::json!({ "error": error }));
         } else {
             results.push(norito::json!({
                 "error": {
@@ -2523,6 +2689,57 @@ fn apply_catalog_operator_effects_to_manual_tools(
         }
     }
 }
+fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[CatalogProjectionGroup]) {
+    for tool in tools {
+        let Some(descriptor) =
+            catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str())
+        else {
+            continue;
+        };
+        let Some(schema) = tool.input_schema.as_object_mut() else {
+            continue;
+        };
+        let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        match descriptor.authentication() {
+            AuthenticationPolicy::CanonicalAccountSignature => {
+                // Purpose-built VPN tools carry a typed `canonical_auth`
+                // envelope and normalize it into headers only after bounded
+                // wire preflight.
+                if properties.contains_key("canonical_auth")
+                    || tool.name.starts_with("iroha.gov.ballots.")
+                {
+                    continue;
+                }
+                properties.insert(
+                    "headers".to_owned(),
+                    canonical_account_auth_headers_schema(
+                        "Canonical proof signed for the exact target method, path, query, and body.",
+                    ),
+                );
+            }
+            AuthenticationPolicy::OperatorSignature => {
+                if properties.contains_key("operator_auth") {
+                    continue;
+                }
+                properties.insert("headers".to_owned(), operator_auth_headers_schema());
+            }
+            _ => continue,
+        }
+        let required = schema
+            .entry("required".to_owned())
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("tool schema `required` is an array");
+        if !required
+            .iter()
+            .any(|value| value.as_str() == Some("headers"))
+        {
+            required.push(Value::String("headers".to_owned()));
+        }
+    }
+}
 fn validate_tool_registry(
     tools: &[ToolSpec],
     groups: &[CatalogProjectionGroup],
@@ -2541,6 +2758,15 @@ fn validate_tool_registry(
                 "operator route tool `{}` must have operator effect, not {:?}",
                 tool.name, tool.effect
             ));
+        }
+        match descriptor.map(|route| route.authentication()) {
+            Some(AuthenticationPolicy::CanonicalAccountSignature) => {
+                validate_canonical_auth_tool_schema(tool)?;
+            }
+            Some(AuthenticationPolicy::OperatorSignature) => {
+                validate_operator_auth_tool_schema(tool)?;
+            }
+            _ => {}
         }
         if !tool.name.starts_with("torii.") {
             if !tool.name.starts_with("iroha.") && !tool.name.starts_with("connect.") {
@@ -2578,6 +2804,365 @@ fn validate_tool_registry(
         }
     }
     Ok(())
+}
+fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    let schema = tool.input_schema.as_object().ok_or_else(|| {
+        format!(
+            "canonical-auth tool `{}` must publish an object input schema",
+            tool.name
+        )
+    })?;
+    if schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err(format!(
+            "canonical-auth tool `{}` must publish an object input schema",
+            tool.name
+        ));
+    }
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "canonical-auth tool `{}` must publish input properties",
+                tool.name
+            )
+        })?;
+    if let Some(auth) = properties.get("canonical_auth").and_then(Value::as_object) {
+        let auth_properties =
+            auth.get("properties")
+                .and_then(Value::as_object)
+                .filter(|properties| {
+                    auth.get("type").and_then(Value::as_str) == Some("object")
+                        && auth.get("additionalProperties").and_then(Value::as_bool) == Some(false)
+                        && object_has_exact_properties(
+                            properties,
+                            &["account", "signature", "timestamp_ms", "nonce", "witness"],
+                        )
+                });
+        let constrained = auth_properties.is_some_and(|properties| {
+            bounded_string_schema(
+                properties.get("account"),
+                1,
+                crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+                None,
+            ) && bounded_string_schema(
+                properties.get("signature"),
+                4,
+                CANONICAL_SIGNATURE_MAX_ENCODED_BYTES,
+                Some(CANONICAL_PADDED_BASE64_PATTERN),
+            ) && properties
+                .get("timestamp_ms")
+                .and_then(Value::as_object)
+                .is_some_and(|property| {
+                    property.get("type").and_then(Value::as_str) == Some("integer")
+                        && property.get("minimum").and_then(Value::as_u64) == Some(0)
+                        && property.get("maximum").and_then(Value::as_u64) == Some(u64::MAX)
+                })
+                && bounded_string_schema(properties.get("nonce"), 1, 256, Some("^[!-~]+$"))
+                && bounded_string_schema(
+                    properties.get("witness"),
+                    4,
+                    CANONICAL_WITNESS_MAX_ENCODED_BYTES,
+                    Some(CANONICAL_PADDED_BASE64_PATTERN),
+                )
+        });
+        if schema_requires(schema, "canonical_auth")
+            && constrained
+            && auth_schema_has_exclusive_branches(
+                auth,
+                "account",
+                "signature",
+                "timestamp_ms",
+                "nonce",
+                "witness",
+            )
+        {
+            return Ok(());
+        }
+        return Err(format!(
+            "canonical-auth tool `{}` must require a closed, bounded typed canonical_auth envelope with exclusive signature and witness branches",
+            tool.name
+        ));
+    }
+    let headers = properties
+        .get("headers")
+        .and_then(Value::as_object)
+        .filter(|headers| {
+            headers.get("type").and_then(Value::as_str) == Some("object")
+                && headers.get("additionalProperties").and_then(Value::as_bool) == Some(false)
+        });
+    let Some(header_properties) = headers
+        .and_then(|headers| headers.get("properties"))
+        .and_then(Value::as_object)
+    else {
+        return Err(format!(
+            "canonical-auth tool `{}` must publish closed target header properties",
+            tool.name
+        ));
+    };
+    if !object_has_exact_properties(
+        header_properties,
+        &[
+            crate::HEADER_ACCOUNT,
+            crate::HEADER_SIGNATURE,
+            crate::HEADER_TIMESTAMP_MS,
+            crate::HEADER_NONCE,
+            crate::HEADER_WITNESS,
+        ],
+    ) {
+        return Err(format!(
+            "canonical-auth tool `{}` must publish the exact target header properties",
+            tool.name
+        ));
+    }
+    let constrained = bounded_string_schema(
+        header_properties.get(crate::HEADER_ACCOUNT),
+        1,
+        crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+        Some(CANONICAL_ACCOUNT_HEADER_PATTERN),
+    ) && bounded_string_schema(
+        header_properties.get(crate::HEADER_SIGNATURE),
+        4,
+        CANONICAL_SIGNATURE_MAX_ENCODED_BYTES,
+        Some(CANONICAL_PADDED_BASE64_PATTERN),
+    ) && bounded_string_schema(
+        header_properties.get(crate::HEADER_TIMESTAMP_MS),
+        1,
+        20,
+        Some("^(0|[1-9][0-9]*)$"),
+    ) && bounded_string_schema(
+        header_properties.get(crate::HEADER_NONCE),
+        1,
+        256,
+        Some("^[!-~]+$"),
+    ) && bounded_string_schema(
+        header_properties.get(crate::HEADER_WITNESS),
+        4,
+        CANONICAL_WITNESS_MAX_ENCODED_BYTES,
+        Some(CANONICAL_PADDED_BASE64_PATTERN),
+    );
+    if !schema_requires(schema, "headers")
+        || !constrained
+        || !auth_schema_has_exclusive_branches(
+            headers.expect("closed headers schema exists"),
+            crate::HEADER_ACCOUNT,
+            crate::HEADER_SIGNATURE,
+            crate::HEADER_TIMESTAMP_MS,
+            crate::HEADER_NONCE,
+            crate::HEADER_WITNESS,
+        )
+    {
+        return Err(format!(
+            "canonical-auth tool `{}` must require strict bounded target authentication headers with exclusive signature and witness branches",
+            tool.name
+        ));
+    }
+    Ok(())
+}
+fn validate_operator_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    let schema = tool.input_schema.as_object().ok_or_else(|| {
+        format!(
+            "operator-auth tool `{}` must publish an object input schema",
+            tool.name
+        )
+    })?;
+    if schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err(format!(
+            "operator-auth tool `{}` must publish an object input schema",
+            tool.name
+        ));
+    }
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("operator-auth tool `{}` lacks properties", tool.name))?;
+    if let Some(auth) = properties.get("operator_auth").and_then(Value::as_object) {
+        let auth_properties =
+            auth.get("properties")
+                .and_then(Value::as_object)
+                .filter(|properties| {
+                    auth.get("type").and_then(Value::as_str) == Some("object")
+                        && auth.get("additionalProperties").and_then(Value::as_bool) == Some(false)
+                        && object_has_exact_properties(
+                            properties,
+                            &["public_key", "timestamp_ms", "nonce", "signature"],
+                        )
+                });
+        let valid = auth_properties.is_some_and(|properties| {
+            bounded_string_schema(
+                properties.get("public_key"),
+                1,
+                OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES,
+                Some("^[!-~]+$"),
+            ) && properties
+                .get("timestamp_ms")
+                .and_then(Value::as_object)
+                .is_some_and(|property| {
+                    property.get("type").and_then(Value::as_str) == Some("integer")
+                        && property.get("minimum").and_then(Value::as_u64) == Some(0)
+                        && property.get("maximum").and_then(Value::as_u64) == Some(u64::MAX)
+                })
+                && bounded_string_schema(properties.get("nonce"), 1, 256, Some("^[!-~]+$"))
+                && bounded_string_schema(
+                    properties.get("signature"),
+                    4,
+                    CANONICAL_SIGNATURE_MAX_ENCODED_BYTES,
+                    Some(CANONICAL_PADDED_BASE64_PATTERN),
+                )
+        }) && schema_has_exact_required(
+            auth,
+            &["public_key", "timestamp_ms", "nonce", "signature"],
+        );
+        if schema_requires(schema, "operator_auth") && valid {
+            return Ok(());
+        }
+    } else if let Some(headers) = properties.get("headers").and_then(Value::as_object) {
+        let header_properties =
+            headers
+                .get("properties")
+                .and_then(Value::as_object)
+                .filter(|properties| {
+                    headers.get("type").and_then(Value::as_str) == Some("object")
+                        && headers.get("additionalProperties").and_then(Value::as_bool)
+                            == Some(false)
+                        && object_has_exact_properties(
+                            properties,
+                            &[
+                                "X-Iroha-Operator-Public-Key",
+                                "X-Iroha-Operator-Timestamp-Ms",
+                                "X-Iroha-Operator-Nonce",
+                                "X-Iroha-Operator-Signature",
+                            ],
+                        )
+                });
+        let valid = header_properties.is_some_and(|properties| {
+            bounded_string_schema(
+                properties.get("X-Iroha-Operator-Public-Key"),
+                1,
+                OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES,
+                Some("^[!-~]+$"),
+            ) && bounded_string_schema(
+                properties.get("X-Iroha-Operator-Timestamp-Ms"),
+                1,
+                20,
+                Some("^(0|[1-9][0-9]*)$"),
+            ) && bounded_string_schema(
+                properties.get("X-Iroha-Operator-Nonce"),
+                1,
+                256,
+                Some("^[!-~]+$"),
+            ) && bounded_string_schema(
+                properties.get("X-Iroha-Operator-Signature"),
+                4,
+                CANONICAL_SIGNATURE_MAX_ENCODED_BYTES,
+                Some(CANONICAL_PADDED_BASE64_PATTERN),
+            ) && schema_has_exact_required(
+                headers,
+                &[
+                    "X-Iroha-Operator-Public-Key",
+                    "X-Iroha-Operator-Timestamp-Ms",
+                    "X-Iroha-Operator-Nonce",
+                    "X-Iroha-Operator-Signature",
+                ],
+            )
+        });
+        if schema_requires(schema, "headers") && valid {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "operator-auth tool `{}` must require a complete closed and bounded operator signature tuple",
+        tool.name
+    ))
+}
+fn bounded_string_schema(
+    value: Option<&Value>,
+    min_length: usize,
+    max_length: usize,
+    pattern: Option<&str>,
+) -> bool {
+    value.and_then(Value::as_object).is_some_and(|property| {
+        property.get("type").and_then(Value::as_str) == Some("string")
+            && property.get("minLength").and_then(Value::as_u64) == u64::try_from(min_length).ok()
+            && property.get("maxLength").and_then(Value::as_u64) == u64::try_from(max_length).ok()
+            && pattern.is_none_or(|pattern| {
+                property.get("pattern").and_then(Value::as_str) == Some(pattern)
+            })
+    })
+}
+fn object_has_exact_properties(properties: &Map, expected: &[&str]) -> bool {
+    properties.len() == expected.len() && expected.iter().all(|name| properties.contains_key(*name))
+}
+fn schema_requires(schema: &Map, field: &str) -> bool {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| required.iter().any(|value| value.as_str() == Some(field)))
+}
+fn schema_has_exact_required(schema: &Map, expected: &[&str]) -> bool {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| {
+            required.len() == expected.len()
+                && expected
+                    .iter()
+                    .all(|name| required.iter().any(|value| value.as_str() == Some(*name)))
+        })
+}
+fn auth_schema_has_exclusive_branches(
+    schema: &Map,
+    account: &str,
+    signature: &str,
+    timestamp: &str,
+    nonce: &str,
+    witness: &str,
+) -> bool {
+    let Some(branches) = schema.get("oneOf").and_then(Value::as_array) else {
+        return false;
+    };
+    if branches.len() != 2 {
+        return false;
+    }
+    let signature_branch = branches.iter().find_map(|branch| {
+        let branch = branch.as_object()?;
+        schema_requires(branch, signature).then_some(branch)
+    });
+    let witness_branch = branches.iter().find_map(|branch| {
+        let branch = branch.as_object()?;
+        schema_requires(branch, witness).then_some(branch)
+    });
+    let signature_valid = signature_branch.is_some_and(|branch| {
+        schema_has_exact_required(branch, &[account, signature, timestamp, nonce])
+            && branch
+                .get("not")
+                .and_then(Value::as_object)
+                .is_some_and(|not| schema_has_exact_required(not, &[witness]))
+    });
+    let witness_valid = witness_branch.is_some_and(|branch| {
+        schema_has_exact_required(branch, &[witness])
+            && branch
+                .get("not")
+                .and_then(Value::as_object)
+                .and_then(|not| not.get("anyOf"))
+                .and_then(Value::as_array)
+                .is_some_and(|forbidden| {
+                    forbidden.len() == 3
+                        && [signature, timestamp, nonce].iter().all(|name| {
+                            forbidden.iter().any(|branch| {
+                                branch.as_object().is_some_and(|branch| {
+                                    branch
+                                        .get("required")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|required| {
+                                            required.len() == 1 && schema_requires(branch, name)
+                                        })
+                                })
+                            })
+                        })
+                })
+    });
+    signature_valid && witness_valid
 }
 fn catalog_descriptor_for_method_path(
     groups: &[CatalogProjectionGroup],
@@ -2748,11 +3333,8 @@ async fn dispatch_openapi_tool(
     let route = fill_path_template(&tool.path_template, arguments.get("path"))?;
     let route = append_query(route, arguments.get("query"))?;
     let (body, content_type) = build_request_body(arguments)?;
-    let accept = arguments
-        .get("accept")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let structured = dispatch_route(
+    let accept = arguments.get("accept").and_then(Value::as_str);
+    let structured = dispatch_route_borrowed(
         app,
         inbound_headers,
         tool.method.clone(),
@@ -2771,7 +3353,7 @@ async fn dispatch_connect_session_create(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_connect_session_create_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -2860,25 +3442,28 @@ async fn dispatch_connect_session_delete(
 ) -> Result<Value, String> {
     let sid = extract_connect_sid_argument(arguments)?;
     let mut path = String::from("/v1/connect/session/");
-    path.push_str(&urlencoding::encode(sid));
-    let extra_headers = connect_management_headers(arguments)?;
-    dispatch_route_with_extra_header_policy(
+    try_append_percent_encoded_path_component(&mut path, sid)?;
+    let management_token = arguments
+        .get("token_management")
+        .or_else(|| arguments.get("tokenManagement"))
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty());
+    dispatch_route_with_borrowed_headers(
         app,
         inbound_headers,
         Method::DELETE,
         path.as_str(),
-        extra_headers.as_ref(),
+        arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
         ExtraHeaderPolicy::ConnectManagement,
+        management_token,
     )
     .await
 }
 include!("mcp/connect_status_tools.rs");
+include!("mcp/borrowed_dispatch.rs");
 macro_rules! declare_mcp_dispatch_wrappers {
     (
         direct_get {
@@ -2927,8 +3512,7 @@ macro_rules! declare_mcp_dispatch_wrappers {
             ) -> Result<Value, String> {
                 let body =
                     build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-                let body_bytes =
-                    json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+                let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
                 dispatch_route(
                     app,
                     inbound_headers,
@@ -2951,9 +3535,11 @@ macro_rules! declare_mcp_dispatch_wrappers {
                 inbound_headers: &HeaderMap,
                 arguments: &Map,
             ) -> Result<Value, String> {
-                let query =
-                    collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-                let route = append_query($list_query_route.to_owned(), query.as_ref())?;
+                let route = append_query_arguments(
+                    $list_query_route.to_owned(),
+                    arguments,
+                    &["query", "headers", "accept"],
+                )?;
                 dispatch_route(
                     app,
                     inbound_headers,
@@ -2977,8 +3563,7 @@ macro_rules! declare_mcp_dispatch_wrappers {
                 arguments: &Map,
             ) -> Result<Value, String> {
                 let body = build_query_envelope_body(arguments)?;
-                let body_bytes =
-                    json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+                let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
                 dispatch_route(
                     app,
                     inbound_headers,
@@ -3099,16 +3684,66 @@ fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, Stri
     if account.is_empty() || account.trim() != account {
         return Err("`canonical_auth.account` must be exact and non-empty".to_owned());
     }
+    if account.len() > crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 {
+        return Err(format!(
+            "`canonical_auth.account` exceeds the V1 limit of {} bytes",
+            crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1
+        ));
+    }
     match AccountAddress::parse_encoded(account, None) {
-        Ok(address) => address
-            .canonical_hex()
-            .map_err(|err| format!("failed to encode `canonical_auth.account`: {err}")),
-        Err(_) if account.bytes().all(|byte| byte.is_ascii_graphic()) => Ok(account.to_owned()),
+        Ok(address) => {
+            let rendered = address
+                .canonical_hex()
+                .map_err(|err| format!("failed to encode `canonical_auth.account`: {err}"))?;
+            crate::app_auth::validate_canonical_request_auth_wire_values(
+                Some(&rendered),
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|err| format!("invalid `canonical_auth.account`: {err}"))?;
+            Ok(rendered)
+        }
+        Err(_) if account.is_ascii() => {
+            crate::app_auth::validate_canonical_request_auth_wire_values(
+                Some(account),
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|err| format!("invalid `canonical_auth.account`: {err}"))?;
+            try_copy_auth_header_value(account, "canonical_auth.account")
+        }
         Err(_) => Err(
             "`canonical_auth.account` must be a canonical I105 account or printable ASCII account alias"
                 .to_owned(),
         ),
     }
+}
+fn try_copy_auth_header_value(value: &str, context: &str) -> Result<String, String> {
+    let mut copied = String::new();
+    copied
+        .try_reserve_exact(value.len())
+        .map_err(|_| format!("failed to allocate `{context}` header value"))?;
+    copied.push_str(value);
+    Ok(copied)
+}
+fn try_render_u64_auth_header_value(value: u64, context: &str) -> Result<String, String> {
+    let mut digits = [0_u8; 20];
+    let mut start = digits.len();
+    let mut remaining = value;
+    loop {
+        start -= 1;
+        digits[start] = b'0' + u8::try_from(remaining % 10).expect("decimal digit fits in u8");
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    let rendered = std::str::from_utf8(&digits[start..]).expect("decimal digits are valid UTF-8");
+    try_copy_auth_header_value(rendered, context)
 }
 fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
@@ -3124,12 +3759,11 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
         &["account", "signature", "timestamp_ms", "nonce", "witness"],
         "VPN canonical authentication",
     )?;
-    let string_field = |name: &str| -> Result<Option<String>, String> {
+    let string_field = |name: &str| -> Result<Option<&str>, String> {
         auth.get(name)
             .map(|value| {
                 value
                     .as_str()
-                    .map(str::to_owned)
                     .ok_or_else(|| format!("`canonical_auth.{name}` must be a string"))
             })
             .transpose()
@@ -3153,17 +3787,39 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
                 "signature authentication requires `canonical_auth.account`".to_owned()
             })?;
             let account = vpn_canonical_auth_account_header_value(&account)?;
+            let timestamp_ms = timestamp_ms.to_string();
+            crate::app_auth::validate_canonical_request_auth_wire_values(
+                Some(&account),
+                Some(signature),
+                Some(&timestamp_ms),
+                Some(nonce),
+                None,
+            )
+            .map_err(|err| format!("invalid VPN canonical authentication: {err}"))?;
+            let signature = try_copy_auth_header_value(signature, "canonical_auth.signature")?;
+            let nonce = try_copy_auth_header_value(nonce, "canonical_auth.nonce")?;
             headers.insert(crate::HEADER_ACCOUNT.into(), Value::String(account));
             headers.insert(crate::HEADER_SIGNATURE.into(), Value::String(signature));
             headers.insert(
                 crate::HEADER_TIMESTAMP_MS.into(),
-                Value::String(timestamp_ms.to_string()),
+                Value::String(timestamp_ms),
             );
             headers.insert(crate::HEADER_NONCE.into(), Value::String(nonce));
         }
         (None, None, None, Some(witness)) => {
+            let account = account
+                .map(vpn_canonical_auth_account_header_value)
+                .transpose()?;
+            crate::app_auth::validate_canonical_request_auth_wire_values(
+                account.as_deref(),
+                None,
+                None,
+                None,
+                Some(witness),
+            )
+            .map_err(|err| format!("invalid VPN canonical authentication: {err}"))?;
+            let witness = try_copy_auth_header_value(witness, "canonical_auth.witness")?;
             if let Some(account) = account {
-                let account = vpn_canonical_auth_account_header_value(&account)?;
                 headers.insert(crate::HEADER_ACCOUNT.into(), Value::String(account));
             }
             headers.insert(crate::HEADER_WITNESS.into(), Value::String(witness));
@@ -3229,7 +3885,7 @@ async fn dispatch_iroha_vpn_quotes_create(
         &["metering_public_key_hex"],
         "VPN quote request body",
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_vpn_route_with_canonical_auth(
         app,
         inbound_headers,
@@ -3267,7 +3923,7 @@ async fn dispatch_iroha_vpn_sessions_create(
         &["quote_id", "payment_tx_hash", "metering_public_key_hex"],
         "VPN session request body",
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_vpn_route_with_canonical_auth(
         app,
         inbound_headers,
@@ -3362,7 +4018,7 @@ async fn dispatch_iroha_vpn_receipts_submit(
         &["relay_receipt_hex", "client_voucher_hex"],
         "VPN receipt request body",
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_vpn_route_with_canonical_auth(
         app,
         inbound_headers,
@@ -3410,7 +4066,7 @@ async fn dispatch_iroha_node_query_projection_checkpoint_plan(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3432,7 +4088,7 @@ async fn dispatch_iroha_node_query_projection_checkpoint_publish(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3448,28 +4104,48 @@ async fn dispatch_iroha_node_query_projection_checkpoint_publish(
     )
     .await
 }
-fn build_iroha_node_query_projection_checkpoint_body(arguments: &Map) -> Result<Value, String> {
-    let mut body = arguments
-        .get("body")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Map::new()));
-    let payload = body
-        .as_object_mut()
-        .ok_or_else(|| "`body` must be an object".to_owned())?;
-    if !payload.contains_key("emitted_at_unix")
-        && let Some(emitted_at_unix) = arguments.get("emitted_at_unix")
-    {
-        payload.insert("emitted_at_unix".into(), emitted_at_unix.clone());
+fn build_iroha_node_query_projection_checkpoint_body(
+    arguments: &Map,
+) -> Result<BorrowedMcpJson<'_>, String> {
+    let body = match arguments.get("body") {
+        Some(body) => Some(
+            body.as_object()
+                .ok_or_else(|| "`body` must be an object".to_owned())?,
+        ),
+        None => None,
+    };
+    let fallback_emitted_at = if body.is_none_or(|body| !body.contains_key("emitted_at_unix")) {
+        arguments.get("emitted_at_unix")
+    } else {
+        None
+    };
+    let fallback_shards = if body.is_none_or(|body| !body.contains_key("shards")) {
+        arguments.get("shards")
+    } else {
+        None
+    };
+    let field_count = body
+        .map_or(0, Map::len)
+        .checked_add(usize::from(fallback_emitted_at.is_some()))
+        .and_then(|count| count.checked_add(usize::from(fallback_shards.is_some())))
+        .ok_or_else(|| "checkpoint body field count overflow".to_owned())?;
+    let mut payload =
+        BorrowedMcpJsonObject::try_with_capacity(field_count, "borrowed checkpoint body fields")?;
+    if let Some(body) = body {
+        for (key, value) in body {
+            payload.insert_value(key, value);
+        }
     }
-    if !payload.contains_key("shards")
-        && let Some(shards) = arguments.get("shards")
-    {
-        payload.insert("shards".into(), shards.clone());
+    if let Some(emitted_at_unix) = fallback_emitted_at {
+        payload.insert_value("emitted_at_unix", emitted_at_unix);
+    }
+    if let Some(shards) = fallback_shards {
+        payload.insert_value("shards", shards);
     }
     if !payload.contains_key("shards") {
         return Err("`shards` is required".to_owned());
     }
-    Ok(body)
+    Ok(BorrowedMcpJson::Object(payload.sorted()))
 }
 async fn dispatch_iroha_node_query_projection_shard_catalog(
     app: &SharedAppState,
@@ -3485,18 +4161,7 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
         "/v1/node/query/projection/catalog/{resource}",
         Some(&path_value),
     )?;
-    let mut query = Map::new();
-    if let Some(asset_definition_id) = arguments.get("asset_definition_id") {
-        query.insert("asset_definition_id".into(), asset_definition_id.clone());
-    }
-    if let Some(offset) = arguments.get("offset") {
-        query.insert("offset".into(), offset.clone());
-    }
-    if let Some(limit) = arguments.get("limit") {
-        query.insert("limit".into(), limit.clone());
-    }
-    let query_value = (!query.is_empty()).then(|| Value::Object(query));
-    let route = append_query(route, query_value.as_ref())?;
+    let route = append_named_query_fields(route, arguments, QUERY_PROJECTION_SHARD_CATALOG_FIELDS)?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3578,7 +4243,7 @@ async fn dispatch_iroha_runtime_upgrades_action(
         arguments,
         &["body", "path", "id", "upgrade_id", "headers", "accept"],
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3791,8 +4456,8 @@ async fn dispatch_iroha_gov_ballots_zk_v1(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_governance_selector_body(&body, "election_id")?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    require_borrowed_governance_selector_body(&body, "election_id")?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3814,8 +4479,8 @@ async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_governance_selector_body(&body, "election_id")?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    require_borrowed_governance_selector_body(&body, "election_id")?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3837,8 +4502,8 @@ async fn dispatch_iroha_gov_ballots_plain(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_governance_selector_body(&body, "referendum_id")?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    require_borrowed_governance_selector_body(&body, "referendum_id")?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3860,8 +4525,8 @@ async fn dispatch_iroha_gov_enact(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_governance_proposal_id_body(&body, "proposal_id")?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3883,14 +4548,14 @@ async fn dispatch_iroha_gov_finalize(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let referendum_id = require_governance_proposal_id_body(&body, "referendum_id")?;
-    let proposal_id = require_governance_proposal_id_body(&body, "proposal_id")?;
+    let referendum_id = require_borrowed_governance_proposal_id_body(&body, "referendum_id")?;
+    let proposal_id = require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
     if referendum_id != proposal_id {
         return Err(
             "`referendum_id` must equal `proposal_id` for governance finalization".to_owned(),
         );
     }
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3971,17 +4636,22 @@ async fn dispatch_iroha_contracts_call_and_wait(
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
+    let explicit_tx_hash = extract_optional_transaction_hash_argument(arguments)?;
     let submit = dispatch_iroha_contracts_call(app, inbound_headers, arguments).await?;
     let submit_status = submit.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
     }
-    let tx_hash = extract_optional_transaction_hash_argument(arguments)
-        .or_else(|| extract_transaction_hash_from_submit_result(&submit).ok())
-        .ok_or_else(|| {
+    let submitted_hash;
+    let tx_hash = if let Some(hash) = explicit_tx_hash {
+        hash
+    } else {
+        submitted_hash = extract_transaction_hash_from_submit_result(&submit).map_err(|_| {
             "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
                 .to_owned()
         })?;
+        &submitted_hash
+    };
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -4001,7 +4671,7 @@ async fn dispatch_iroha_contracts_post(
     route: &str,
 ) -> Result<Value, String> {
     let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4073,7 +4743,7 @@ async fn dispatch_iroha_accounts_onboard(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_accounts_onboard_apply_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4095,7 +4765,7 @@ async fn dispatch_iroha_accounts_onboard_plan(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_accounts_onboard_plan_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4117,7 +4787,7 @@ async fn dispatch_iroha_accounts_faucet(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_accounts_faucet_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4143,11 +4813,11 @@ async fn dispatch_iroha_account_transactions(
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{account_id}/transactions", Some(&path_value))?;
-    let query = collect_query_arguments(
+    let route = append_query_arguments(
+        route,
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
     )?;
-    let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4173,11 +4843,11 @@ async fn dispatch_iroha_account_history(
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{account_id}/history", Some(&path_value))?;
-    let query = collect_query_arguments(
+    let route = append_query_arguments(
+        route,
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
     )?;
-    let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4207,7 +4877,7 @@ async fn dispatch_iroha_account_transactions_query(
         Some(&path_value),
     )?;
     let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4256,7 +4926,7 @@ async fn dispatch_iroha_transactions_query_path(
     route: &str,
 ) -> Result<Value, String> {
     let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4282,11 +4952,11 @@ async fn dispatch_iroha_account_assets(
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{account_id}/assets", Some(&path_value))?;
-    let query = collect_query_arguments(
+    let route = append_query_arguments(
+        route,
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
     )?;
-    let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4313,7 +4983,7 @@ async fn dispatch_iroha_account_assets_query(
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{account_id}/assets/query", Some(&path_value))?;
     let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4364,9 +5034,11 @@ async fn dispatch_iroha_account_portfolio(
     path_args.insert("uaid".into(), Value::String(uaid));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/accounts/{uaid}/portfolio", Some(&path_value))?;
-    let query =
-        collect_query_arguments(arguments, &["path", "uaid", "query", "headers", "accept"])?;
-    let route = append_query(route, query.as_ref())?;
+    let route = append_query_arguments(
+        route,
+        arguments,
+        &["path", "uaid", "query", "headers", "accept"],
+    )?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4423,12 +5095,9 @@ async fn dispatch_iroha_musubi_v1(
     let body = arguments
         .get("body")
         .ok_or_else(|| "`body` is required for typed Musubi V1 tools".to_owned())?;
-    let body = body
-        .as_object()
-        .cloned()
+    body.as_object()
         .ok_or_else(|| "`body` must be an object".to_owned())?;
-    let body_bytes = json::to_vec(&Value::Object(body))
-        .map_err(|error| format!("encode Musubi V1 request body: {error}"))?;
+    let body_bytes = encode_mcp_json_body(body, "encode Musubi V1 request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4450,7 +5119,7 @@ async fn dispatch_iroha_subscriptions_plans_create(
     arguments: &Map,
 ) -> Result<Value, String> {
     let body = build_object_body_or_default(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4490,7 +5159,7 @@ async fn dispatch_iroha_subscriptions_create(
         &["authority", "subscription_id", "plan_id"],
         "subscription creation draft body",
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4604,7 +5273,7 @@ async fn dispatch_iroha_subscription_draft_action(
         required_fields,
         "subscription action draft body",
     )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4635,7 +5304,7 @@ async fn dispatch_iroha_subscription_action(
         Some(&path_value),
     )?;
     let body = build_object_body_or_default(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4689,11 +5358,11 @@ async fn dispatch_iroha_asset_holders(
     path_args.insert("definition_id".into(), Value::String(definition_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/assets/{definition_id}/holders", Some(&path_value))?;
-    let query = collect_query_arguments(
+    let route = append_query_arguments(
+        route,
         arguments,
         &["path", "definition_id", "query", "headers", "accept"],
     )?;
-    let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4723,7 +5392,7 @@ async fn dispatch_iroha_asset_holders_query(
         Some(&path_value),
     )?;
     let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4904,18 +5573,23 @@ async fn dispatch_iroha_transactions_submit(
         "versioned SignedTransaction",
         &["body_base64", "headers", "accept"],
     )?;
-    dispatch_route(
+    dispatch_iroha_transactions_submit_body(app, inbound_headers, arguments, body).await
+}
+async fn dispatch_iroha_transactions_submit_body(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    body: Vec<u8>,
+) -> Result<Value, String> {
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::POST,
         iroha_torii_shared::uri::TRANSACTION,
         arguments.get("headers"),
         body,
-        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        Some(crate::utils::NORITO_MIME_TYPE),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -4929,18 +5603,15 @@ async fn dispatch_iroha_queries_submit(
         "versioned SignedQuery",
         &["body_base64", "headers", "accept"],
     )?;
-    dispatch_route(
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::POST,
         iroha_torii_shared::uri::QUERY,
         arguments.get("headers"),
         body,
-        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        Some(crate::utils::NORITO_MIME_TYPE),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -4954,12 +5625,14 @@ fn canonical_norito_body_base64(
         allowed_fields,
         &format!("canonical {label} submission"),
     )?;
+    decode_canonical_norito_body_base64(arguments, label)
+}
+fn decode_canonical_norito_body_base64(arguments: &Map, label: &str) -> Result<Vec<u8>, String> {
     let encoded = arguments
         .get("body_base64")
         .and_then(Value::as_str)
         .ok_or_else(|| format!("body_base64 is required for canonical {label} submission"))?;
-    decode_base64_any(encoded)
-        .ok_or_else(|| "body_base64 must be valid base64/base64url".to_owned())
+    decode_base64_any(encoded, "body_base64 must be valid base64/base64url")
 }
 fn reject_unknown_arguments(
     arguments: &Map,
@@ -4976,7 +5649,7 @@ fn reject_unknown_arguments(
     }
     Ok(())
 }
-fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
+fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String> {
     reject_unknown_arguments(
         arguments,
         &[
@@ -4991,29 +5664,31 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<Strin
         ],
         "ISO 20022 submission",
     )?;
-    let mut adapted = arguments.clone();
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        if let Some(xml) = arguments
-            .get("message_xml")
-            .or_else(|| arguments.get("xml"))
-            .and_then(Value::as_str)
-        {
-            adapted.insert(
-                "body_base64".into(),
-                Value::String(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes())),
-            );
-            if !adapted.contains_key("content_type") {
-                adapted.insert(
-                    "content_type".into(),
-                    Value::String("application/xml".to_owned()),
-                );
-            }
-        }
+    if arguments.contains_key("body_base64") || arguments.contains_key("body") {
+        return build_request_body(arguments);
     }
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        return Err("one of `body_base64`, `message_xml`, `xml`, or `body` is required".to_owned());
-    }
-    build_request_body(&adapted)
+    let xml = arguments
+        .get("message_xml")
+        .or_else(|| arguments.get("xml"))
+        .ok_or_else(|| {
+            "one of `body_base64`, `message_xml`, `xml`, or `body` is required".to_owned()
+        })?
+        .as_str()
+        .ok_or_else(|| "`message_xml`/`xml` must be a string".to_owned())?;
+    let mut body = Vec::new();
+    body.try_reserve_exact(xml.len())
+        .map_err(|_| "failed to reserve ISO 20022 XML payload".to_owned())?;
+    body.extend_from_slice(xml.as_bytes());
+    let content_type = arguments
+        .get("content_type")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| "`content_type` must be a string".to_owned())
+        })
+        .transpose()?
+        .or(Some("application/xml"));
+    Ok((body, content_type))
 }
 fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
@@ -5029,33 +5704,38 @@ fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
         &["public_key", "timestamp_ms", "nonce", "signature"],
         "ISO 20022 operator authentication",
     )?;
-    let required_string = |name: &str| -> Result<String, String> {
+    let required_string = |name: &str| -> Result<&str, String> {
         auth.get(name)
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .map(str::to_owned)
             .ok_or_else(|| format!("non-empty `operator_auth.{name}` is required"))
     };
     let timestamp_ms = auth
         .get("timestamp_ms")
         .and_then(Value::as_u64)
         .ok_or_else(|| "unsigned integer `operator_auth.timestamp_ms` is required".to_owned())?;
+    let public_key = required_string("public_key")?;
+    let nonce = required_string("nonce")?;
+    let signature = required_string("signature")?;
+    let timestamp_ms =
+        try_render_u64_auth_header_value(timestamp_ms, "operator_auth.timestamp_ms")?;
+    validate_operator_auth_wire_values(public_key, &timestamp_ms, nonce, signature)?;
+    let public_key = try_copy_auth_header_value(public_key, "operator_auth.public_key")?;
+    let nonce = try_copy_auth_header_value(nonce, "operator_auth.nonce")?;
+    let signature = try_copy_auth_header_value(signature, "operator_auth.signature")?;
     let mut headers = Map::new();
     headers.insert(
         "X-Iroha-Operator-Public-Key".to_owned(),
-        Value::String(required_string("public_key")?),
+        Value::String(public_key),
     );
     headers.insert(
         "X-Iroha-Operator-Timestamp-Ms".to_owned(),
-        Value::from(timestamp_ms),
+        Value::String(timestamp_ms),
     );
-    headers.insert(
-        "X-Iroha-Operator-Nonce".to_owned(),
-        Value::String(required_string("nonce")?),
-    );
+    headers.insert("X-Iroha-Operator-Nonce".to_owned(), Value::String(nonce));
     headers.insert(
         "X-Iroha-Operator-Signature".to_owned(),
-        Value::String(required_string("signature")?),
+        Value::String(signature),
     );
     Ok(Value::Object(headers))
 }
@@ -5070,17 +5750,34 @@ fn iso20022_route_with_profile(base: &str, arguments: &Map) -> Result<String, St
     if profile.is_empty() {
         return Err("`profile` must not be empty".to_owned());
     }
-    Ok(format!("{base}?profile={}", urlencoding::encode(profile)))
+    let profile_bytes = percent_encoded_path_component_len(profile)?;
+    let query_bytes = "profile="
+        .len()
+        .checked_add(profile_bytes)
+        .ok_or_else(|| "ISO 20022 profile query length overflow".to_owned())?;
+    if query_bytes > crate::app_auth::CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 {
+        return Err("`profile` exceeds the canonical request query limit".to_owned());
+    }
+    let mut route = base.to_owned();
+    let additional = query_bytes
+        .checked_add(1)
+        .ok_or_else(|| "ISO 20022 profile route length overflow".to_owned())?;
+    route
+        .try_reserve_exact(additional)
+        .map_err(|_| "failed to reserve ISO 20022 profile route".to_owned())?;
+    route.push_str("?profile=");
+    try_append_percent_encoded_path_component(&mut route, profile)?;
+    Ok(route)
 }
 async fn dispatch_iroha_iso20022_pacs008_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let headers = iso20022_operator_auth_headers(arguments)?;
+    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let route = iso20022_route_with_profile("/v1/iso20022/pacs008", arguments)?;
-    dispatch_route(
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::POST,
@@ -5088,10 +5785,7 @@ async fn dispatch_iroha_iso20022_pacs008_submit(
         Some(&headers),
         body,
         content_type,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -5100,10 +5794,10 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let headers = iso20022_operator_auth_headers(arguments)?;
+    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let route = iso20022_route_with_profile("/v1/iso20022/pacs009", arguments)?;
-    dispatch_route(
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::POST,
@@ -5111,10 +5805,7 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
         Some(&headers),
         body,
         content_type,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -5124,10 +5815,10 @@ async fn dispatch_iroha_iso20022_lifecycle_submit(
     arguments: &Map,
     route: &str,
 ) -> Result<Value, String> {
-    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let headers = iso20022_operator_auth_headers(arguments)?;
+    let (body, content_type) = build_iso20022_payload_body(arguments)?;
     let route = iso20022_route_with_profile(route, arguments)?;
-    dispatch_route(
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::POST,
@@ -5135,10 +5826,7 @@ async fn dispatch_iroha_iso20022_lifecycle_submit(
         Some(&headers),
         body,
         content_type,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -5159,12 +5847,12 @@ async fn dispatch_iroha_iso20022_status_get(
         ],
         "ISO 20022 status request",
     )?;
+    let headers = iso20022_operator_auth_headers(arguments)?;
     let msg_id = extract_iso20022_message_id_argument(arguments)?;
     let mut path_args = Map::new();
     path_args.insert("msg_id".into(), Value::String(msg_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/iso20022/messages/{msg_id}", Some(&path_value))?;
-    let headers = iso20022_operator_auth_headers(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5203,19 +5891,24 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         ],
         "canonical submit-and-wait transaction submission",
     )?;
-    let submit_arguments = canonical_submit_arguments(arguments);
+    let explicit_tx_hash = extract_optional_transaction_hash_argument(arguments)?;
+    let body = decode_canonical_norito_body_base64(arguments, "versioned SignedTransaction")?;
     let submit =
-        dispatch_iroha_transactions_submit(app, inbound_headers, &submit_arguments).await?;
+        dispatch_iroha_transactions_submit_body(app, inbound_headers, arguments, body).await?;
     let submit_status = submit.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
     }
-    let tx_hash = extract_optional_transaction_hash_argument(arguments)
-        .or_else(|| extract_transaction_hash_from_submit_result(&submit).ok())
-        .ok_or_else(|| {
+    let submitted_hash;
+    let tx_hash = if let Some(hash) = explicit_tx_hash {
+        hash
+    } else {
+        submitted_hash = extract_transaction_hash_from_submit_result(&submit).map_err(|_| {
             "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
                 .to_owned()
         })?;
+        &submitted_hash
+    };
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -5228,15 +5921,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
     )
     .await
 }
-fn canonical_submit_arguments(arguments: &Map) -> Map {
-    let mut submit_arguments = Map::new();
-    for field in ["body_base64", "headers", "accept"] {
-        if let Some(value) = arguments.get(field) {
-            submit_arguments.insert(field.to_owned(), value.clone());
-        }
-    }
-    submit_arguments
-}
 async fn dispatch_iroha_transactions_wait(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5245,7 +5929,7 @@ async fn dispatch_iroha_transactions_wait(
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
-    let tx_hash = extract_optional_transaction_hash_argument(arguments).ok_or_else(|| {
+    let tx_hash = extract_optional_transaction_hash_argument(arguments)?.ok_or_else(|| {
         "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)".to_owned()
     })?;
     wait_for_terminal_transaction_status(
@@ -5265,8 +5949,8 @@ async fn wait_for_terminal_transaction_status(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
-    tx_hash: String,
-    submit: Option<Value>,
+    tx_hash: &str,
+    mut submit: Option<Value>,
     timeout_ms: u64,
     poll_interval_ms: u64,
     terminal_statuses: Vec<String>,
@@ -5280,19 +5964,17 @@ async fn wait_for_terminal_transaction_status(
         .get("status_accept")
         .or_else(|| arguments.get("accept"))
         .and_then(Value::as_str)
-        .unwrap_or("application/json")
-        .to_owned();
+        .unwrap_or("application/json");
     loop {
         attempts = attempts.saturating_add(1);
-        let mut status_arguments = Map::new();
-        status_arguments.insert("hash".into(), Value::String(tx_hash.clone()));
-        status_arguments.insert("scope".into(), Value::String("local".to_owned()));
-        status_arguments.insert("accept".into(), Value::String(status_accept.clone()));
-        if let Some(headers) = arguments.get("headers") {
-            status_arguments.insert("headers".into(), headers.clone());
-        }
-        let status_result =
-            dispatch_iroha_transactions_status(app, inbound_headers, &status_arguments).await?;
+        let status_result = dispatch_iroha_transaction_status_poll(
+            app,
+            inbound_headers,
+            tx_hash,
+            arguments.get("headers"),
+            status_accept,
+        )
+        .await?;
         let status_code = status_result
             .get("status")
             .and_then(Value::as_u64)
@@ -5315,8 +5997,14 @@ async fn wait_for_terminal_transaction_status(
             if is_terminal_pipeline_status(kind, &terminal_statuses) {
                 let mut out = Map::new();
                 out.insert("status".into(), Value::from(status_code));
-                out.insert("hash".into(), Value::String(tx_hash.clone()));
-                out.insert("tx_hash".into(), Value::String(tx_hash.clone()));
+                out.insert(
+                    "hash".into(),
+                    Value::String(try_copy_canonical_transaction_hash(tx_hash)?),
+                );
+                out.insert(
+                    "tx_hash".into(),
+                    Value::String(try_copy_canonical_transaction_hash(tx_hash)?),
+                );
                 out.insert("terminal_kind".into(), Value::String(kind.to_owned()));
                 out.insert(
                     "terminal_statuses".into(),
@@ -5340,8 +6028,8 @@ async fn wait_for_terminal_transaction_status(
                             .unwrap_or(u64::MAX),
                     ),
                 );
-                if let Some(submit) = submit.as_ref() {
-                    out.insert("submit".into(), submit.clone());
+                if let Some(submit) = submit.take() {
+                    out.insert("submit".into(), submit);
                 }
                 out.insert("final_status".into(), status_result.clone());
                 out.insert("final".into(), status_result);
@@ -5380,37 +6068,16 @@ async fn dispatch_iroha_transactions_status(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let mut query = collect_query_map(
-        arguments,
-        &["query", "headers", "accept", "hash", "transaction_hash"],
-    )?;
-    if !query
-        .get("hash")
-        .and_then(Value::as_str)
-        .is_some_and(|hash| !hash.is_empty())
-    {
-        if let Some(hash) = extract_optional_transaction_hash_argument(arguments) {
-            query.insert("hash".into(), Value::String(hash));
-        }
-    }
-    // Canonicalize alias query keys before route dispatch.
-    query.remove("transaction_hash");
-    if !query
-        .get("hash")
-        .and_then(Value::as_str)
-        .is_some_and(|hash| !hash.is_empty())
-    {
-        return Err(
+    let tx_hash = extract_optional_transaction_hash_argument(arguments)?.ok_or_else(|| {
             "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)"
-                .to_owned(),
-        );
-    }
-    let query_value = Value::Object(query);
-    let route = append_query(
+                .to_owned()
+    })?;
+    let route = append_transaction_status_query(
         "/v1/pipeline/transactions/status".to_owned(),
-        Some(&query_value),
+        arguments,
+        tx_hash,
     )?;
-    dispatch_route(
+    dispatch_route_borrowed(
         app,
         inbound_headers,
         Method::GET,
@@ -5418,10 +6085,7 @@ async fn dispatch_iroha_transactions_status(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
     )
     .await
 }
@@ -5465,7 +6129,15 @@ fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>,
             if array.is_empty() {
                 return Err("`terminal_statuses` must not be empty".to_owned());
             }
-            let mut out = Vec::with_capacity(array.len());
+            if array.len() > SUPPORTED_PIPELINE_STATUS_KINDS.len() {
+                return Err(format!(
+                    "`terminal_statuses` must contain at most {} entries",
+                    SUPPORTED_PIPELINE_STATUS_KINDS.len()
+                ));
+            }
+            let mut out = Vec::new();
+            out.try_reserve_exact(array.len())
+                .map_err(|_| "failed to reserve terminal transaction statuses".to_owned())?;
             for value in array {
                 let status = value
                     .as_str()
@@ -5490,25 +6162,52 @@ fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>,
     };
     Ok(statuses)
 }
-fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String> {
-    if let Some(query) = arguments.get("query").and_then(Value::as_object)
-        && let Some(hash) = query.get("hash").and_then(Value::as_str)
-        && !hash.is_empty()
-    {
-        return Some(hash.to_owned());
-    }
-    if let Some(query) = arguments.get("query").and_then(Value::as_object)
-        && let Some(hash) = query.get("transaction_hash").and_then(Value::as_str)
-        && !hash.is_empty()
-    {
-        return Some(hash.to_owned());
-    }
-    arguments
-        .get("hash")
-        .or_else(|| arguments.get("transaction_hash"))
+fn extract_optional_transaction_hash_argument(arguments: &Map) -> Result<Option<&str>, String> {
+    let query = arguments.get("query").and_then(Value::as_object);
+    let hash = query
+        .and_then(|query| query.get("hash"))
         .and_then(Value::as_str)
         .filter(|hash| !hash.is_empty())
-        .map(str::to_owned)
+        .or_else(|| {
+            query
+                .and_then(|query| query.get("transaction_hash"))
+                .and_then(Value::as_str)
+                .filter(|hash| !hash.is_empty())
+        })
+        .or_else(|| {
+            arguments
+                .get("hash")
+                .or_else(|| arguments.get("transaction_hash"))
+                .and_then(Value::as_str)
+                .filter(|hash| !hash.is_empty())
+        });
+    hash.map(canonical_transaction_hash).transpose()
+}
+fn canonical_transaction_hash(hash: &str) -> Result<&str, String> {
+    let marker_is_set = hash
+        .as_bytes()
+        .last()
+        .is_some_and(|byte| matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f'));
+    if hash.len() != CANONICAL_TRANSACTION_HASH_HEX_BYTES
+        || !hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || !marker_is_set
+    {
+        return Err(format!(
+            "transaction hash must be exactly {CANONICAL_TRANSACTION_HASH_HEX_BYTES} lowercase hexadecimal digits with the Iroha hash marker set"
+        ));
+    }
+    Ok(hash)
+}
+fn try_copy_canonical_transaction_hash(hash: &str) -> Result<String, String> {
+    let hash = canonical_transaction_hash(hash)?;
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(hash.len())
+        .map_err(|_| "failed to reserve canonical transaction hash".to_owned())?;
+    owned.push_str(hash);
+    Ok(owned)
 }
 fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
     if let Some(path) = arguments.get("path") {
@@ -5535,28 +6234,6 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
             "`sid` is required (provide `sid`, `session_id`, `path.sid`, or `path.session_id`)"
                 .to_owned()
         })
-}
-fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> {
-    let token = arguments
-        .get("token_management")
-        .or_else(|| arguments.get("tokenManagement"))
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty());
-    let Some(token) = token else {
-        return Ok(arguments.get("headers").cloned());
-    };
-    let mut headers = match arguments.get("headers") {
-        Some(Value::Object(headers)) => headers.clone(),
-        Some(_) => return Err("`headers` must be an object".to_owned()),
-        None => Map::new(),
-    };
-    if !headers.contains_key("Authorization") && !headers.contains_key("authorization") {
-        headers.insert(
-            "Authorization".into(),
-            Value::String(format!("Bearer {token}")),
-        );
-    }
-    Ok(Some(Value::Object(headers)))
 }
 fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
     let session_id = arguments
@@ -5601,8 +6278,10 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         return normalize_submission_receipt_hash(hash);
     }
     if let Some(encoded) = body.as_str().filter(|body| !body.is_empty()) {
-        let bytes = decode_base64_any(encoded)
-            .ok_or_else(|| "submission response body is not valid base64/base64url".to_owned())?;
+        let bytes = decode_base64_any(
+            encoded,
+            "submission response body is not valid base64/base64url",
+        )?;
         let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
             norito::decode_from_bytes(&bytes)
                 .map_err(|err| format!("decode submission receipt: {err}"))?;
@@ -5612,7 +6291,7 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
 }
 fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
     if !hash.starts_with("hash:") {
-        return Ok(hash.to_owned());
+        return try_copy_canonical_transaction_hash(hash);
     }
     let body = norito::literal::parse("hash", hash)
         .map_err(|err| format!("decode submission receipt hash literal: {err}"))?;
@@ -6236,199 +6915,6 @@ fn extract_block_identifier_argument(arguments: &Map) -> Result<String, String> 
             "`identifier` is required (provide `identifier`, `block_identifier`, `block_height`, `block_hash`, or `path.identifier`)".to_owned()
         })
 }
-fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
-    if let Some(body) = arguments.get("body") {
-        return body
-            .as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned());
-    }
-    let mut env = Map::new();
-    for key in [
-        "query",
-        "filter",
-        "select",
-        "aggregate",
-        "sort",
-        "fetch_size",
-    ] {
-        if let Some(value) = arguments.get(key) {
-            env.insert(key.to_owned(), value.clone());
-        }
-    }
-    if let Some(pagination) = arguments.get("pagination") {
-        let pagination_obj = pagination
-            .as_object()
-            .ok_or_else(|| "`pagination` must be an object".to_owned())?;
-        env.insert(
-            "pagination".to_owned(),
-            Value::Object(pagination_obj.clone()),
-        );
-    } else {
-        let mut pagination = Map::new();
-        if let Some(limit) = arguments.get("limit") {
-            pagination.insert("limit".to_owned(), limit.clone());
-        }
-        if let Some(offset) = arguments.get("offset") {
-            pagination.insert("offset".to_owned(), offset.clone());
-        }
-        if !pagination.is_empty() {
-            env.insert("pagination".to_owned(), Value::Object(pagination));
-        }
-    }
-    Ok(Value::Object(env))
-}
-fn build_object_body_or_default(arguments: &Map) -> Result<Value, String> {
-    if let Some(body) = arguments.get("body") {
-        return body
-            .as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned());
-    }
-    Ok(Value::Object(Map::new()))
-}
-fn build_required_object_body(arguments: &Map) -> Result<Value, String> {
-    arguments
-        .get("body")
-        .ok_or_else(|| "`body` is required".to_owned())?
-        .as_object()
-        .map(|body| Value::Object(body.clone()))
-        .ok_or_else(|| "`body` must be an object".to_owned())
-}
-fn build_required_exact_object_body(
-    arguments: &Map,
-    allowed_fields: &[&str],
-    required_fields: &[&str],
-    context: &str,
-) -> Result<Value, String> {
-    let body = build_required_object_body(arguments)?;
-    let body = body.as_object().expect("required object body");
-    reject_unknown_arguments(body, allowed_fields, context)?;
-    if let Some(field) = required_fields
-        .iter()
-        .find(|field| !body.contains_key(**field))
-    {
-        return Err(format!("`{field}` is required for {context}"));
-    }
-    Ok(Value::Object(body.clone()))
-}
-fn build_object_body_or_flat_shortcuts(
-    arguments: &Map,
-    ignored_keys: &[&str],
-) -> Result<Value, String> {
-    if let Some(body) = arguments.get("body") {
-        return body
-            .as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned());
-    }
-    let mut payload = Map::new();
-    for (key, value) in arguments {
-        if ignored_keys.iter().any(|ignored| key == ignored) {
-            continue;
-        }
-        if value.is_null() {
-            continue;
-        }
-        payload.insert(key.clone(), value.clone());
-    }
-    if payload.is_empty() {
-        return Err("`body` is required (or provide flat top-level fields)".to_owned());
-    }
-    Ok(Value::Object(payload))
-}
-fn build_accounts_onboard_exact_body(
-    arguments: &Map,
-    allowed_fields: &[&str],
-    required_fields: &[&str],
-) -> Result<Value, String> {
-    let body = if let Some(body) = arguments.get("body") {
-        body.as_object()
-            .cloned()
-            .ok_or_else(|| "`body` must be an object".to_owned())?
-    } else {
-        let mut payload = Map::new();
-        for (key, value) in arguments {
-            if matches!(key.as_str(), "headers" | "accept") || value.is_null() {
-                continue;
-            }
-            payload.insert(key.clone(), value.clone());
-        }
-        payload
-    };
-    if let Some(field) = body
-        .keys()
-        .find(|field| !allowed_fields.contains(&field.as_str()))
-    {
-        return Err(format!(
-            "unsupported account onboarding field `{field}`; tokens, keys, and legacy identity fields are forbidden"
-        ));
-    }
-    if let Some(field) = required_fields
-        .iter()
-        .find(|field| !body.contains_key(**field))
-    {
-        return Err(format!("`{field}` is required"));
-    }
-    Ok(Value::Object(body))
-}
-fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<Value, String> {
-    build_accounts_onboard_exact_body(
-        arguments,
-        &["version", "alias", "account_id", "permissions"],
-        &["version", "alias", "account_id"],
-    )
-}
-fn build_accounts_onboard_apply_body(arguments: &Map) -> Result<Value, String> {
-    build_accounts_onboard_exact_body(arguments, &["receipt"], &["receipt"])
-}
-fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
-    if let Some(body) = arguments.get("body") {
-        return body
-            .as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned());
-    }
-    let account_id = arguments
-        .get("account_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`account_id` is required (or provide `body.account_id`)".to_owned())?;
-    let mut payload = Map::new();
-    payload.insert(
-        "account_id".to_owned(),
-        Value::String(account_id.to_owned()),
-    );
-    Ok(Value::Object(payload))
-}
-fn collect_query_arguments(
-    arguments: &Map,
-    ignored_keys: &[&str],
-) -> Result<Option<Value>, String> {
-    let query = collect_query_map(arguments, ignored_keys)?;
-    if query.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(Value::Object(query)))
-}
-fn collect_query_map(arguments: &Map, ignored_keys: &[&str]) -> Result<Map, String> {
-    if let Some(query) = arguments.get("query") {
-        return query
-            .as_object()
-            .cloned()
-            .ok_or_else(|| "`query` must be an object".to_owned());
-    }
-    let mut query = Map::new();
-    for (key, value) in arguments {
-        if ignored_keys.iter().any(|ignored| key == ignored) {
-            continue;
-        }
-        if value.is_null() {
-            continue;
-        }
-        query.insert(key.clone(), value.clone());
-    }
-    Ok(query)
-}
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_route(
     app: &SharedAppState,
@@ -6450,6 +6936,31 @@ async fn dispatch_route(
         content_type,
         accept,
         ExtraHeaderPolicy::Default,
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_route_borrowed(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    method: Method,
+    path_and_query: &str,
+    extra_headers: Option<&Value>,
+    body: Vec<u8>,
+    content_type: Option<&str>,
+    accept: Option<&str>,
+) -> Result<Value, String> {
+    dispatch_route_with_borrowed_headers(
+        app,
+        inbound_headers,
+        method,
+        path_and_query,
+        extra_headers,
+        body,
+        content_type,
+        accept,
+        ExtraHeaderPolicy::Default,
+        None,
     )
     .await
 }
@@ -6499,6 +7010,33 @@ async fn dispatch_route_with_extra_header_policy(
     accept: Option<String>,
     extra_header_policy: ExtraHeaderPolicy,
 ) -> Result<Value, String> {
+    dispatch_route_with_borrowed_headers(
+        app,
+        inbound_headers,
+        method,
+        path_and_query,
+        extra_headers,
+        body,
+        content_type.as_deref(),
+        accept.as_deref(),
+        extra_header_policy,
+        None,
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_route_with_borrowed_headers(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    method: Method,
+    path_and_query: &str,
+    extra_headers: Option<&Value>,
+    body: Vec<u8>,
+    content_type: Option<&str>,
+    accept: Option<&str>,
+    extra_header_policy: ExtraHeaderPolicy,
+    connect_management_token: Option<&str>,
+) -> Result<Value, String> {
     let extra_header_policy = if extra_header_policy == ExtraHeaderPolicy::Default {
         target_extra_header_policy(&method, path_and_query)?
     } else {
@@ -6515,13 +7053,20 @@ async fn dispatch_route_with_extra_header_policy(
         let headers = request.headers_mut();
         forward_dispatch_auth_headers(headers, inbound_headers, &method, path_and_query)?;
         apply_extra_headers_with_policy(headers, extra_headers, extra_header_policy)?;
+        if extra_header_policy == ExtraHeaderPolicy::ConnectManagement
+            && let Some(token) = connect_management_token
+            && !extra_headers.is_some_and(extra_headers_contain_authorization)
+        {
+            let value = connect_management_authorization_value(token)?;
+            headers.insert(header::AUTHORIZATION, value);
+        }
         if let Some(accept_value) = accept {
-            let value = HeaderValue::from_str(&accept_value)
+            let value = HeaderValue::from_str(accept_value)
                 .map_err(|err| format!("invalid accept header: {err}"))?;
             headers.insert(header::ACCEPT, value);
         }
         if let Some(content_type_value) = content_type {
-            let value = HeaderValue::from_str(&content_type_value)
+            let value = HeaderValue::from_str(content_type_value)
                 .map_err(|err| format!("invalid content_type header: {err}"))?;
             headers.insert(header::CONTENT_TYPE, value);
         }
@@ -6562,45 +7107,48 @@ fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
 fn dispatched_connect_addr(remote_ip: Option<IpAddr>) -> SocketAddr {
     SocketAddr::new(remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 0)
 }
-fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
-    if let Some(encoded) = arguments.get("body_base64").and_then(Value::as_str) {
-        let bytes = decode_base64_any(encoded)
-            .ok_or_else(|| "body_base64 must be valid base64/base64url".to_owned())?;
+fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String> {
+    if let Some(encoded) = arguments.get("body_base64") {
+        let encoded = encoded
+            .as_str()
+            .ok_or_else(|| "`body_base64` must be a string".to_owned())?;
+        let bytes = decode_base64_any(encoded, "body_base64 must be valid base64/base64url")?;
         let content_type = arguments
             .get("content_type")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some(crate::utils::NORITO_MIME_TYPE.to_owned()));
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "`content_type` must be a string".to_owned())
+            })
+            .transpose()?
+            .or(Some(crate::utils::NORITO_MIME_TYPE));
         return Ok((bytes, content_type));
     }
     if let Some(body_value) = arguments.get("body") {
-        let bytes = json::to_vec(body_value).map_err(|err| format!("encode body: {err}"))?;
+        let bytes = encode_mcp_json_body(body_value, "encode body")?;
         let content_type = arguments
             .get("content_type")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| Some("application/json".to_owned()));
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "`content_type` must be a string".to_owned())
+            })
+            .transpose()?
+            .or(Some("application/json"));
         return Ok((bytes, content_type));
     }
     Ok((Vec::new(), None))
 }
-fn decode_base64_any(input: &str) -> Option<Vec<u8>> {
-    base64::engine::general_purpose::STANDARD
-        .decode(input)
-        .ok()
-        .or_else(|| base64::engine::general_purpose::URL_SAFE.decode(input).ok())
-        .or_else(|| {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(input)
-                .ok()
-        })
-}
 fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<String, String> {
-    let args = path_args
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let mut out = String::with_capacity(path_template.len() + 16);
+    let empty_args = Map::new();
+    let args = path_args.and_then(Value::as_object).unwrap_or(&empty_args);
+    let mut out = String::new();
+    let initial_capacity = path_template
+        .len()
+        .checked_add(16)
+        .ok_or_else(|| "MCP route template length overflow".to_owned())?;
+    out.try_reserve_exact(initial_capacity)
+        .map_err(|_| "failed to reserve MCP route template".to_owned())?;
     let mut chars = path_template.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '{' {
@@ -6619,9 +7167,16 @@ fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<
         }
         let value = args
             .get(&key)
-            .and_then(value_to_string)
             .ok_or_else(|| format!("missing required path argument `{key}`"))?;
-        out.push_str(&urlencoding::encode(&value));
+        let rendered;
+        let value = if let Some(value) = value.as_str() {
+            value
+        } else {
+            rendered =
+                value_to_string(value).ok_or_else(|| format!("invalid path argument `{key}`"))?;
+            rendered.as_str()
+        };
+        try_append_percent_encoded_path_component(&mut out, value)?;
     }
     Ok(out)
 }
@@ -6629,23 +7184,7 @@ fn append_query(path: String, query: Option<&Value>) -> Result<String, String> {
     let Some(map) = query.and_then(Value::as_object) else {
         return Ok(path);
     };
-    if map.is_empty() {
-        return Ok(path);
-    }
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in map {
-        if value.is_null() {
-            continue;
-        }
-        let value =
-            value_to_string(value).ok_or_else(|| format!("invalid query value for `{key}`"))?;
-        serializer.append_pair(key, &value);
-    }
-    let encoded = serializer.finish();
-    if encoded.is_empty() {
-        return Ok(path);
-    }
-    Ok(format!("{path}?{encoded}"))
+    append_borrowed_query_pairs(path, map.iter().map(|(key, value)| (key.as_str(), value)))
 }
 fn value_to_string(value: &Value) -> Option<String> {
     if value.is_null() {
@@ -6666,7 +7205,7 @@ fn value_to_string(value: &Value) -> Option<String> {
     if let Some(b) = value.as_bool() {
         return Some(b.to_string());
     }
-    json::to_string(value).ok()
+    None
 }
 fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
     for name in [
@@ -6777,10 +7316,25 @@ fn apply_extra_headers_with_policy(
         let header_name: HeaderName = raw_name
             .parse()
             .map_err(|err| format!("invalid header name `{raw_name}`: {err}"))?;
-        let header_value = value_to_string(raw_value)
-            .ok_or_else(|| format!("invalid header value for `{raw_name}`"))?;
-        let mut header_value = HeaderValue::from_str(&header_value)
-            .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?;
+        let mut header_value = if matches!(
+            policy,
+            ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OperatorAuthentication
+        ) {
+            let exact = raw_value.as_str().ok_or_else(|| {
+                format!("target authentication header `{raw_name}` must be a string")
+            })?;
+            HeaderValue::from_str(exact)
+                .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?
+        } else if let Some(exact) = raw_value.as_str() {
+            HeaderValue::from_str(exact)
+                .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?
+        } else {
+            let rendered = value_to_string(raw_value)
+                .ok_or_else(|| format!("invalid header value for `{raw_name}`"))?;
+            HeaderValue::from_str(&rendered)
+                .map_err(|err| format!("invalid header value for `{raw_name}`: {err}"))?
+        };
         if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
@@ -6823,6 +7377,27 @@ fn validate_target_authentication_headers(
                         .to_owned(),
                 );
             }
+            let value = |lowered_name: &str| -> Result<Option<&str>, String> {
+                headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(lowered_name))
+                    .map(|(name, value)| {
+                        value.as_str().ok_or_else(|| {
+                            format!(
+                                "canonical target authentication header `{name}` must be a string"
+                            )
+                        })
+                    })
+                    .transpose()
+            };
+            crate::app_auth::validate_canonical_request_auth_wire_values(
+                value(HEADER_X_IROHA_ACCOUNT)?,
+                value(HEADER_X_IROHA_SIGNATURE)?,
+                value(HEADER_X_IROHA_TIMESTAMP_MS)?,
+                value(HEADER_X_IROHA_NONCE)?,
+                value(HEADER_X_IROHA_WITNESS)?,
+            )
+            .map_err(|err| format!("invalid canonical target authentication headers: {err}"))?;
         }
         ExtraHeaderPolicy::OperatorAuthentication => {
             for required in [
@@ -6837,6 +7412,23 @@ fn validate_target_authentication_headers(
                     ));
                 }
             }
+            let value = |lowered_name: &str| -> Result<&str, String> {
+                headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(lowered_name))
+                    .and_then(|(_, value)| value.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "operator target authentication header `{lowered_name}` must be a string"
+                        )
+                    })
+            };
+            validate_operator_auth_wire_values(
+                value(HEADER_X_IROHA_OPERATOR_PUBLIC_KEY)?,
+                value(HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS)?,
+                value(HEADER_X_IROHA_OPERATOR_NONCE)?,
+                value(HEADER_X_IROHA_OPERATOR_SIGNATURE)?,
+            )?;
         }
         ExtraHeaderPolicy::Default | ExtraHeaderPolicy::ConnectManagement => {}
     }
@@ -6856,6 +7448,58 @@ const HEADER_X_IROHA_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_X_IROHA_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_X_IROHA_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+fn validate_operator_auth_wire_values(
+    public_key: &str,
+    timestamp_ms: &str,
+    nonce: &str,
+    signature: &str,
+) -> Result<(), String> {
+    if public_key.is_empty()
+        || public_key.len() > OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES
+        || public_key.trim() != public_key
+    {
+        return Err("invalid operator public-key header value".to_owned());
+    }
+    let public_key = PublicKey::from_canonical_str_for_decode(public_key)
+        .map_err(|_| "invalid operator public-key header value".to_owned())?;
+    let expected_signature_bytes = public_key
+        .try_algorithm()
+        .map_err(|_| "invalid operator public-key header value".to_owned())?
+        .signature_payload_len();
+    if expected_signature_bytes == 0
+        || expected_signature_bytes > crate::app_auth::CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1
+    {
+        return Err("unsupported operator signature payload size".to_owned());
+    }
+    let timestamp = timestamp_ms.as_bytes();
+    if timestamp.is_empty()
+        || timestamp.len() > 20
+        || !timestamp.iter().all(u8::is_ascii_digit)
+        || (timestamp.len() > 1 && timestamp[0] == b'0')
+        || timestamp_ms.parse::<u64>().is_err()
+    {
+        return Err("invalid operator timestamp header value".to_owned());
+    }
+    if nonce.is_empty()
+        || nonce.len() > 256
+        || !nonce.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    {
+        return Err("invalid operator nonce header value".to_owned());
+    }
+    let signature_bytes = crate::app_auth::decode_bounded_canonical_base64_value(
+        signature,
+        expected_signature_bytes,
+        "operator signature",
+    )
+    .map_err(|err| format!("invalid operator signature header value: {err}"))?;
+    if signature_bytes.len() != expected_signature_bytes
+        || signature_bytes.is_empty()
+        || signature_bytes.iter().all(|byte| *byte == 0)
+    {
+        return Err("invalid operator signature header payload".to_owned());
+    }
+    Ok(())
+}
 fn is_operator_auth_header(lowered: &str) -> bool {
     matches!(
         lowered,
@@ -6919,10 +7563,10 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
         || lowered.starts_with("x-iroha-internal-")
 }
 async fn response_to_value(response: Response) -> Result<Value, String> {
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = response
-        .into_body()
+    let (parts, body) = response.into_parts();
+    let status = parts.status;
+    let headers = parts.headers;
+    let body_bytes = body
         .collect()
         .await
         .map_err(|err| format!("read response body: {err}"))?
@@ -7301,24 +7945,36 @@ fn vpn_canonical_auth_schema() -> Value {
         "properties": {
             "account": {
                 "type": "string",
+                "minLength": 1,
+                "maxLength": (crate::app_auth::CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1),
                 "description": "Exact canonical I105 AccountId or active printable-ASCII account alias. I105 is forwarded in X-Iroha-Account as lowercase canonical address hex. Required for a signature tuple and optional when the witness identifies the subject account."
             },
             "signature": {
                 "type": "string",
-                "description": "Base64 canonical-request signature for the exact inner VPN target."
+                "minLength": 4,
+                "maxLength": (CANONICAL_SIGNATURE_MAX_ENCODED_BYTES),
+                "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                "description": "Canonical padded-base64 canonical-request signature for the exact inner VPN target."
             },
             "timestamp_ms": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": (u64::MAX),
                 "description": "Unsigned Unix timestamp in milliseconds bound into the signature."
             },
             "nonce": {
                 "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[!-~]+$",
                 "description": "Fresh nonce bound into the signature."
             },
             "witness": {
                 "type": "string",
-                "description": "Base64 Norito canonical-request witness for the exact inner VPN target."
+                "minLength": 4,
+                "maxLength": (CANONICAL_WITNESS_MAX_ENCODED_BYTES),
+                "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                "description": "Canonical padded-base64 Norito V1 canonical-request witness for the exact inner VPN target."
             }
         },
         "oneOf": [
@@ -11264,7 +11920,7 @@ mod tests {
             norito::json!({
                 "canonical_auth": {
                     "account": TEST_ACCOUNT_I105,
-                    "signature": "signature",
+                    "signature": "AQ==",
                     "timestamp_ms": 1_u64,
                     "nonce": "nonce"
                 }
@@ -11272,7 +11928,7 @@ mod tests {
             norito::json!({
                 "canonical_auth": {
                     "account": TEST_ACCOUNT_I105,
-                    "witness": "witness"
+                    "witness": (canonical_test_witness_header())
                 }
             }),
         ] {
@@ -11290,7 +11946,7 @@ mod tests {
         let alias_arguments = norito::json!({
             "canonical_auth": {
                 "account": "operator@sora",
-                "witness": "witness"
+                "witness": (canonical_test_witness_header())
             }
         });
         let alias_headers =
@@ -11307,15 +11963,53 @@ mod tests {
 
     #[test]
     fn vpn_canonical_auth_rejects_inexact_or_non_ascii_aliases() {
-        for account in [" operator@sora", "operator alias", "账户"] {
+        for account in [" operator@sora", "Operator@sora", "operator alias", "账户"] {
             let arguments = norito::json!({
                 "canonical_auth": {
-                    "account": account,
-                    "witness": "witness"
+                    "account": (account),
+                    "witness": (canonical_test_witness_header())
                 }
             });
             vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
                 .expect_err("only exact printable ASCII aliases are supported");
+        }
+    }
+
+    #[test]
+    fn vpn_canonical_auth_rejects_noncanonical_wire_values() {
+        for arguments in [
+            norito::json!({
+                "canonical_auth": {
+                    "account": TEST_ACCOUNT_I105,
+                    "signature": "AA==",
+                    "timestamp_ms": 1_u64,
+                    "nonce": "nonce"
+                }
+            }),
+            norito::json!({
+                "canonical_auth": {
+                    "account": TEST_ACCOUNT_I105,
+                    "signature": "not-base64",
+                    "timestamp_ms": 1_u64,
+                    "nonce": "nonce"
+                }
+            }),
+            norito::json!({
+                "canonical_auth": {
+                    "account": TEST_ACCOUNT_I105,
+                    "signature": "AQ==",
+                    "timestamp_ms": 1_u64,
+                    "nonce": "contains space"
+                }
+            }),
+            norito::json!({
+                "canonical_auth": {
+                    "witness": "not-base64"
+                }
+            }),
+        ] {
+            vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
+                .expect_err("noncanonical typed authentication must fail before dispatch");
         }
     }
 }

@@ -1,13 +1,13 @@
 //! Exact-network Connect identity and approval C ABI bindings.
-use std::ptr;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
-use iroha_data_model::{NetworkId, account::AccountId};
-use iroha_torii_shared::{connect as proto, connect_sdk};
-use libc::{c_char, c_int, c_uchar, c_ulong, malloc};
 use super::{
     ERR_CONNECT_APPROVAL, ERR_CONNECT_IDENTITY, network_id_from_raw_bytes, parse_permissions_bytes,
     parse_proof_bytes,
 };
+use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_data_model::{NetworkId, account::AccountId};
+use iroha_torii_shared::{connect as proto, connect_sdk};
+use libc::{c_char, c_int, c_uchar, c_ulong, malloc};
+use std::ptr;
 pub(super) fn parse_connect_wallet_signature_algorithm_label(
     alg_str: &str,
 ) -> Result<Algorithm, c_int> {

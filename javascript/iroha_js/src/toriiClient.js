@@ -5,6 +5,8 @@ import {
   extractConfidentialGasConfig,
 } from "./config.js";
 import { getNativeBinding } from "./native.js";
+import { crc64Xz } from "./crc64Xz.js";
+import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
@@ -76,14 +78,15 @@ import {
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+} from "./sumeragiTypedLimits.js";
+import {
   parseSumeragiDiagnosticsPayload,
   parseSumeragiStatusPayload,
 } from "./sumeragiTyped.js";
 export { __sumeragiNativeAmxTestHelpers } from "./sumeragiTyped.js";
-import {
-  buildCanonicalRequestHeaders,
-  requireCanonicalAuthAccount,
-} from "./canonicalRequest.js";
+import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
+import { requireCanonicalAuthAccount } from "./canonicalAccount.js";
+import { normalizeCanonicalWitnessHeader } from "./canonicalWitness.js";
 import {
   applyOperatorRequestHeaders,
   installOperatorSigningContext,
@@ -411,7 +414,6 @@ const BFV_IDENTIFIER_E2_DOMAIN = Buffer.from(
   "iroha.sdk.identifier.bfv.e2.v1",
   "utf8",
 );
-const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
@@ -803,22 +805,6 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
 ]);
 const NORITO_FRAME_HEADER_LENGTH = 40;
 const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
-const CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      if ((crc & 1n) !== 0n) {
-        crc = (crc >> 1n) ^ CRC64_REFLECTED_POLY;
-      } else {
-        crc >>= 1n;
-      }
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
-
 function isNrt0NoritoFrame(payload) {
   return (
     payload.length >= NORITO_FRAME_HEADER_LENGTH &&
@@ -20361,28 +20347,6 @@ function normalizeOptionalHashLiteral(value, name) {
   return formatHashLiteral(hex);
 }
 
-function computeHashLiteralCrc(tag, body) {
-  let crc = 0xffff;
-  const processByte = (byte) => {
-    crc ^= (byte & 0xff) << 8;
-    for (let i = 0; i < 8; i += 1) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  };
-  for (const byte of Buffer.from(tag, "utf8")) {
-    processByte(byte);
-  }
-  processByte(":".charCodeAt(0));
-  for (const byte of Buffer.from(body, "utf8")) {
-    processByte(byte);
-  }
-  return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
-}
-
 function normalizeOptionalHexString(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -23215,15 +23179,6 @@ class IdentifierBfvRustChaCha20Rng {
   }
 }
 
-function crc64Ecma(payload) {
-  let crc = UINT64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ UINT64_MASK);
-}
-
 function noritoSchemaHash(typeName) {
   return createHash("sha256")
     .update(Buffer.from("norito:v1:type-name\0", "utf8"))
@@ -23239,7 +23194,7 @@ function frameNoritoPayload(typeName, payload, flags = 0) {
     noritoSchemaHash(typeName),
     Buffer.from([0]),
     u64ToLittleEndianBuffer(payload.length),
-    u64ToLittleEndianBuffer(crc64Ecma(payload)),
+    u64ToLittleEndianBuffer(crc64Xz(payload)),
     Buffer.from([flags & 0xff]),
   ]);
   return Buffer.concat([header, payload]);
@@ -24992,10 +24947,7 @@ function buildSorafsReputationRequestAuth(
   setHeader(
     headers,
     "X-Iroha-Witness",
-    normalizeRequiredExactBase64Payload(
-      witness.value,
-      `${context}.headers.X-Iroha-Witness`,
-    ),
+    normalizeCanonicalWitnessHeader(witness.value, `${context}.headers.X-Iroha-Witness`),
   );
   const account = authHeaders.get("x-iroha-account");
   if (account) {

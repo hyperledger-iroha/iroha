@@ -61,7 +61,7 @@ class HttpClientTransportSubmissionContractTest {
     fun canonicalAuthRedirectStatusAndNetworkFailuresAreOneShot() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             keyPair.private,
             1_717_171_717_000L,
             "canonical-one-shot-nonce",

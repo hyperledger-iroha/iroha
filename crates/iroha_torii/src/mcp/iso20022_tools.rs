@@ -8,22 +8,29 @@ fn iso20022_operator_auth_schema() -> Value {
             "public_key": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": (OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES),
+                "pattern": "^[!-~]+$",
                 "description": "Iroha multihash public key of the configured operator."
             },
             "timestamp_ms": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": (u64::MAX),
                 "description": "Unix timestamp in milliseconds signed for the exact inner request."
             },
             "nonce": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[!-~]+$",
                 "description": "Fresh nonce signed for the exact inner request."
             },
             "signature": {
                 "type": "string",
-                "minLength": 1,
-                "description": "Base64 signature over the exact inner method, path, sorted query, body hash, timestamp, and nonce."
+                "minLength": 4,
+                "maxLength": (CANONICAL_SIGNATURE_MAX_ENCODED_BYTES),
+                "pattern": (CANONICAL_PADDED_BASE64_PATTERN),
+                "description": "Canonical padded-base64 signature over the exact inner method, path, sorted query, body hash, timestamp, and nonce."
             }
         }
     })

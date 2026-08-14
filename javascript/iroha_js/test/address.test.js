@@ -476,9 +476,20 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
   }
 });
 
-test("canonicalizeDomainLabel matches the Rust domain-segment policy", () => {
+test("canonicalizeDomainLabel normalizes supported labels and rejects malformed input", () => {
   const punycode = canonicalizeDomainLabel("xn--exmple-cua");
   assert.equal(punycode, "xn--exmple-cua");
+  assert.equal(canonicalizeDomainLabel("xn--fa-hia"), "xn--fa-hia");
+  assert.equal(canonicalizeDomainLabel("xn--3xa"), "xn--3xa");
+  assert.equal(canonicalizeDomainLabel("xn--ll-0ea"), "xn--ll-0ea");
+  assert.equal(canonicalizeDomainLabel("xn--mgbh0fb"), "xn--mgbh0fb");
+  assert.equal(canonicalizeDomainLabel("xn--ngba799q"), "xn--ngba799q");
+  assert.equal(canonicalizeDomainLabel("xn--ngba7iz95i"), "xn--ngba7iz95i");
+  assert.equal(canonicalizeDomainLabel("xn--11b2ezcw70k"), "xn--11b2ezcw70k");
+  assert.equal(canonicalizeDomainLabel("xn--mgba3gch31f060k"), "xn--mgba3gch31f060k");
+  assert.equal(canonicalizeDomainLabel("xn--ab-0ea"), "xn--ab-0ea");
+  assert.equal(canonicalizeDomainLabel("xn--a-jib"), "xn--a-jib");
+  assert.equal(canonicalizeDomainLabel("xn--ab-3n4a"), "xn--ab-3n4a");
   assert.equal(canonicalizeDomainLabel("foo_bar"), "foo_bar");
   assert.equal(canonicalizeDomainLabel("bücher"), "xn--bcher-kva");
 
@@ -496,6 +507,16 @@ test("canonicalizeDomainLabel matches the Rust domain-segment policy", () => {
     "foo ",
     "\uFEFFfoo",
     "foo\uFEFF",
+    "xn--",
+    "xn--a",
+    "xn--alice",
+    "xn--ab-uuba211bca8057b",
+    "xn--1-zmcl5hc",
+    "xn--a-zmck6hb",
+    "xn--1-ymcl5hc6o",
+    "xn--_-ymcl5hc",
+    "xn--ab-j1t",
+    "xn--11b2er09f",
   ]) {
     assert.throws(
       () => canonicalizeDomainLabel(invalid),

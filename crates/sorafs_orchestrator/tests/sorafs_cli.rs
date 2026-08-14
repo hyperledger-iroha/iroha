@@ -1,15 +1,11 @@
 #![cfg(feature = "cli-orchestrator")]
 #![cfg_attr(feature = "cli-orchestrator", allow(unexpected_cfgs))]
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::{decode as hex_decode, encode as hex_encode};
-use httpmock::prelude::*;
+use httpmock::{Mock, prelude::*};
 #[cfg(feature = "local-quic-proxy")]
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
@@ -45,6 +41,10 @@ use sorafs_manifest::{
     SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 use tempfile::TempDir;
 const TEST_NETWORK_ID_LITERAL: &str =

@@ -17,6 +17,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/safety_wal.rs",
     "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
     "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
@@ -56,7 +57,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 52
+) == 53
 
 
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
@@ -491,7 +492,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "production-shaped closed-ingress preactivation setup behavior",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
         "fn preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete()",
         "assert!(dropped_guard.restart_required());",
         "assert!(!dropped_guard.restart_required());",
@@ -1142,7 +1143,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "affine prepared local-Proposal state omits",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
         "fn prepared_local_proposal_state_is_affine_and_context_directive_bound()",
         "assert!(!prepared.exactly_matches(foreign_context, directive));",
         "assert!(prepared.exactly_matches(foreign_context, directive));",
@@ -1852,6 +1853,41 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "sealed replay-service worker transfer omits production refinement tokens",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        "let payload_store_identity = self.payload_store.instance_identity();",
+        "let payload_store_identity = self.body_store_identity.clone().unwrap();",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        "payload_store_identity.clone(),",
+        "body_store_identity.clone(),",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        "|| !services.matches_lifecycle_payload_store(&payload_store_identity)",
+        "|| false",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "pub(in crate::sumeragi) fn start_with_apply_service(",
+        "            Some(payload_store_identity),",
+        "            None,",
+        "recovered startup must transfer the exact Certified-Serve payload-store identity",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "pub(in crate::sumeragi) fn matches_lifecycle_payload_store(",
+        "service_identity.same_instance(owner_identity)",
+        "true",
+        "the live service must require its retained exact Certified-Serve payload-store instance",
+    ),
+    (
         "crates/iroha_core/src/state.rs",
         "pub(crate) fn matches_kura_instance(",
         "Arc::ptr_eq(&self.kura, kura)",
@@ -2240,7 +2276,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 296
+) == 301
 
 
 @pytest.mark.parametrize(

@@ -2101,6 +2101,7 @@ public sealed partial class ToriiClient : IDisposable
     private static string RequireExactRequestPath(string? value, string paramName)
     {
         var exact = RequireExactRequestPart(value, paramName);
+        CanonicalRequest.RequireCanonicalPathAsciiWireSpelling(exact, paramName);
         if (exact[0] != '/')
         {
             throw new ArgumentException($"{paramName} must be a root-relative path.", paramName);
@@ -2111,9 +2112,12 @@ public sealed partial class ToriiClient : IDisposable
             throw new ArgumentException($"{paramName} must not be a scheme-relative URI.", paramName);
         }
 
-        if (exact.Contains(':', StringComparison.Ordinal))
+        if (exact.Contains('?', StringComparison.Ordinal)
+            || exact.Contains('#', StringComparison.Ordinal))
         {
-            throw new ArgumentException($"{paramName} must not contain raw ':' characters.", paramName);
+            throw new ArgumentException(
+                $"{paramName} must not contain query or fragment characters.",
+                paramName);
         }
 
         ValidateUriStableRequestPath(exact, paramName);
@@ -2135,17 +2139,38 @@ public sealed partial class ToriiClient : IDisposable
                 continue;
             }
 
-            var decodedSegment = DecodePercentEncodedPathSegment(segment, paramName);
-            if (decodedSegment.Any(char.IsControl))
-            {
-                throw new ArgumentException($"{paramName} path segments must not contain percent-decoded control characters.", paramName);
-            }
-
-            if (decodedSegment is "." or "..")
+            if (IsDotRequestPathSegment(segment))
             {
                 throw new ArgumentException($"{paramName} must not contain dot path segments.", paramName);
             }
         }
+    }
+
+    private static bool IsDotRequestPathSegment(string value)
+    {
+        var dotCount = 0;
+        for (var index = 0; index < value.Length;)
+        {
+            if (value[index] == '.')
+            {
+                dotCount++;
+                index++;
+                continue;
+            }
+
+            if (value[index] == '%'
+                && HexValue(value[index + 1]) == 2
+                && HexValue(value[index + 2]) == 14)
+            {
+                dotCount++;
+                index += 3;
+                continue;
+            }
+
+            return false;
+        }
+
+        return dotCount is 1 or 2;
     }
 
     private static string? NormalizeOptionalExactQuery(string? value, string paramName)
@@ -4633,41 +4658,6 @@ public sealed partial class ToriiClient : IDisposable
             catch (DecoderFallbackException exception)
             {
                 throw new ArgumentException(invalidUtf8Message, paramName, exception);
-            }
-        }
-
-        return builder.ToString();
-    }
-
-    private static string DecodePercentEncodedPathSegment(string value, string paramName)
-    {
-        var builder = new StringBuilder(value.Length);
-        for (var index = 0; index < value.Length;)
-        {
-            if (value[index] != '%')
-            {
-                builder.Append(value[index]);
-                index++;
-                continue;
-            }
-
-            var bytes = new List<byte>();
-            while (index < value.Length && value[index] == '%')
-            {
-                bytes.Add((byte)((HexValue(value[index + 1]) << 4) | HexValue(value[index + 2])));
-                index += 3;
-            }
-
-            try
-            {
-                builder.Append(StrictUtf8.GetString(bytes.ToArray()));
-            }
-            catch (DecoderFallbackException exception)
-            {
-                throw new ArgumentException(
-                    $"{paramName} path segments must contain valid UTF-8 percent-encoded bytes.",
-                    paramName,
-                    exception);
             }
         }
 

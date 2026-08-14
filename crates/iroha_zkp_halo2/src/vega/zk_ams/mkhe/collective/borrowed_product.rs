@@ -99,6 +99,80 @@ pub(in super::super) fn accumulate_public_residues_times_signed_v1(
     }
     Ok(())
 }
+pub(in super::super) fn direct_rkg_one_h0_limb_from_signed_v1(
+    common_a: &[u64],
+    secret: &[i64],
+    ephemeral: &[i64],
+    error: &[i64],
+    gadget: u64,
+    plaintext: u64,
+    modulus: u64,
+    psi: u64,
+) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
+    if common_a.len() != secret.len()
+        || secret.len() != ephemeral.len()
+        || secret.len() != error.len()
+        || common_a.is_empty()
+        || common_a.iter().any(|value| *value >= modulus)
+        || gadget >= modulus
+        || plaintext >= modulus
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let product = negacyclic_multiply_signed_zeroizing_v1(common_a, ephemeral, modulus, psi)?;
+    let mut output = ZeroizingU64VectorV1::with_capacity(common_a.len())?;
+    for index in 0..common_a.len() {
+        output.push(super::super::mod_add(
+            super::super::mod_sub(
+                super::super::mod_mul(
+                    super::super::signed_mod(secret[index], modulus),
+                    gadget,
+                    modulus,
+                ),
+                product.values()[index],
+                modulus,
+            ),
+            super::super::mod_mul(
+                super::super::signed_mod(error[index], modulus),
+                plaintext,
+                modulus,
+            ),
+            modulus,
+        ));
+    }
+    Ok(output.into_vec())
+}
+pub(in super::super) fn direct_rkg_one_h1_limb_from_signed_v1(
+    common_a: &[u64],
+    secret: &[i64],
+    error: &[i64],
+    plaintext: u64,
+    modulus: u64,
+    psi: u64,
+) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
+    if common_a.len() != secret.len()
+        || secret.len() != error.len()
+        || common_a.is_empty()
+        || common_a.iter().any(|value| *value >= modulus)
+        || plaintext >= modulus
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let product = negacyclic_multiply_signed_zeroizing_v1(common_a, secret, modulus, psi)?;
+    let mut output = ZeroizingU64VectorV1::with_capacity(common_a.len())?;
+    for index in 0..common_a.len() {
+        output.push(super::super::mod_add(
+            product.values()[index],
+            super::super::mod_mul(
+                super::super::signed_mod(error[index], modulus),
+                plaintext,
+                modulus,
+            ),
+            modulus,
+        ));
+    }
+    Ok(output.into_vec())
+}
 fn validate_inputs_v1(
     left: &[u64],
     right: &[i64],

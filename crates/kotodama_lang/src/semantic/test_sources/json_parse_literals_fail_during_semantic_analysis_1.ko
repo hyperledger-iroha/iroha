@@ -1,0 +1,3 @@
+fn duplicate() -> Json {
+                Json::parse("{\"owner\":1,\"owner\":2}")
+            }

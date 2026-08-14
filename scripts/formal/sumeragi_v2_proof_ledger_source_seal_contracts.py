@@ -1305,7 +1305,7 @@ _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
     "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
 )
 _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
-    "843aacfcaae702fe61bac4740466985ab6788df97e6b0880069555b40d82006e"
+    "23050ec2d1e3e1d563f29fd6ed4a9113e1ed94adc152082154f117d44c001a29"
 )
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
@@ -1469,6 +1469,9 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
         "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
     ),
+    "ingress::select_fair_v2_ingress_candidate": (
+        "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
+    ),
     "ingress::try_recv_if_checked": (
         "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
     ),
@@ -1485,7 +1488,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
     ),
     "runner::run_inner": (
-        "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4"
+        "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a"
     ),
     "runner::drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
@@ -1540,12 +1543,6 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     ),
     "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
         "89eb5d842b627d1c1382143a53b73600936443130b086e5a9e0be5e5180dc6d8"
-    ),
-}
-
-_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
-    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
-        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
     ),
 }
 
@@ -3099,7 +3096,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
@@ -3309,7 +3306,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
         "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
     # Bound after the observe-before-claim ordering mutation was rejected.
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESTORE_ITEM_SHA256 = {
@@ -3462,7 +3459,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
     "service_certified_serve_barrier_liveness_turn": (
         "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
     ),
@@ -3566,7 +3563,7 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "DurableExactOutputHandoffReceipt::matches_predecessor_context": "7e6c407fea5b7393d085f3ae32a99832b5b9cf8906e64c5a168bacdd46ca1dcb",
     "DurableExactOutputHandoffReceipt::matches_finality_artifact": "2e0593d1f00ebd5f7fd0717ad6123cbb4c37a4c27e45b2b514e5dfbb5d37d4cc",
     "DurableExactOutputHandoffReceipt::authorizes_immediate_successor": "0d432476a9154613c9bcb9285a7d69a0dd8264e818dc993a12e77903d8d3e069",
-    "PendingExactOutput::new": "4d6f8872fd25a2d6041dfaab7d2182d3b43d13fcae408b478fab17f34afc738b",
+    "PendingExactOutput::new": "b1a9d1a81be4f891c8d3695b8439be646cf64db777624e936c75e2367c6ac499",
     "PendingExactOutput::is_pending": "6cd7ecb71f163b7b59e59abcce7f413a4eef60bfbd160950c4afd03a0ff73588",
     "PendingExactOutput::close_certified_sidecar_prefix": "d7e50f6894a043a303ce239e0f37dfbd7a12a7c9a621f0e48f6754a72739c3af",
     "PendingExactOutput::pending_sidecar_flushes": "14c74fcdfe37c137fe20897ab19acbac746b9d3a4f764a939abbbe1bc43b2048",
@@ -3652,7 +3649,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "ce27592a9a7e240a207c1b0ea26340edb7e7f25d11f15bdb7ef3d0698446ef49"
     ),
     "PendingExactOutput::new": (
-        "4d6f8872fd25a2d6041dfaab7d2182d3b43d13fcae408b478fab17f34afc738b"
+        "b1a9d1a81be4f891c8d3695b8439be646cf64db777624e936c75e2367c6ac499"
     ),
     "PendingExactOutput::ownership_addition_load": (
         "c566f3dc97560d01457335a290f876f96f5128236bf8cdbbeda6c0c6d14e50ef"
@@ -3703,9 +3700,9 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "d3996fe62ce6e3715f1b61208f607e0e6cb5ecd1168d61130d3e53437c8f6dd1"
+        "e5f95d2ddf2cecf9ec9126f98b7a8deda43be6e8b254118658c11acea27e93b6"
     ),
-    "ProductionV2Services::start_inner": "c1b1ee11d69d60f4d3260d2c0d7062bc56606f29fb61b6099b839bdea7d79453",
+    "ProductionV2Services::start_inner": "3d1647a9ffbc521eabde68bc7a4cd9714145a7ac7649c80c9d28d925d7941545",
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
@@ -3867,7 +3864,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
     "drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
     ),
@@ -4041,7 +4038,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "runner::run_inner": (
-        "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4"
+        "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"

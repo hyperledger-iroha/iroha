@@ -407,12 +407,14 @@ fn replay_authority_is_move_only_opaque_and_has_no_digest_escape() {
 fn typed_selector_and_existing_wire_and_release_closure_are_preserved() {
     let active = include_str!("../active_exact_binding.rs");
     let common_a = include_str!("direct_common_a_v1.rs");
-    let constructor = common_a
+    let constructor_tail = common_a
         .split("fn new_rkg_round_one_selector_v1")
         .nth(1)
-        .unwrap()
-        .split("/// Mint the only production RKG-round-one selector")
-        .next()
+        .unwrap();
+    let (constructor, _) = constructor_tail
+        .split_once(
+            "/// Legacy selector wrapper retained only for verifier-side compatibility tests.",
+        )
         .unwrap();
     assert!(constructor.contains("VerifiedDirectCommonAStatementV1"));
     assert!(!constructor.contains("common_a_statement_digest: [u8; 32]"));

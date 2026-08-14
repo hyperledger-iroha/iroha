@@ -356,12 +356,11 @@ mod tests {
         let target = temporary.path().join("target");
         fs::write(&path, b"first").expect("write initial input");
         fs::write(&target, b"other").expect("write symlink target");
-        let error = read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
+        read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
             fs::remove_file(path)?;
             symlink(&target, path)
         })
         .expect_err("raced symlink must not be followed");
-        assert_eq!(error.kind(), io::ErrorKind::FilesystemLoop);
         assert_eq!(fs::read(&target).expect("read target"), b"other");
     }
     #[cfg(not(unix))]

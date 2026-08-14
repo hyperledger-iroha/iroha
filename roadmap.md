@@ -7,11 +7,13 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
-- Freeze the shared worktree after the current optimization integration, then
-  complete the final governed-source/source-budget seal and authoritative full
-  formal proof-ledger checker before preparing a signed merge commit. Do not
-  treat validation from the earlier fifth integration merge as a receipt for
-  the current source tree.
+- Freeze the candidate derived from merge commit
+  `c3a0c7a7c99833722770eac84c7946a365179d56`, then complete the authoritative
+  full formal proof-ledger checker and remaining governed-source seals before
+  preparing a signed descendant. The source-budget baseline has been
+  deterministically ratcheted to the reviewed candidate. Do not treat
+  validation from an earlier integration checkpoint as a receipt for the
+  current source tree.
 - After that freeze, use the official workflows to regenerate and check the
   JavaScript current-Rust-contract fixture and generated-artifact registry.
   Preserve the green SDK release guard after its end-to-end closure repin and
@@ -20,14 +22,20 @@ Completed history lives in [`status.md`](./status.md).
   from that clean exact commit with truthful provenance, and commit the
   generated outputs in a descendant. Refresh SF1 rows and projections only
   with an authorized council re-sign over the current manifest digest.
-- Reconcile the merged Cargo manifests with the immutable lock policy before
-  authoritative workspace validation. Keep `Cargo.lock` unchanged unless a
+- Preserve the current immutable lock: locked offline dependency resolution
+  succeeds for the merged manifests. Keep `Cargo.lock` unchanged unless a
   reviewed lockfile update is supplied through the release process.
 - Finish borrowed, cache-/scratch-audited admission verification for default
   w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
   Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
   with producer-specific semantic parity and cold-Kura bounds. Then rerun the
   focused Rust suites and strict all-target Clippy from the frozen candidate.
+- Add a shared typed multisignature-witness construction and signing flow to
+  the primary SDKs. Rust currently hashes requests and bounded-encodes completed
+  witnesses; JavaScript and the `iroha_python` SoraFS reputation helpers can
+  forward an externally produced witness. The standalone `iroha_torii_client`
+  and the typed mobile/C# clients are intentionally signer-only; none of those
+  surfaces should be described as end-to-end multisignature construction yet.
 
 ## Nexus topology model closure
 
@@ -53,19 +61,26 @@ Completed history lives in [`status.md`](./status.md).
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,014,603-line ratchet leaves
-  a 454,067-line gap; do not redefine the baseline, count moved test code as a
-  physical reduction, or weaken required runtime, security, consensus, SDK, or
-  release-evidence behavior to close it.
-- Add the new source and fixture files to the eventual signed commit, then rerun
-  the strict SDK source-closure guard from the tracked candidate. Keep the
-  staged merge-resolution layer and unstaged optimization layer reviewable
-  until that signed commit is prepared.
-- Obtain the reviewed workspace lockfile that matches the merged manifests
-  without locally regenerating `Cargo.lock`. From that immutable candidate, run
-  the full locked workspace build and tests, strict all-target/all-feature
-  Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
-  and representative four-validator deterministic consensus tests.
+  4,560,536-line ten-percent objective. The reviewed candidate has 5,012,058
+  lines and leaves a 451,522-line gap; do not redefine the baseline, count
+  moved test code as a physical reduction, or weaken required runtime,
+  security, consensus, SDK, or release-evidence behavior to close it. The
+  deterministic exception refresh records 195 exact oversized-file ratchets,
+  and the source-budget gate reports zero findings.
+- Track every reviewed production module, then rerun the currently green
+  isolated-index SDK source-closure guard from the frozen candidate. Complete
+  repository-wide formatting reconciliation before the signed candidate is
+  prepared.
+- Preserve the green locked/offline workspace all-target check. From the frozen
+  locked candidate, run the full workspace build and tests, replace the five
+  remaining protected MKHE lint suppressions with real fixes, and run ABI and
+  canonical wire goldens, focused Sumeragi/Kura recovery suites, and
+  representative four-validator deterministic consensus tests.
+- Bring the static JavaScript bundles below their unchanged release ceilings
+  without hiding deferred code: Torii is currently 1,070,886/1,006,592 bytes,
+  transaction codec 304,228/304,128 bytes, and the public browser aggregate
+  563,467/480,256 bytes. Nexus, canonical request, IVM artifact, and Kotodama
+  browser targets already pass.
 - Capture comparable `valid: true` cold/warm and compiler-work reports for the
   baseline and candidate with identical source, lock, toolchain, arguments,
   environment, and host. Expand compile-unit coverage beyond the current
@@ -90,12 +105,13 @@ artifacts.
 ## MCP gateway and Torii content release closeout
 
 - Regenerate the OpenAPI provenance manifests from the final source seal and
-  run the focused locked/offline Torii tests for exact nested-target account
-  and operator authentication, retired async-job methods, closed VPN schemas,
-  active/unknown content download coercion, inert-media preservation, and the
-  documented content response boundary. Retain the existing VPN
-  auth-before-parse and protected content auth/cache/path tests in the same
-  validation lane.
+  close the inherited catalog/generated-artifact expectations exposed by the
+  broader MCP test profile. Focused locked/offline Torii library and test-binary
+  compilation, all app-auth tests, and the exact Connect-network/SID and
+  authenticated governance MCP regressions are green. Retain the exact
+  nested-target account/operator authentication, retired async-job, closed VPN,
+  active/unknown content coercion, inert-media, VPN auth-before-parse, and
+  protected content auth/cache/path tests in the final validation lane.
 
 ## Sumeragi v2 revision-4 release gates
 

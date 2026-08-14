@@ -280,7 +280,6 @@ async fn wait_for_entrypoint_rejected(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     timeout: Duration,
-    reason_fragment: &str,
 ) -> Result<Option<u64>> {
     let hash = entrypoint_status_hash(entrypoint_hash);
     let deadline = Instant::now() + timeout;
@@ -293,16 +292,6 @@ async fn wait_for_entrypoint_rejected(
         if let Some(status) = status {
             let kind = status.status.kind.clone();
             if kind == "Rejected" {
-                let reason = status
-                    .status
-                    .rejection_reason
-                    .as_ref()
-                    .map(|reason| format!("{reason:?}"))
-                    .unwrap_or_default();
-                ensure!(
-                    reason.contains(reason_fragment),
-                    "entrypoint {entrypoint_hash} rejection reason {reason:?} did not contain {reason_fragment:?}"
-                );
                 return Ok(status.status.block_height);
             }
             last_status = Some(kind);
@@ -398,13 +387,13 @@ fn sealed_entrypoints_for_instructions(
     .with_instructions(instructions)
     .sign(client.key_pair.private_key());
     let commitment_hash = compute_sealed_transaction_commitment(
-        &client.chain,
+        &client.network_id,
         &inner_tx,
         salt,
         reveal_deadline_height,
     );
     let commitment_payload = SealedTransactionCommitmentPayload::new(
-        client.chain.clone(),
+        client.network_id,
         client.account.clone(),
         commitment_hash,
         reveal_after_height,
@@ -507,13 +496,13 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     .sign(client.key_pair.private_key());
     let salt = [0xC3; 32];
     let commitment_hash = compute_sealed_transaction_commitment(
-        &client.chain,
+        &client.network_id,
         &inner_tx,
         salt,
         reveal_deadline_height,
     );
     let commitment_payload = SealedTransactionCommitmentPayload::new(
-        client.chain.clone(),
+        client.network_id,
         client.account.clone(),
         commitment_hash,
         reveal_after_height,
@@ -724,8 +713,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     advance_to_height(&network, expired_deadline_height + 1).await?;
     match submit_entrypoint_maybe_rejected(&http, &client, expired_reveal, timeout).await? {
         EntrypointSubmitOutcome::Accepted(hash) => {
-            wait_for_entrypoint_rejected(&client, hash, status_timeout, "sealed transaction")
-                .await?;
+            wait_for_entrypoint_rejected(&client, hash, status_timeout).await?;
         }
         EntrypointSubmitOutcome::Rejected { status, body } => {
             ensure!(

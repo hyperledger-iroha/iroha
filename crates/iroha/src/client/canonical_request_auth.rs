@@ -93,7 +93,11 @@ impl Iterator for CanonicalRequestFormLossyChars<'_> {
             }
             Err(error) if error.valid_up_to() != 0 => {
                 let valid = &encoded[..error.valid_up_to()];
-                let ch = valid.chars().next().expect("non-empty valid UTF-8 prefix");
+                let ch = std::str::from_utf8(valid)
+                    .expect("UTF-8 validator reported a valid prefix")
+                    .chars()
+                    .next()
+                    .expect("non-empty valid UTF-8 prefix");
                 self.advance(ch.len_utf8());
                 Some(ch)
             }

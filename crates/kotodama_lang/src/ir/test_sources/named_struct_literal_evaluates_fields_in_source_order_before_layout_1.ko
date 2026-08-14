@@ -1,0 +1,8 @@
+
+            module NamedStructEffects {
+                struct Pair { int first; int second; }
+                fn first() -> int { 1 }
+                fn second() -> int { 2 }
+                fn main() -> Pair { Pair { second: second(), first: first() } }
+            }
+            

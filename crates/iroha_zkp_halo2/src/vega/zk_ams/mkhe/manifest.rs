@@ -853,7 +853,9 @@ mod tests {
         let decryption =
             zk_ams_mkhe_decryption_resource_evidence_v1().expect("decryption resource evidence");
         let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
-        assert_eq!(active.blocker_mask, 0b1111_1100);
+        // Bit zero is the still-open external-membership security theorem
+        // blocker; only the generator-basis KAT at bit one is green.
+        assert_eq!(active.blocker_mask, 0b1111_1101);
         assert_ne!(active.audit_digest, [0; 32]);
         assert!(!active.split_decryption_wide_relation_certified);
         assert!(!active.release_available);

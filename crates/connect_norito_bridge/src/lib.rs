@@ -14247,7 +14247,6 @@ mod kagemusha_bridge_tests {
     use super::*;
     #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
-    const CURRENT_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
     const CURRENT_TAIRA_NETWORK_ID: &str =
         "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     // The runtime alias is exactly `sbd#cbsi`; offline wire objects carry its typed ID.
@@ -15096,7 +15095,7 @@ mod kagemusha_bridge_tests {
                 0,
             );
             let context = HeightContext {
-                network_id,
+                network_id: network_id.clone(),
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height,
                 epoch: 0,
@@ -15620,11 +15619,12 @@ mod kagemusha_bridge_tests {
             .push_str("-wrong");
         assert!(selector_mismatch.validate_structure().is_err());
         let mut network_mismatch = offer.clone();
-        network_mismatch.lineage.selector.network_id = NetworkId::from_genesis_hash(
-            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+        network_mismatch.lineage.selector.network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(Hash::new(
                 b"foreign receiver-offer network",
-            )),
-        );
+            )));
         assert!(network_mismatch.validate_structure().is_err());
         let mut asset_mismatch = offer.clone();
         asset_mismatch.lineage.selector.asset = AssetDefinitionId::derive_from_components(

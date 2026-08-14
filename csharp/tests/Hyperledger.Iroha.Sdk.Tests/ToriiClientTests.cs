@@ -446,7 +446,6 @@ public sealed partial class ToriiClientTests
     [InlineData("https://evil.example/v1/query")]
     [InlineData("http://evil.example/v1/query")]
     [InlineData("//evil.example/v1/query")]
-    [InlineData("/v1/query:http")]
     [InlineData("/v1/../admin")]
     [InlineData("/v1/%2e%2e/admin")]
     [InlineData("/v1/%2E%2E/admin")]
@@ -456,8 +455,6 @@ public sealed partial class ToriiClientTests
     [InlineData("/v1/%")]
     [InlineData("/v1/%2")]
     [InlineData("/v1/%GG")]
-    [InlineData("/v1/%FF")]
-    [InlineData("/v1/%00")]
     public async Task SendAsyncRejectsNonExactPathsBeforeDispatchAndCanonicalSigning(string? path)
     {
         using var handler = new RecordingHandler(_ =>

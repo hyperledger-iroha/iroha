@@ -361,7 +361,7 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     /// not yet represented by this envelope.
     pub(super) fn decode_exact_bound_unverified(
         bytes: &[u8],
-        context: ZkAmsPhase23RnsLinkContextV1,
+        context: &ZkAmsPhase23RnsLinkContextV1,
         commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         // Preserve the cheap malformed-input boundary before deriving the
@@ -1035,7 +1035,7 @@ mod tests {
         let mut proof = whole_proof_fixture();
         let context = release_context(b"release-bound-wire-fixture");
         let commitments = relation_commitments(&proof, b"release-bound-commitments");
-        let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(context, &commitments)
+        let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(&context, &commitments)
             .expect("verifier-owned release binding");
         proof.profile_digest = binding.profile_digest;
         proof.algorithm_manifest_digest = binding.algorithm_manifest_digest;
@@ -1105,7 +1105,7 @@ mod tests {
         let decoded =
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &commitments,
             )
             .expect("canonical transport is bound to native relation inputs");
@@ -1118,7 +1118,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &shell,
-                context,
+                &context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1147,7 +1147,7 @@ mod tests {
             assert_eq!(
                 ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                     &changed,
-                    context,
+                    &context,
                     &commitments,
                 ),
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1157,7 +1157,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                wrong_context,
+                &wrong_context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &different_commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1176,7 +1176,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &reordered_commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1192,7 +1192,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &changed_hyrax,
-                context,
+                &context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)

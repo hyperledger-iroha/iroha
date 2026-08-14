@@ -489,10 +489,7 @@ mod tests {
             .map(|_| ()),
         ] {
             let error = rejected.expect_err("unknown DTO field must fail closed");
-            assert!(
-                error.to_string().contains("unknown field"),
-                "unexpected error: {error}"
-            );
+            assert_eq!(error.to_string(), "unknown JSON field");
         }
     }
     #[test]

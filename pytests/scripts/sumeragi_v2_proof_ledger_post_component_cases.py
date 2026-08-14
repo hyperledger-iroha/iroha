@@ -34,6 +34,10 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
         ),
         Path(
             "formal/sumeragi_v2/"
+            "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
             "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
         ),
         Path(
@@ -44,7 +48,73 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
     return tmp_path / "formal" / "sumeragi_v2"
+
+
+def test_timeout_vote_episode_source_fidelity_rejects_missing_reviewed_include_component(
+    tmp_path: Path,
+) -> None:
+    """The timeout episode fails closed when a reviewed Rust include is absent."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    missing_relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    )
+    missing_component = tmp_path / missing_relative
+    canonical_component = ROOT_DIR / missing_relative
+    assert missing_component.is_file() and not missing_component.is_symlink()
+    assert missing_component.read_bytes() == canonical_component.read_bytes()
+    missing_component.unlink()
+    missing_errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    runner_parent = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    assert (
+        f"{missing_component}: reviewed Rust include component for "
+        f"{runner_parent} must be a regular non-symlink file"
+        in missing_errors
+    ), missing_errors
+
+
+def test_timeout_vote_episode_selector_preserves_strict_before_dependency_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The shared selector cannot service dependencies before ordinary ingress."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
+    item_name = "select_fair_v2_ingress_candidate"
+    mutate_rust_item_source(
+        module,
+        reviewed_rust_item_provider(module, tmp_path, relative, item_name),
+        item_name,
+        "for dependency_pass in [false, true]",
+        "for dependency_pass in [true, false]",
+    )
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        relative,
+        item_name,
+    )
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        "shared TimeoutVote selector must preserve strict-before-dependency, "
+        "Blocked exclusion, downstream predicate, and exact disposition"
+        in error
+        for error in errors
+    ), errors
 
 
 def rebind_timeout_vote_episode_rust_item_seal(
@@ -152,6 +222,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -585,6 +656,7 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),

@@ -87,7 +87,7 @@ class HttpClientTransportTest {
             "/api/v1/accounts/$accountId/identifiers/claim-receipt",
             executor.lastRequest.uri.path,
         )
-        assertEquals(accountId, executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.canonicalHex(), executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertEquals(
             org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
             executor.lastRequest.replayPolicy,
@@ -1810,7 +1810,7 @@ class HttpClientTransportTest {
             body = vpnQuoteJson(quoteId, meteringKey).toByteArray(StandardCharsets.UTF_8),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_000L, "vpn-nonce-1")
+        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_000L, "vpn-nonce-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
             config = signedClientConfig("https://torii.example/api"),
@@ -1830,7 +1830,7 @@ class HttpClientTransportTest {
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/vpn/quotes", request.uri.toString())
         assertEquals("""{"exit_class":"low-latency","metering_public_key_hex":"$meteringKey"}""", readBody(request))
-        assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("alice@universal", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
         assertEquals("vpn-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "vpn-nonce-1")
@@ -1854,7 +1854,7 @@ class HttpClientTransportTest {
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
+        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
             config = signedClientConfig("https://torii.example/api"),
@@ -1882,7 +1882,7 @@ class HttpClientTransportTest {
 
         val requestCount = executor.requestCount
         assertFailsWith<IllegalArgumentException> {
-            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob", keyPair.private))
+            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob@universal", keyPair.private))
         }
         assertEquals(requestCount, executor.requestCount)
     }
@@ -1895,7 +1895,7 @@ class HttpClientTransportTest {
             config = signedClientConfig("https://torii.example"),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private)
+        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
         fun validPayload(): MutableMap<String, Any?> = linkedMapOf(
             "domain" to linkedMapOf(
                 "kind" to "network",
@@ -1939,7 +1939,7 @@ class HttpClientTransportTest {
     fun quoteFeesRejectsPayerRevisionAndGasSubstitution() {
         val sponsor = testMultisigAccountId()
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private)
+        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
         val sponsorIntent = FeePaymentIntent.sponsor(
             FeeSponsorProgramId(sponsor, "wallet_fx"),
             3,
@@ -2012,7 +2012,7 @@ class HttpClientTransportTest {
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             keyPair.private,
             1_700_000_000_021L,
             "fee-program-1",
@@ -2070,7 +2070,7 @@ class HttpClientTransportTest {
         val error = assertFailsWith<java.util.concurrent.CompletionException> {
             transport.getFeeSponsorProgram(
                 FeeSponsorProgramId(sponsor, "wallet_fx"),
-                ToriiCanonicalRequestAuth("alice", keyPair.private),
+                ToriiCanonicalRequestAuth("alice@universal", keyPair.private),
             ).join()
         }
         assertIs<IllegalArgumentException>(error.cause)
@@ -2088,18 +2088,18 @@ class HttpClientTransportTest {
 
         transport.registerPushDevice(
             requestBody,
-            ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_010L, "push-nonce-1"),
+            ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_010L, "push-nonce-1"),
         ).join()
         transport.unregisterPushDevice(
             requestBody,
-            ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_011L, "push-nonce-2"),
+            ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_011L, "push-nonce-2"),
         ).join()
 
         val register = executor.requests[0]
         assertEquals("POST", register.method)
         assertEquals("https://torii.example/v1/notify/devices", register.uri.toString())
         assertEquals("""{"account_id":"alice","platform":"FCM","token":"token-1","topics":["activity"]}""", readBody(register))
-        assertEquals("alice", register.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("alice@universal", register.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         assertCanonicalSignature(register, keyPair.public, 1_700_000_000_010L, "push-nonce-1")
 
         val unregister = executor.requests[1]
@@ -2125,7 +2125,7 @@ class HttpClientTransportTest {
             )
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_001L, "vpn-nonce-2")
+        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_001L, "vpn-nonce-2")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
             config = signedClientConfig("https://torii.example"),
@@ -2624,7 +2624,7 @@ class HttpClientTransportTest {
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             keyPair.private,
             1_700_000_000_000L,
             "alias-resolve-nonce-1",
@@ -2639,7 +2639,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         assertEquals(accountId, response.get().accountId)
         val request = assertNotNull(executor.lastRequest)
-        assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("alice@universal", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
         assertEquals("alias-resolve-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-resolve-nonce-1")
@@ -2718,7 +2718,7 @@ class HttpClientTransportTest {
         val request = assertNotNull(executor.lastRequest)
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/aliases/setup/plan", request.uri.toString())
-        assertEquals(authority, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).address.canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         @Suppress("UNCHECKED_CAST")
         val sent = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals(1L, sent["schema_version"])
@@ -2790,7 +2790,7 @@ class HttpClientTransportTest {
             "https://torii.example/api/v1/aliases/lease/renew/plan",
             lifecycleHttpRequest.uri.toString(),
         )
-        assertEquals(authority, lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).address.canonicalHex(), lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         val lifecycleJson = readBody(lifecycleHttpRequest)
         assertFalse(lifecycleJson.contains("private_key"))
         assertFalse(lifecycleJson.contains("payment_proof"))
@@ -3031,7 +3031,7 @@ class HttpClientTransportTest {
         assertEquals("merchant@banka.paynet", response.get().items.single().alias)
         val request = assertNotNull(executor.lastRequest)
         assertEquals("https://torii.example/api/v1/aliases/by-account", request.uri.toString())
-        assertEquals(account, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(account, null).address.canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-list-nonce-1")
     }
 

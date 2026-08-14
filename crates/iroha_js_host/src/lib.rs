@@ -6383,6 +6383,7 @@ pub fn sorafs_validate_governance_dag_head_chain_json(
 #[cfg(test)]
 mod sorafs_orderbook_validation_tests {
     use super::*;
+    use sorafs_manifest::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1;
     #[test]
     fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert_eq!(
@@ -6408,10 +6409,9 @@ mod sorafs_orderbook_validation_tests {
     }
     #[test]
     fn orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
-        assert!(
-            validate_sorafs_orderbook_owner_account(&[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1])
-                .is_ok()
-        );
+        let bounded =
+            validate_sorafs_orderbook_owner_account(&[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]);
+        assert!(bounded.is_ok());
         assert!(
             validate_sorafs_orderbook_owner_account(
                 &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
@@ -17654,27 +17654,27 @@ seiyaku Privacy {
         signed
             .verify_signature()
             .expect("quoted signature verifies");
-        let foreign_error = sign_quoted_transaction_payload(
+        let foreign_error = Result::err(sign_quoted_transaction_payload(
             test_network_id_bytes(b"foreign-quote-flow-network"),
             draft.payload_json.clone(),
             quoted_intent_json,
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        )
-        .expect_err("quoted signer must reject a foreign NetworkId");
+        ))
+        .expect("quoted signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
         let genesis_payload = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         );
-        let genesis_error = sign_quoted_transaction_payload(
+        let genesis_error = Result::err(sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             json::to_json(genesis_payload.payload()).expect("genesis payload JSON"),
             authority_fee_payment_json(),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        )
-        .expect_err("quoted signer must reject the genesis domain");
+        ))
+        .expect("quoted signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
         let gas_error = match sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
@@ -17935,8 +17935,8 @@ seiyaku Privacy {
                 .as_bytes()
                 .to_vec(),
         );
-        let error = finalize_signed_transaction(foreign_network)
-            .expect_err("external finalizer must reject a foreign NetworkId");
+        let error = Result::err(finalize_signed_transaction(foreign_network))
+            .expect("external finalizer must reject a foreign NetworkId");
         assert!(error.reason.contains("does not match"));
         let genesis_builder = TransactionBuilder::new_genesis(
             authority.clone(),
@@ -17946,16 +17946,16 @@ seiyaku Privacy {
         let genesis_signature =
             Signature::try_new(authority_key.private_key(), genesis_payload_hash.as_slice())
                 .expect("genesis payload signature");
-        let genesis_error = finalize_signed_transaction(JsExternalTransactionSignature {
+        let result = finalize_signed_transaction(JsExternalTransactionSignature {
             network_id: Buffer::from(network_id.as_bytes().to_vec()),
             payload_bytes: Buffer::from(genesis_builder.encode_payload()),
             payload_hash_hex: Some(hex::encode(genesis_payload_hash)),
             signature: Buffer::from(genesis_signature.payload().to_vec()),
             public_key: Buffer::from(public_key_bytes.to_vec()),
             authority: Some(authority_i105.clone()),
-        })
-        .expect_err("external finalizer must reject the genesis domain");
-        assert!(genesis_error.reason.contains("genesis-domain"));
+        });
+        let error = Result::err(result).expect("genesis domain must fail");
+        assert!(error.reason.contains("genesis-domain"));
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
     #[test]
@@ -18055,20 +18055,20 @@ seiyaku Privacy {
         )
         .sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
-        let foreign_error = sign_transaction(
+        let foreign_error = Result::err(sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&foreign)),
             Uint8Array::from(secret.clone()),
-        )
-        .expect_err("JavaScript host must reject a foreign NetworkId");
+        ))
+        .expect("JavaScript host must reject a foreign NetworkId");
         assert_eq!(foreign_error.status, napi::Status::InvalidArg);
         assert!(foreign_error.reason.contains("does not match"));
-        let error = sign_transaction(
+        let error = Result::err(sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&transaction)),
             Uint8Array::from(secret),
-        )
-        .expect_err("JavaScript host must reject the genesis transaction domain");
+        ))
+        .expect("JavaScript host must reject the genesis transaction domain");
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert_eq!(
             error.reason,
@@ -18442,27 +18442,27 @@ seiyaku Privacy {
             )],
             NonZeroU64::new(1_000),
         );
-        let foreign_error = sign_quoted_ivm_proved_transaction_payload(
+        let foreign_error = Result::err(sign_quoted_ivm_proved_transaction_payload(
             test_network_id_bytes(b"foreign-ivm-proved-network"),
             draft.payload_json.clone(),
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
-        )
-        .expect_err("proved-IVM signer must reject a foreign NetworkId");
+        ))
+        .expect("proved-IVM signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
         let mut genesis_payload = draft_payload.clone();
         genesis_payload.domain = iroha_data_model::transaction::TransactionDomain::Genesis;
-        let genesis_error = sign_quoted_ivm_proved_transaction_payload(
+        let genesis_error = Result::err(sign_quoted_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             json::to_json(&genesis_payload).expect("genesis proved-IVM payload JSON"),
             attachment_json.clone(),
             json::to_json(&quoted).expect("quote json"),
             Uint8Array::from(secret_bytes.clone()),
             None,
-        )
-        .expect_err("proved-IVM signer must reject the genesis domain");
+        ))
+        .expect("proved-IVM signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
         let quoted_result = sign_quoted_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),

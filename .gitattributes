@@ -2,4 +2,6 @@
 crates/ivm/src/assets/text_v1/** -whitespace
 crates/kotodama_lang/src/compiler/fixtures/v1/** -whitespace
 crates/kotodama_lang/src/ir/fixtures/v1/** -whitespace
+crates/kotodama_lang/src/ir/test_sources/** -whitespace
 crates/kotodama_lang/src/semantic/fixtures/v1/** -whitespace
+crates/kotodama_lang/src/semantic/test_sources/** -whitespace

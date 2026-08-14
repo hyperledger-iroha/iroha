@@ -1866,9 +1866,9 @@ mod tests {
         let owner = RangeSecretCopyValueV1::copy_from_ref(&borrowed);
         assert_eq!(borrowed.0, 9);
         assert_eq!(owner.expose_ref().0, 9);
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 0);
-        drop(owner);
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
+        drop(owner);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -1884,14 +1884,14 @@ mod tests {
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         let mut values = ExactSizeZeroizingVec::new(1).expect("one fixed copy slot");
         values.push_copy(TrackingCopy(17)).expect("sole copy fits");
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
         assert_eq!(
             values.push_copy(TrackingCopy(19)),
             Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
         );
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 4);
         drop(values);
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 3);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 5);
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -1903,7 +1903,7 @@ mod tests {
             })
             .is_err()
         );
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 3);
         let source = include_str!("range.rs");
         let exact_vector = source
             .split_once("impl<T: Zeroize> ExactSizeZeroizingVec<T> {")
@@ -1932,8 +1932,8 @@ mod tests {
             .expect("retained final copy");
         let drop = copy_vector.find("drop(value)").expect("owner drop");
         assert!(take < capacity && capacity < push && push < drop);
-        assert!(!source.contains("vector.0.push(Scalar::"));
-        assert!(!source.contains("a_l.0.push(Scalar::"));
+        assert!(!source.contains(concat!("vector.0.push(", "Scalar::")));
+        assert!(!source.contains(concat!("a_l.0.push(", "Scalar::")));
         assert!(source.contains("witnesses.push_owned(RangeWitnessCommitment {"));
         assert!(source.contains("self.terms.push_owned(SecretMultiexpTerm {"));
         let scalar_vector = source
@@ -2207,7 +2207,7 @@ mod tests {
             .find("let mask_component =")
             .expect("owned mask component");
         let expected_owner = check
-            .find("let expected_owner = RangeSecretCopyValueV1::new(")
+            .find("let expected_owner =")
             .expect("owned final commitment");
         let comparison = check
             .find("expected_owner.expose_ref() == point")
@@ -2242,8 +2242,8 @@ mod tests {
     #[test]
     fn range_witness_check_drops_every_owner_before_match_and_mismatch_return() {
         let matching_opening = opening(0, 7, 29);
-        let public_commitments =
-            strict_public_commitments(&[matching_opening.output()]).expect("public commitment pair");
+        let public_commitments = strict_public_commitments(&[matching_opening.output()])
+            .expect("public commitment pair");
         let witnesses = strict_witness_commitments(std::slice::from_ref(&matching_opening), 2)
             .expect("secret witness pair");
         let amount_generator = amount_generator().expect("amount generator");

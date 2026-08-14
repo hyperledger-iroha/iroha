@@ -4,18 +4,19 @@
     clippy::too_many_lines,
     clippy::needless_pass_by_value
 )]
-#[cfg(feature = "quic")]
-use std::sync::OnceLock;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    io,
-    net::{IpAddr, ToSocketAddrs},
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+#[cfg(feature = "p2p_tls")]
+use crate::boilerplate;
+use crate::{
+    Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
+    UpdatePeers, UpdateTopology, UpdateTrustedPeers,
+    boilerplate::*,
+    peer::{
+        Connection, ConnectionId, OutboundFrameQueueLimits, OutboundPostByteBudgets,
+        SharedByteBudget, SharedByteLease, SoranetHandshakeConfig,
+        handles::{PeerHandle, RecoverPostError, connected_from, connecting},
+        message::*,
     },
-    time::{Duration, SystemTime},
+    sampler::LogSampler,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{
@@ -40,24 +41,23 @@ use norito::{
     core as ncore,
 };
 use soranet_pq::MlDsaSuite;
+#[cfg(feature = "quic")]
+use std::sync::OnceLock;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    fmt::Debug,
+    io,
+    net::{IpAddr, ToSocketAddrs},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     sync::{Semaphore, mpsc, watch},
-};
-#[cfg(feature = "p2p_tls")]
-use crate::boilerplate;
-use crate::{
-    Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
-    UpdatePeers, UpdateTopology, UpdateTrustedPeers,
-    boilerplate::*,
-    peer::{
-        Connection, ConnectionId, OutboundFrameQueueLimits, OutboundPostByteBudgets,
-        SharedByteBudget, SharedByteLease, SoranetHandshakeConfig,
-        handles::{PeerHandle, RecoverPostError, connected_from, connecting},
-        message::*,
-    },
-    sampler::LogSampler,
 };
 #[cfg(test)]
 fn test_network_id(seed: &str) -> NetworkId {
@@ -9542,7 +9542,8 @@ fn test_network_actor_progress_budget() -> Arc<NetworkActorProgressBudget> {
 include!("network/handle_update_tests.rs");
 #[cfg(test)]
 mod accept_stream_tests {
-    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use super::*;
+    use crate::peer::test_support::{SpawnPath, snapshot};
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
@@ -9560,12 +9561,7 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
-    use tokio::{net::TcpListener, sync::mpsc};
-    use super::*;
-    use crate::peer::{
-        SoranetHandshakeConfig,
-        test_support::{SpawnPath, snapshot},
-    };
+    use std::time::Duration;
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     fn test_node_key_pair() -> KeyPair {
@@ -10174,8 +10170,8 @@ mod accept_stream_tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn connect_peer_propagates_frame_cap() {
-        use std::collections::HashSet;
         use iroha_primitives::addr::socket_addr;
+        use std::collections::HashSet;
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
@@ -10722,8 +10718,8 @@ mod accept_stream_tests {
     }
     #[test]
     fn overflow_counters_full_matrix() {
-        use std::sync::atomic::Ordering::Relaxed;
         use super::message::Topic::*;
+        use std::sync::atomic::Ordering::Relaxed;
         // Snapshot bases
         let base_total = super::post_overflow_count();
         let b_hi = (
@@ -10806,9 +10802,9 @@ mod accept_stream_tests {
 }
 #[cfg(test)]
 mod reputation_tests {
-    use std::collections::HashSet;
-    use iroha_crypto::KeyPair;
     use super::*;
+    use iroha_crypto::KeyPair;
+    use std::collections::HashSet;
     #[test]
     fn trust_and_scores_update() {
         let id1 = PeerId::from(KeyPair::random().public_key().clone());
@@ -10866,11 +10862,11 @@ where
     T: Pload + message::ClassifyTopic,
     E: Enc,
 {
-    use std::sync::Arc;
     use quinn::{
         IdleTimeout, TransportConfig, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     };
     use rustls::pki_types::PrivatePkcs8KeyDer;
+    use std::sync::Arc;
     let rcgen::CertifiedKey { cert, signing_key } =
         rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
             .map_err(|e| Error::from(std::io::Error::other(format!("rcgen: {e}"))))?;
@@ -11098,11 +11094,11 @@ where
 }
 #[cfg(all(test, feature = "quic"))]
 mod quic_tests {
-    use std::sync::Arc;
+    use super::*;
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
-    use super::*;
+    use std::sync::Arc;
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
@@ -15595,16 +15591,16 @@ fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashSet};
-    use std::sync::{Mutex, OnceLock};
+    use super::handle_update_tests::handle_with_network_receivers;
+    use super::*;
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
+    use std::collections::{BTreeSet, HashSet};
+    use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc::error::TryRecvError;
-    use super::handle_update_tests::handle_with_network_receivers;
-    use super::*;
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
     #[derive(Clone, Debug, Decode, Encode)]
@@ -21782,7 +21778,7 @@ mod tests {
             handle_with_network_receivers::<DeferredProgressMsg>();
         handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
         let connection_id = 138;
-        let (delivery_peer, semantic_target, mut peer_receivers, tenure, route) =
+        let (_delivery_peer, semantic_target, mut peer_receivers, tenure, route) =
             install_test_reply_route(
                 &mut network,
                 socket_addr!(127.0.0.1:45718),
@@ -26325,9 +26321,9 @@ mod tests {
 }
 pub mod message {
     //! Module for network messages
+    use super::*;
     use iroha_data_model::peer::Peer;
     use norito::codec::{Decode, Encode};
-    use super::*;
     /// Priority for network messages.
     #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
     pub enum Priority {

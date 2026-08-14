@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.canonicalAccountHeader;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -102,7 +103,8 @@ public final class AliasLifecycleClientTests {
         "https://torii.example/api/v1/aliases/lease/renew/plan",
         request.uri().toString());
     assertEquals(
-        authority, request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
+        canonicalAccountHeader(authority),
+        request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
     assertEquals(
         "1700000000000",
         request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0));
@@ -141,7 +143,7 @@ public final class AliasLifecycleClientTests {
         "https://torii.example/api/v1/aliases/by-account",
         executor.lastRequest.uri().toString());
     assertEquals(
-        account,
+        canonicalAccountHeader(account),
         executor.lastRequest.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
     assertNotNull(
         executor.lastRequest.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE));

@@ -4,6 +4,7 @@ import test from "node:test";
 import { canonicalRequestMessage } from "../src/canonicalRequest.js";
 import { signEd25519, verifyEd25519 } from "../src/crypto.js";
 import { NetworkId, networkIdBytes } from "../src/networkId.js";
+import { buildOperatorRequestHeaders } from "../src/operatorRequest.js";
 import {
   OperatorSigningContext,
   ToriiClient,
@@ -40,6 +41,26 @@ function header(headers, name) {
   );
   return entry?.[1];
 }
+
+test("operator header builders enforce the prepared wire-query byte cap", async () => {
+  const rawQuery = `x=${"é".repeat(32_767)}`;
+  assert.equal(Buffer.byteLength(rawQuery, "utf8"), 65_536);
+  assert.doesNotThrow(() =>
+    canonicalRequestMessage({ method: "GET", path: "/v1/test", query: rawQuery }),
+  );
+
+  await assert.rejects(
+    buildOperatorRequestHeaders({
+      signingContext: signingContext(),
+      method: "GET",
+      path: "/v1/test",
+      query: rawQuery,
+      timestampMs: 1,
+      nonce: "prepared-operator-query-cap",
+    }),
+    /exceeds 65536 raw UTF-8 bytes/u,
+  );
+});
 
 test("ISO submission signs the exact network, method, query, and body", async () => {
   let captured;

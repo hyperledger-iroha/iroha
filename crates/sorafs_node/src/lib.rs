@@ -377,15 +377,28 @@ const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    fs,
-    io::{self, ErrorKind, Read, Write},
-    path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+#[cfg(test)]
+use crate::metering::ReplicationUsageSample;
+use crate::{
+    capacity::CapacityRuntimeCheckpointV1,
+    metering::{CapacityMeter, MeteringSnapshot},
+    moderation::{
+        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
+        ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
+        ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
+        moderation_quarantine_object_relative_path, normalize_moderation_quarantine_object_input,
+        open_moderation_quarantine_object, open_moderation_quarantine_object_range,
+        rewrap_moderation_quarantine_object, seal_moderation_quarantine_object,
+        validate_moderation_quarantine_key_wrapper, validate_quarantine_object_envelope,
+        validate_relative_object_path,
+    },
+    potr::PotrTracker,
+    scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
+    store::{
+        AdmittedPayloadReadLeaseV1, ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata,
+        StorageBackend, StorageError, StoredManifest,
+    },
+    telemetry::{TelemetryAccumulator, TelemetryError},
 };
 use capacity::{
     CapacityError, CapacityFinalizedCursorV1, CapacityManager, CapacityReconcileModeV1,
@@ -481,6 +494,16 @@ use sorafs_manifest::{
     },
     validate_reputation_snapshot_transition,
 };
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    fs,
+    io::{self, ErrorKind, Read, Write},
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::sync::broadcast;
 pub use transparency::moderation_ballot_governance_event_source_entry;
@@ -512,31 +535,6 @@ pub use transparency::{
     proof_token_issuance_from_base64, proof_token_issuance_from_frame,
     reserve_finalized_event_source_entry,
 };
-#[cfg(test)]
-use crate::metering::ReplicationUsageSample;
-use crate::{
-    capacity::CapacityRuntimeCheckpointV1,
-    metering::{CapacityMeter, MeteringSnapshot},
-    moderation::{
-        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
-        ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
-        ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
-        moderation_quarantine_object_relative_path, normalize_moderation_quarantine_object_input,
-        open_moderation_quarantine_object, open_moderation_quarantine_object_range,
-        rewrap_moderation_quarantine_object, seal_moderation_quarantine_object,
-        validate_moderation_quarantine_key_wrapper, validate_quarantine_object_envelope,
-        validate_relative_object_path,
-    },
-    potr::PotrTracker,
-    scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
-    store::{
-        AdmittedPayloadReadLeaseV1, ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata,
-        StorageBackend, StorageError, StoredManifest,
-    },
-    telemetry::{TelemetryAccumulator, TelemetryError},
-};
-#[cfg(test)]
-use sorafs_manifest::capacity::ReplicationOrderV1;
 fn privacy_aggregate_entry_id(
     cycle_id: [u8; 16],
     aggregate_hash: [u8; 32],
@@ -14660,7 +14658,7 @@ impl NodeHandle {
     #[cfg(test)]
     pub(crate) fn schedule_replication_order(
         &self,
-        order: &ReplicationOrderV1,
+        order: &sorafs_manifest::capacity::ReplicationOrderV1,
     ) -> Result<Option<ReplicationPlan>, CapacityError> {
         let maybe_plan = self.mutate_capacity_durably(|capacity| {
             capacity.schedule_order(order).map(|plan| {
@@ -16445,20 +16443,20 @@ fn moderation_evidence_viewer_error_from_object_error(
 }
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-    use std::{
-        io::Read as _,
-        str::FromStr,
-        sync::{
-            Arc, Barrier, Mutex,
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use super::*;
+    use crate::config::RuntimeRetentionPolicy;
+    use crate::por::test_support::{
+        resign_sample_proof as resign_por_sample_proof,
+        resign_sample_verdict as resign_por_sample_verdict,
+        sample_auditor_keys as por_sample_auditor_keys, sample_challenge as por_sample_challenge,
+        sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
+        sample_replay_archive_head as por_sample_replay_archive_head,
+        sample_replay_archive_record_and_head as por_sample_replay_archive_record_and_head,
+        sample_verdict as por_sample_verdict,
     };
+    use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
         block::BlockHeader,
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
@@ -16522,19 +16520,17 @@ mod tests {
             RepairManualCauseV1, RepairReportV1, RepairTicketId,
         },
     };
-    use tempfile::TempDir;
-    use super::*;
-    use crate::config::RuntimeRetentionPolicy;
-    use crate::por::test_support::{
-        resign_sample_proof as resign_por_sample_proof,
-        resign_sample_verdict as resign_por_sample_verdict,
-        sample_auditor_keys as por_sample_auditor_keys, sample_challenge as por_sample_challenge,
-        sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
-        sample_replay_archive_head as por_sample_replay_archive_head,
-        sample_replay_archive_record_and_head as por_sample_replay_archive_record_and_head,
-        sample_verdict as por_sample_verdict,
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        str::FromStr,
+        sync::{
+            Arc, Barrier, Mutex,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
-    use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
+    use tempfile::TempDir;
     include!("lib_early_test_support.rs");
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
         let key_pair =
@@ -17627,7 +17623,6 @@ mod tests {
     #[test]
     fn orderbook_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
         use iroha_data_model::{
-            ChainId,
             isi::sorafs::MatchSorafsOrderbook,
             sorafs::orderbook::{
                 ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyRecord,

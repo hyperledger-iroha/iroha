@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
 
-import { canonicalRequestMessage } from "./canonicalRequest.js";
+import { canonicalRequestMessage } from "./canonicalMessage.js";
 import { networkIdBytes } from "./networkId.js";
 
 const OPERATOR_REQUEST_DOMAIN_V1 = Buffer.from(

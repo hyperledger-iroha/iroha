@@ -4064,6 +4064,7 @@ mod tests {
             state,
             genesis: _,
             recipes,
+            sorafs_provider_owners: _,
         } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let engine = WorkloadEngine::new(state, recipes);
         engine.set_recipe_override(Some(RecipeKind::SetTriggerKeyValue));
@@ -4100,6 +4101,7 @@ mod tests {
             state,
             genesis: _,
             recipes,
+            sorafs_provider_owners: _,
         } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let engine = WorkloadEngine::new(state, recipes);
         engine.set_recipe_override(Some(RecipeKind::MintAsset));
@@ -4136,6 +4138,7 @@ mod tests {
             mut state,
             genesis: _,
             recipes,
+            sorafs_provider_owners: _,
         } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let trigger_id: TriggerId = "repeatable_trigger_failure"
             .parse()
@@ -4175,6 +4178,7 @@ mod tests {
             mut state,
             genesis: _,
             recipes,
+            sorafs_provider_owners: _,
         } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let trigger_id: TriggerId = "repeatable_trigger_pending_failure"
             .parse()
@@ -4211,6 +4215,7 @@ mod tests {
             state,
             genesis: _,
             recipes,
+            sorafs_provider_owners: _,
         } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let engine = WorkloadEngine::new(state, recipes);
         let trigger_id: TriggerId = "repeatable_trigger_sync".parse().expect("valid trigger id");

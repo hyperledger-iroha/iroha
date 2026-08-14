@@ -1,271 +1,22 @@
 import { blake2b256 } from "./blake2b.js";
+import { JS_TYPE_BIGINT, JS_TYPE_STRING } from "./commonLiterals.js";
+import { crc64Xz } from "./crc64Xz.js";
 
-const STRICT_JSON_MAX_DEPTH = 128;
-const STRICT_JSON_MAX_NODES = 2_000_000;
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
-/**
- * Parse the integer-only JSON profile emitted by typed Torii endpoints.
- *
- * Native `JSON.parse` rounds integer tokens beyond `Number.MAX_SAFE_INTEGER`
- * and silently keeps only the last occurrence of a duplicate object key. This
- * decoder preserves unsafe integer tokens as `bigint`, rejects duplicate keys,
- * and accepts no non-canonical numeric spelling or malformed Unicode scalar.
- *
- * @param {string} text raw UTF-8-decoded JSON text.
- * @param {string} context human-readable error context.
- * @returns {unknown} the losslessly decoded JSON value.
- */
-export function parseStrictLosslessIntegerJson(text, context) {
-  if (typeof text !== "string") {
-    throw new TypeError(`${context} JSON source must be a string`);
-  }
-  if (typeof context !== "string" || context.length === 0) {
-    throw new TypeError("strict lossless JSON context must be a non-empty string");
-  }
-
-  let index = 0;
-  let nodes = 0;
-
-  const fail = (message, ErrorType = TypeError) => {
-    throw new ErrorType(`${context} contains invalid JSON at character ${index}: ${message}`);
-  };
-  const consumeNode = (depth) => {
-    nodes += 1;
-    if (nodes > STRICT_JSON_MAX_NODES) {
-      fail(`value exceeds the ${STRICT_JSON_MAX_NODES}-node limit`, RangeError);
-    }
-    if (depth > STRICT_JSON_MAX_DEPTH) {
-      fail(`value exceeds the ${STRICT_JSON_MAX_DEPTH}-level nesting limit`, RangeError);
-    }
-  };
-  const skipWhitespace = () => {
-    while (
-      index < text.length
-      && (
-        text[index] === " "
-        || text[index] === "\t"
-        || text[index] === "\n"
-        || text[index] === "\r"
-      )
-    ) {
-      index += 1;
-    }
-  };
-  const appendUnicodeCodeUnit = (result, codeUnit, escaped) => {
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      let low;
-      if (escaped) {
-        if (text.slice(index, index + 2) !== "\\u") {
-          fail("high surrogate must be followed by an escaped low surrogate");
-        }
-        const lowHex = text.slice(index + 2, index + 6);
-        if (!/^[0-9A-Fa-f]{4}$/u.test(lowHex)) {
-          fail("invalid Unicode escape");
-        }
-        low = Number.parseInt(lowHex, 16);
-        index += 6;
-      } else {
-        if (index >= text.length) fail("unterminated high surrogate");
-        low = text.charCodeAt(index);
-        index += 1;
-      }
-      if (low < 0xdc00 || low > 0xdfff) {
-        fail("high surrogate must be followed by a low surrogate");
-      }
-      return result + String.fromCharCode(codeUnit, low);
-    }
-    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      fail("unpaired low surrogate");
-    }
-    return result + String.fromCharCode(codeUnit);
-  };
-  const parseString = () => {
-    if (text[index] !== "\"") fail("expected a string");
-    index += 1;
-    let result = "";
-    while (index < text.length) {
-      const character = text[index];
-      if (character === "\"") {
-        index += 1;
-        return result;
-      }
-      if (character === "\\") {
-        index += 1;
-        if (index >= text.length) fail("unterminated string escape");
-        const escaped = text[index];
-        index += 1;
-        switch (escaped) {
-          case "\"":
-          case "\\":
-          case "/":
-            result += escaped;
-            break;
-          case "b":
-            result += "\b";
-            break;
-          case "f":
-            result += "\f";
-            break;
-          case "n":
-            result += "\n";
-            break;
-          case "r":
-            result += "\r";
-            break;
-          case "t":
-            result += "\t";
-            break;
-          case "u": {
-            const hex = text.slice(index, index + 4);
-            if (!/^[0-9A-Fa-f]{4}$/u.test(hex)) fail("invalid Unicode escape");
-            const codeUnit = Number.parseInt(hex, 16);
-            index += 4;
-            result = appendUnicodeCodeUnit(result, codeUnit, true);
-            break;
-          }
-          default:
-            fail("invalid string escape");
-        }
-        continue;
-      }
-      const codeUnit = text.charCodeAt(index);
-      if (codeUnit <= 0x1f) fail("unescaped control character in string");
-      index += 1;
-      result = appendUnicodeCodeUnit(result, codeUnit, false);
-    }
-    fail("unterminated string");
-  };
-  const parseInteger = () => {
-    const start = index;
-    if (text[index] === "-") index += 1;
-    if (index >= text.length) fail("incomplete number");
-    if (text[index] === "0") {
-      index += 1;
-      if (index < text.length && /[0-9]/u.test(text[index])) {
-        fail("integer tokens must not contain leading zeroes");
-      }
-    } else if (/[1-9]/u.test(text[index])) {
-      do {
-        index += 1;
-      } while (index < text.length && /[0-9]/u.test(text[index]));
-    } else {
-      fail("invalid integer token");
-    }
-    if (index < text.length && /[.eE]/u.test(text[index])) {
-      fail("numeric tokens must be canonical integers");
-    }
-    const token = text.slice(start, index);
-    if (token === "-0") {
-      fail(
-        "numeric tokens must be canonical integers; negative zero is forbidden because zero must be an unsigned integer token",
-      );
-    }
-    let integer;
-    try {
-      integer = BigInt(token);
-    } catch {
-      fail("invalid integer token");
-    }
-    if (
-      integer >= BigInt(Number.MIN_SAFE_INTEGER)
-      && integer <= BigInt(Number.MAX_SAFE_INTEGER)
-    ) {
-      return Number(integer);
-    }
-    return integer;
-  };
-  const parseValue = (depth) => {
-    consumeNode(depth);
-    skipWhitespace();
-    if (index >= text.length) fail("unexpected end of input");
-    switch (text[index]) {
-      case "{": {
-        index += 1;
-        const record = Object.create(null);
-        const keys = new Set();
-        skipWhitespace();
-        if (text[index] === "}") {
-          index += 1;
-          return record;
-        }
-        while (true) {
-          skipWhitespace();
-          const key = parseString();
-          if (keys.has(key)) fail(`duplicate object key ${JSON.stringify(key)}`);
-          keys.add(key);
-          skipWhitespace();
-          if (text[index] !== ":") fail("expected ':' after object key");
-          index += 1;
-          const value = parseValue(depth + 1);
-          Object.defineProperty(record, key, {
-            value,
-            enumerable: true,
-            writable: true,
-            configurable: true,
-          });
-          skipWhitespace();
-          if (text[index] === "}") {
-            index += 1;
-            return record;
-          }
-          if (text[index] !== ",") fail("expected ',' or '}' in object");
-          index += 1;
-        }
-      }
-      case "[": {
-        index += 1;
-        const values = [];
-        skipWhitespace();
-        if (text[index] === "]") {
-          index += 1;
-          return values;
-        }
-        while (true) {
-          values.push(parseValue(depth + 1));
-          skipWhitespace();
-          if (text[index] === "]") {
-            index += 1;
-            return values;
-          }
-          if (text[index] !== ",") fail("expected ',' or ']' in array");
-          index += 1;
-        }
-      }
-      case "\"":
-        return parseString();
-      case "t":
-        if (text.slice(index, index + 4) !== "true") fail("invalid literal");
-        index += 4;
-        return true;
-      case "f":
-        if (text.slice(index, index + 5) !== "false") fail("invalid literal");
-        index += 5;
-        return false;
-      case "n":
-        if (text.slice(index, index + 4) !== "null") fail("invalid literal");
-        index += 4;
-        return null;
-      default:
-        if (text[index] === "-" || /[0-9]/u.test(text[index])) return parseInteger();
-        fail("unexpected token");
-    }
-  };
-
-  skipWhitespace();
-  const parsed = parseValue(0);
-  skipWhitespace();
-  if (index !== text.length) fail("trailing input");
-  return parsed;
-}
-
+export { parseStrictLosslessIntegerJson };
 const MAX_MANTISSA_BYTES = 64;
+const INVALID_TEXT = "invalid_text";
+const MANTISSA_OVERFLOW = "mantissa_overflow";
+const INVALID_SCALE = "invalid_scale";
+const TRUNCATED_ENVELOPE = "truncated_envelope";
+const LENGTH_MISMATCH = "length_mismatch";
+const NONCANONICAL_MANTISSA = "noncanonical_mantissa";
 const MAX_INT_TEXT_BYTES = 155;
 const MAX_SIGNIFICANT_DIGITS = 154;
 const FRAME_HEADER_BYTES = 40;
 const ENVELOPE_HEADER_BYTES = 7;
 const HASH_BYTES = 32;
-const U64_MASK = (1n << 64n) - 1n;
-const CRC64_POLY = 0xC96C5795D7870F42n;
 const INT_MIN = -(1n << 511n);
 const INT_MAX = (1n << 511n) - 1n;
 
@@ -294,14 +45,6 @@ const SCHEMAS = Object.freeze({
 const NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x0001;
 const NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0012;
 // END GENERATED: kotodama-v1-numeric-policy
-
-const CRC64_TABLE = Object.freeze(Array.from({ length: 256 }, (_, index) => {
-  let crc = BigInt(index);
-  for (let bit = 0; bit < 8; bit += 1) {
-    crc = (crc & 1n) === 0n ? crc >> 1n : (crc >> 1n) ^ CRC64_POLY;
-  }
-  return crc;
-}));
 
 /** Stable validation failure raised by the Kotodama V1 numeric codec. */
 export class NumericV1Error extends Error {
@@ -397,23 +140,14 @@ function readU64Le(bytes, offset) {
   return value;
 }
 
-function crc64Xz(bytes) {
-  let crc = U64_MASK;
-  for (const byte of bytes) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ U64_MASK);
-}
-
 function checkedBigInt(value, context) {
-  if (typeof value === "bigint") return value;
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_BIGINT) return value;
+  if (typeof value === JS_TYPE_STRING) {
     if (!/^-?(?:0|[1-9][0-9]*)$/u.test(value) || value === "-0") {
-      fail("invalid_text", `${context} must use canonical base-10 syntax`);
+      fail(INVALID_TEXT, `${context} must use canonical base-10 syntax`);
     }
     if (value.length > MAX_INT_TEXT_BYTES) {
-      fail("mantissa_overflow", "integer text exceeds the signed 512-bit input bound");
+      fail(MANTISSA_OVERFLOW, "integer text exceeds the signed 512-bit input bound");
     }
     return BigInt(value);
   }
@@ -422,7 +156,7 @@ function checkedBigInt(value, context) {
 
 function checkIntRange(value) {
   if (value < INT_MIN || value > INT_MAX) {
-    fail("mantissa_overflow", "numeric mantissa is outside the signed 512-bit domain");
+    fail(MANTISSA_OVERFLOW, "numeric mantissa is outside the signed 512-bit domain");
   }
   return value;
 }
@@ -438,12 +172,12 @@ function encodeTwosComplement(value) {
       remaining >>= 8n;
     }
     if ((bytes[bytes.length - 1] & 0x80) !== 0) bytes.push(0);
-    if (bytes.length > MAX_MANTISSA_BYTES) fail("mantissa_overflow", "mantissa is too wide");
+    if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
     return Uint8Array.from(bytes);
   }
   let width = 1;
   while (value < -(1n << BigInt(width * 8 - 1))) width += 1;
-  if (width > MAX_MANTISSA_BYTES) fail("mantissa_overflow", "mantissa is too wide");
+  if (width > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
   let encoded = (1n << BigInt(width * 8)) + value;
   const bytes = new Uint8Array(width);
   for (let index = 0; index < width; index += 1) {
@@ -455,17 +189,17 @@ function encodeTwosComplement(value) {
 
 function decodeTwosComplement(input) {
   const bytes = asBytes(input, "mantissa");
-  if (bytes.length > MAX_MANTISSA_BYTES) fail("mantissa_overflow", "mantissa is too wide");
+  if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
   if (bytes.length === 0) return 0n;
   const last = bytes[bytes.length - 1];
   if (bytes.length === 1 && last === 0) {
-    fail("noncanonical_mantissa", "zero must use an empty mantissa");
+    fail(NONCANONICAL_MANTISSA, "zero must use an empty mantissa");
   }
   if (bytes.length > 1) {
     const previous = bytes[bytes.length - 2];
     if ((last === 0 && (previous & 0x80) === 0)
       || (last === 0xff && (previous & 0x80) !== 0)) {
-      fail("noncanonical_mantissa", "mantissa has redundant sign extension");
+      fail(NONCANONICAL_MANTISSA, "mantissa has redundant sign extension");
     }
   }
   let unsigned = 0n;
@@ -480,13 +214,13 @@ function decodeTwosComplement(input) {
 
 function normalizeScaled(mantissa, scale, quantity) {
   if (!Number.isSafeInteger(scale) || scale < 0) {
-    fail("invalid_scale", "numeric scale must be a non-negative safe integer");
+    fail(INVALID_SCALE, "numeric scale must be a non-negative safe integer");
   }
   let normalizedScale = scale;
   let normalizedMantissa;
-  if (typeof mantissa === "string") {
+  if (typeof mantissa === JS_TYPE_STRING) {
     if (!/^-?(?:0|[1-9][0-9]*)$/u.test(mantissa) || mantissa === "-0") {
-      fail("invalid_text", "mantissa must use canonical base-10 syntax");
+      fail(INVALID_TEXT, "mantissa must use canonical base-10 syntax");
     }
     const negative = mantissa.startsWith("-");
     let magnitude = negative ? mantissa.slice(1) : mantissa;
@@ -500,7 +234,7 @@ function normalizeScaled(mantissa, scale, quantity) {
       }
       const normalizedText = `${negative ? "-" : ""}${magnitude}`;
       if (normalizedText.length > MAX_INT_TEXT_BYTES) {
-        fail("mantissa_overflow", "numeric mantissa is outside the signed 512-bit domain");
+        fail(MANTISSA_OVERFLOW, "numeric mantissa is outside the signed 512-bit domain");
       }
       normalizedMantissa = BigInt(normalizedText);
     }
@@ -515,7 +249,7 @@ function normalizeScaled(mantissa, scale, quantity) {
       normalizedScale -= 1;
     }
   }
-  if (normalizedScale > 28) fail("invalid_scale", "canonical numeric scale exceeds 28");
+  if (normalizedScale > 28) fail(INVALID_SCALE, "canonical numeric scale exceeds 28");
   checkIntRange(normalizedMantissa);
   if (quantity && normalizedMantissa < 0n) {
     fail("negative_quantity", "quantity cannot be negative");
@@ -524,11 +258,11 @@ function normalizeScaled(mantissa, scale, quantity) {
 }
 
 function parseScaled(value, quantity) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw new TypeError("decimal and quantity values must be strings");
   }
   const match = /^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?$/u.exec(value);
-  if (!match || value === "-0") fail("invalid_text", "numeric text is not canonical decimal syntax");
+  if (!match || value === "-0") fail(INVALID_TEXT, "numeric text is not canonical decimal syntax");
   const fraction = match[3] ?? "";
   const rawDigits = `${match[2]}${fraction}`;
   let first = 0;
@@ -540,9 +274,9 @@ function parseScaled(value, quantity) {
     end -= 1;
     scale -= 1;
   }
-  if (scale > 28) fail("invalid_scale", "canonical numeric scale exceeds 28");
+  if (scale > 28) fail(INVALID_SCALE, "canonical numeric scale exceeds 28");
   if (end - first > MAX_SIGNIFICANT_DIGITS) {
-    fail("mantissa_overflow", "decimal mantissa exceeds the signed 512-bit input bound");
+    fail(MANTISSA_OVERFLOW, "decimal mantissa exceeds the signed 512-bit input bound");
   }
   const digits = rawDigits.slice(first, end);
   const mantissa = BigInt(`${match[1]}${digits}`);
@@ -614,7 +348,7 @@ function canonicalQuantityValue(value) {
   if (value instanceof KotodamaQuantity) {
     return new KotodamaQuantity(value.mantissa, value.scale);
   }
-  return typeof value === "bigint"
+  return typeof value === JS_TYPE_BIGINT
     ? new KotodamaQuantity(value, 0)
     : new KotodamaQuantity(value);
 }
@@ -659,21 +393,21 @@ function decodeFrame(kind, input) {
   const bodyLength = readU64Le(frame, 23);
   if (bodyLength > BigInt(Number.MAX_SAFE_INTEGER)
     || Number(bodyLength) !== frame.length - FRAME_HEADER_BYTES) {
-    fail("length_mismatch", "numeric frame length is inconsistent");
+    fail(LENGTH_MISMATCH, "numeric frame length is inconsistent");
   }
   const body = frame.subarray(FRAME_HEADER_BYTES);
   if (readU64Le(frame, 31) !== crc64Xz(body)) fail("checksum_mismatch", "numeric frame checksum failed");
-  if (body.length < 4) fail("length_mismatch", "numeric body has no mantissa length");
+  if (body.length < 4) fail(LENGTH_MISMATCH, "numeric body has no mantissa length");
   const mantissaLength = readU32Le(body, 0);
   const expectedBodyLength = 4 + mantissaLength + (schema.scaled ? 1 : 0);
   if (mantissaLength > MAX_MANTISSA_BYTES || expectedBodyLength !== body.length) {
-    fail(mantissaLength > MAX_MANTISSA_BYTES ? "mantissa_overflow" : "length_mismatch",
+    fail(mantissaLength > MAX_MANTISSA_BYTES ? MANTISSA_OVERFLOW : LENGTH_MISMATCH,
       "numeric body length is inconsistent");
   }
   const mantissa = decodeTwosComplement(body.subarray(4, 4 + mantissaLength));
   if (!schema.scaled) return new KotodamaInt(mantissa);
   const scale = body[body.length - 1];
-  if (scale > 28) fail("invalid_scale", "numeric scale exceeds 28");
+  if (scale > 28) fail(INVALID_SCALE, "numeric scale exceeds 28");
   if ((mantissa === 0n && scale !== 0) || (scale > 0 && mantissa % 10n === 0n)) {
     fail("noncanonical_decimal", "numeric value has a noncanonical scale");
   }
@@ -696,7 +430,7 @@ function envelopeFor(kind, value) {
 function decodeEnvelope(kind, input) {
   const schema = SCHEMAS[kind];
   const envelope = asBytes(input, "numeric pointer envelope");
-  if (envelope.length < ENVELOPE_HEADER_BYTES) fail("truncated_envelope", "numeric envelope is truncated");
+  if (envelope.length < ENVELOPE_HEADER_BYTES) fail(TRUNCATED_ENVELOPE, "numeric envelope is truncated");
   const pointerType = (envelope[0] << 8) | envelope[1];
   const knownAllowedType = pointerType >= NUMERIC_V1_MIN_KNOWN_POINTER_TYPE
     && pointerType <= NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE;
@@ -709,7 +443,7 @@ function decodeEnvelope(kind, input) {
   const maximum = FRAME_HEADER_BYTES + 4 + MAX_MANTISSA_BYTES + (schema.scaled ? 1 : 0);
   if (frameLength > maximum) fail("oversized_length", "numeric envelope declares an oversized frame");
   if (ENVELOPE_HEADER_BYTES + frameLength + HASH_BYTES !== envelope.length) {
-    fail("truncated_envelope", "numeric envelope length is inconsistent");
+    fail(TRUNCATED_ENVELOPE, "numeric envelope length is inconsistent");
   }
   const frame = envelope.subarray(ENVELOPE_HEADER_BYTES, ENVELOPE_HEADER_BYTES + frameLength);
   const suppliedHash = envelope.subarray(ENVELOPE_HEADER_BYTES + frameLength);
@@ -741,19 +475,19 @@ export const NumericV1 = Object.freeze({
   encodeDecimalJson: (value) => canonicalDecimalValue(value).toString(),
   encodeQuantityJson: (value) => canonicalQuantityValue(value).toString(),
   decodeIntJson: (value) => {
-    if (typeof value !== "string") fail("invalid_text", "int JSON must be a string");
+    if (typeof value !== JS_TYPE_STRING) fail(INVALID_TEXT, "int JSON must be a string");
     return new KotodamaInt(value);
   },
   decodeDecimalJson: (value) => {
-    if (typeof value !== "string") fail("invalid_text", "decimal JSON must be a string");
+    if (typeof value !== JS_TYPE_STRING) fail(INVALID_TEXT, "decimal JSON must be a string");
     const decoded = new KotodamaDecimal(value);
-    if (decoded.toString() !== value) fail("invalid_text", "decimal JSON must use canonical spelling");
+    if (decoded.toString() !== value) fail(INVALID_TEXT, "decimal JSON must use canonical spelling");
     return decoded;
   },
   decodeQuantityJson: (value) => {
-    if (typeof value !== "string") fail("invalid_text", "quantity JSON must be a string");
+    if (typeof value !== JS_TYPE_STRING) fail(INVALID_TEXT, "quantity JSON must be a string");
     const decoded = new KotodamaQuantity(value);
-    if (decoded.toString() !== value) fail("invalid_text", "quantity JSON must use canonical spelling");
+    if (decoded.toString() !== value) fail(INVALID_TEXT, "quantity JSON must use canonical spelling");
     return decoded;
   },
 });

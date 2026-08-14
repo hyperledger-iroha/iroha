@@ -418,10 +418,10 @@ mod tests {
         [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
         ZkAmsMkheErrorV1,
     >;
-    type DecodeBoundRnsLinkV1 = for<'a, 'b> fn(
+    type DecodeBoundRnsLinkV1 = for<'a, 'b, 'c> fn(
         &'a [u8],
-        ZkAmsPhase23RnsLinkContextV1,
-        &'b [ZkAmsPhase23RnsLinkChunkCommitmentV1],
+        &'b ZkAmsPhase23RnsLinkContextV1,
+        &'c [ZkAmsPhase23RnsLinkChunkCommitmentV1],
     ) -> Result<
         ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
         ZkAmsMkheErrorV1,

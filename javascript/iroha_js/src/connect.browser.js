@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
+import { crc64Xz } from "./crc64Xz.js";
 import { networkIdBytes } from "./networkId.js";
 
 const encoder = new TextEncoder();
@@ -29,8 +30,6 @@ const CONNECT_URI_FIELDS = new Set([
 ]);
 const DEFAULT_CONNECT_LAUNCH_PROTOCOL = "irohaconnect";
 const DEFAULT_TORII_BASE_URL = "https://taira.sora.org";
-const UINT64_MASK = (1n << 64n) - 1n;
-const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 
 const FRAME_KIND_CONTROL = 0;
 const FRAME_KIND_CIPHERTEXT = 1;
@@ -57,22 +56,6 @@ const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
 
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG =
   "iroha:torii:canonical-request:v1";
-
-const CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let byte = 0; byte < 256; byte += 1) {
-    let crc = BigInt(byte);
-    for (let bit = 0; bit < 8; bit += 1) {
-      if ((crc & 1n) === 1n) {
-        crc = (crc >> 1n) ^ CRC64_REFLECTED_POLY;
-      } else {
-        crc >>= 1n;
-      }
-    }
-    table[byte] = BigInt.asUintN(64, crc);
-  }
-  return table;
-})();
 
 export class ConnectApprovalRejectedError extends Error {
   constructor(codeId, reason, code = null) {
@@ -1042,15 +1025,6 @@ function decodeConnectFrame(bytes) {
   throw new Error(`unsupported connect frame kind ${tag}`);
 }
 
-function crc64Ecma(payload) {
-  let crc = UINT64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ UINT64_MASK);
-}
-
 function noritoSchemaHash(typeName) {
   return sha256(concatBytes(encoder.encode("norito:v1:type-name\0"), encoder.encode(typeName))).subarray(0, 16);
 }
@@ -1062,7 +1036,7 @@ function frameNoritoPayload(typeName, payload) {
     noritoSchemaHash(typeName),
     Uint8Array.of(0),
     u64ToBytes(payload.length),
-    u64ToBytes(crc64Ecma(payload)),
+    u64ToBytes(crc64Xz(payload)),
     Uint8Array.of(0),
     payload,
   );
@@ -1092,7 +1066,7 @@ function decodeNoritoFrame(bytes, label, typeName = CONNECT_ENVELOPE_TYPE_NAME) 
   if (payload.length !== payloadLength) {
     throw new Error(`${label} payload exceeded available bytes`);
   }
-  if (crc64Ecma(payload) !== checksum) {
+  if (crc64Xz(payload) !== checksum) {
     throw new Error(`${label} CRC64 mismatch`);
   }
   return payload;

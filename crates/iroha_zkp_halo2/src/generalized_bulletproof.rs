@@ -215,8 +215,8 @@ impl<F: ProofScalar> SecretScalar<F> {
         drop(incoming);
         owned
     }
-    fn expose_copy(&self) -> F {
-        self.0
+    fn is_zero(&self) -> bool {
+        self.0.eq(&F::ZERO)
     }
     /// Borrow the scalar while this owner retains responsibility for clearing
     /// its storage.
@@ -419,12 +419,11 @@ impl<S: ProofSuite> Drop for SecretMsmTerm<S> {
         self.point.clear_secret();
     }
 }
-/// Unwind-safe eraser for the private by-value `push_copy` parameter slots.
+/// Unwind-safe handoff guard for private by-value `push_copy` parameter slots.
 ///
-/// `ProofScalar` and `ProofPoint` are `Copy`, so copying either parameter into
-/// the retained term does not consume its named stack slot. This guard clears
-/// those two callee-owned slots after a successful push and on every error or
-/// unwind path.
+/// The complete retained term is initialized before either source slot moves.
+/// Each vacated source receives zero or the identity and is then cleared after
+/// a successful push or on every error and unwind path.
 struct BorrowedSecretMsmTerm<'a, S: ProofSuite> {
     scalar: &'a mut S::Scalar,
     point: &'a mut S::Point,
@@ -433,11 +432,14 @@ impl<'a, S: ProofSuite> BorrowedSecretMsmTerm<'a, S> {
     fn new(scalar: &'a mut S::Scalar, point: &'a mut S::Point) -> Self {
         Self { scalar, point }
     }
-    fn scalar_copy(&self) -> S::Scalar {
-        *self.scalar
-    }
-    fn point_copy(&self) -> S::Point {
-        *self.point
+    fn take_term(&mut self) -> SecretMsmTerm<S> {
+        let mut retained = SecretMsmTerm {
+            scalar: S::Scalar::ZERO,
+            point: S::Point::identity(),
+        };
+        core::mem::swap(&mut retained.scalar, &mut *self.scalar);
+        core::mem::swap(&mut retained.point, &mut *self.point);
+        retained
     }
 }
 impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S> {
@@ -451,9 +453,10 @@ impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S> {
 /// Construction reserves all storage before a secret is accepted. `push`
 /// borrows caller-owned values and copies them directly into a retained term
 /// only after the fixed-capacity preflight succeeds. Private computed-value
-/// insertions clear both of their by-value parameter slots on success, error,
-/// or unwind. Evaluation requires exactly the declared term count and clears
-/// all retained scalar and point copies on success, error, or unwind.
+/// insertions hand both by-value parameter slots directly into a retained term
+/// and clear the vacated slots on success, error, or unwind. Evaluation requires
+/// exactly the declared term count and clears all retained scalar and point
+/// copies on success, error, or unwind.
 ///
 /// The fixed four-bit Straus evaluator has secret-independent control flow and
 /// memory access. It processes independent 256-point chunks in parallel when
@@ -524,18 +527,16 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
         mut scalar: S::Scalar,
         mut point: S::Point,
     ) -> Result<(), GeneralizedBulletproofErrorV1> {
-        let incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);
+        let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);
         if self.terms.len() >= self.exact_capacity {
             return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
         }
         debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
-        self.terms.push(SecretMsmTerm {
-            scalar: incoming.scalar_copy(),
-            point: incoming.point_copy(),
-        });
-        // Clear the successful private by-value parameter slots before any
-        // later assertion or return. The guard also performs this during an
-        // unwind from the fixed-allocation push itself.
+        let retained = incoming.take_term();
+        self.terms.push(retained);
+        // Clear the now-zero/identity private parameter slots before any later
+        // assertion or return. The retained term owns the moved values through
+        // every success, error, and unwind path after the handoff.
         drop(incoming);
         debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
         Ok(())
@@ -607,7 +608,7 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
         let mut result = SecretPoint::new(S::Point::identity());
         for chunk in self.values {
             let chunk = chunk?;
-            result.add_assign_secret(&chunk);
+            result.add_assign_secret(chunk);
         }
         Ok(result)
     }
@@ -618,12 +619,6 @@ impl Drop for SecretScalarEncodings {
         for encoding in &mut self.0 {
             clear_secret_bytes(encoding);
         }
-    }
-}
-struct SecretDigits([u8; SECRET_MSM_CHUNK_TERMS_V1]);
-impl Drop for SecretDigits {
-    fn drop(&mut self) {
-        clear_secret_bytes(&mut self.0);
     }
 }
 /// Move-only owner for one point derived from prover-secret MSM scalars.
@@ -668,32 +663,21 @@ impl<P: ProofPoint> SecretPoint<P> {
         let mut doubled = self.0.double();
         self.replace(&mut doubled);
     }
-    fn add_assign_secret(&mut self, rhs: &Self) {
-        let mut rhs = rhs.0;
-        let rhs_slot = BorrowedSecretPoint::new(&mut rhs);
-        let mut sum = self.0 + rhs_slot.expose_copy();
-        drop(rhs_slot);
+    fn add_assign_secret(&mut self, rhs: Self) {
+        let mut sum = self.0 + rhs.0;
+        drop(rhs);
         self.replace(&mut sum);
     }
     fn add_scaled_pair_assign(
         &mut self,
-        left: &Self,
+        left: Self,
         left_scalar: P::Scalar,
-        right: &Self,
+        right: Self,
         right_scalar: P::Scalar,
     ) {
-        let mut left_point = left.0;
-        let left_point = BorrowedSecretPoint::new(&mut left_point);
-        let mut current_point = self.0;
-        let current_point = BorrowedSecretPoint::new(&mut current_point);
-        let mut right_point = right.0;
-        let right_point = BorrowedSecretPoint::new(&mut right_point);
-        let mut updated = left_point.expose_copy().scale(left_scalar)
-            + current_point.expose_copy()
-            + right_point.expose_copy().scale(right_scalar);
-        drop(right_point);
-        drop(current_point);
-        drop(left_point);
+        let mut updated = left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);
+        drop(right);
+        drop(left);
         self.replace(&mut updated);
     }
     fn select_assign(&mut self, candidate: &P, choice: u8) {
@@ -738,8 +722,9 @@ impl<P: ProofPoint> Drop for SecretPointTableRow<P> {
         }
     }
 }
-fn ct_eq_u8(left: u8, right: u8) -> u8 {
-    let difference = u16::from(left ^ right);
+fn ct_eq_window_nibble(encoded_byte: &u8, shift: usize, candidate: u8) -> u8 {
+    let difference =
+        u16::from(((*encoded_byte >> shift) & (SECRET_MSM_TABLE_ENTRIES_V1 as u8 - 1)) ^ candidate);
     ((difference.wrapping_sub(1) >> 8) & 1) as u8
 }
 fn secret_straus_chunk<S: ProofSuite>(
@@ -766,10 +751,10 @@ fn secret_straus_chunk<S: ProofSuite>(
     }
     let mut encodings = SecretScalarEncodings([[0_u8; 32]; SECRET_MSM_CHUNK_TERMS_V1]);
     for (index, term) in terms.iter().enumerate() {
-        let encoding = SecretBytes(term.scalar.bits_le());
-        encodings.0[index] = encoding.0;
+        let mut encoding = SecretBytes(term.scalar.bits_le());
+        core::mem::swap(&mut encodings.0[index], &mut encoding.0);
+        drop(encoding);
     }
-    let mut digits = SecretDigits([0_u8; SECRET_MSM_CHUNK_TERMS_V1]);
     let mut accumulator = SecretPoint::new(S::Point::identity());
     for window in (0..SECRET_MSM_WINDOWS_V1).rev() {
         for _ in 0..SECRET_MSM_WINDOW_BITS_V1 {
@@ -778,18 +763,14 @@ fn secret_straus_chunk<S: ProofSuite>(
         let byte_index = window / 2;
         let shift = (window % 2) * SECRET_MSM_WINDOW_BITS_V1;
         for index in 0..terms.len() {
-            digits.0[index] =
-                (encodings.0[index][byte_index] >> shift) & (SECRET_MSM_TABLE_ENTRIES_V1 as u8 - 1);
-        }
-        for index in 0..terms.len() {
             let mut selected = SecretPoint::new(S::Point::identity());
             for candidate in 0..SECRET_MSM_TABLE_ENTRIES_V1 {
                 selected.select_assign(
                     &tables.0[index][candidate],
-                    ct_eq_u8(digits.0[index], candidate as u8),
+                    ct_eq_window_nibble(&encodings.0[index][byte_index], shift, candidate as u8),
                 );
             }
-            accumulator.add_assign_secret(&selected);
+            accumulator.add_assign_secret(selected);
         }
     }
     Ok(accumulator)
@@ -1077,6 +1058,49 @@ impl<F: ProofScalar> ScalarVector<F> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    /// Compute one elementwise product from borrowed inputs into a fixed
+    /// zeroizing allocation.
+    fn product_from_borrowed(
+        left: &Self,
+        right: &Self,
+    ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        if left.len() != right.len() {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+        }
+        let exact_len = left.len();
+        let mut product = Self(Vec::new());
+        product
+            .0
+            .try_reserve_exact(exact_len)
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let allocation_capacity = product.0.capacity();
+        if allocation_capacity < exact_len {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
+        let allocation_pointer = product.0.as_ptr();
+        for _ in 0..exact_len {
+            debug_assert!(product.0.len() < allocation_capacity);
+            product.0.push(F::ZERO);
+        }
+        debug_assert_eq!(product.0.len(), exact_len);
+        debug_assert_eq!(product.0.capacity(), allocation_capacity);
+        debug_assert_eq!(product.0.as_ptr(), allocation_pointer);
+        for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0) {
+            *output = *left;
+            *output *= *right;
+        }
+        debug_assert_eq!(product.0.len(), exact_len);
+        debug_assert_eq!(product.0.capacity(), allocation_capacity);
+        debug_assert_eq!(product.0.as_ptr(), allocation_pointer);
+        Ok(product)
+    }
+    /// Add one borrowed vector multiplied by one borrowed scalar in place.
+    fn add_scaled_assign(&mut self, coefficient: &Self, scalar: &F) {
+        assert_eq!(self.len(), coefficient.len());
+        for (result, coefficient) in self.0.iter_mut().zip(&coefficient.0) {
+            *result += *coefficient * *scalar;
+        }
+    }
     /// Compute an inner product with the corresponding prefix of an iterator
     /// and retain the result in a zeroizing owner.
     ///
@@ -1097,18 +1121,58 @@ impl<F: ProofScalar> ScalarVector<F> {
         result
     }
     fn pad_with_zeroes(&mut self, len: usize) -> Result<(), GeneralizedBulletproofErrorV1> {
-        if self.len() > len {
+        let source_len = self.len();
+        if source_len > len {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-        if self.len() != len {
-            // Allocate first and copy into the final-size allocation. Replacing
-            // `self` then clears the complete initialized portion of the old
-            // allocation before it is released; `Vec::resize` could otherwise
-            // reallocate and leave an unwiped copy behind.
-            let mut padded = Self::zero(len);
-            padded.0[..self.len()].copy_from_slice(&self.0);
-            *self = padded;
+        if source_len == len {
+            return Ok(());
         }
+        let source_pointer = self.0.as_ptr();
+        let source_capacity = self.0.capacity();
+        // Establish the complete final-size zeroizing destination before
+        // moving any private source slot. Allocation failure therefore leaves
+        // the original owner unchanged, and insertion cannot grow later.
+        let mut padded = Self(Vec::new());
+        padded
+            .0
+            .try_reserve_exact(len)
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let allocation_capacity = padded.0.capacity();
+        if allocation_capacity < len {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
+        let allocation_pointer = padded.0.as_ptr();
+        for _ in 0..len {
+            debug_assert!(padded.0.len() < allocation_capacity);
+            padded.0.push(F::ZERO);
+        }
+        debug_assert_eq!(padded.0.len(), len);
+        debug_assert_eq!(padded.0.capacity(), allocation_capacity);
+        debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);
+        // Move the initialized prefix directly between owner slots. Clear
+        // each now-zero source through the scalar erasure boundary before its
+        // length is shortened and its allocation is released.
+        for (source, destination) in self.0.iter_mut().zip(&mut padded.0[..source_len]) {
+            core::mem::swap(source, destination);
+            source.clear_secret();
+        }
+        debug_assert_eq!(self.0.len(), source_len);
+        debug_assert_eq!(self.0.capacity(), source_capacity);
+        debug_assert_eq!(self.0.as_ptr(), source_pointer);
+        debug_assert_eq!(padded.0.len(), len);
+        debug_assert_eq!(padded.0.capacity(), allocation_capacity);
+        debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);
+        self.0.truncate(0);
+        debug_assert_eq!(self.0.capacity(), source_capacity);
+        debug_assert_eq!(self.0.as_ptr(), source_pointer);
+        core::mem::swap(&mut self.0, &mut padded.0);
+        debug_assert_eq!(self.0.len(), len);
+        debug_assert_eq!(self.0.capacity(), allocation_capacity);
+        debug_assert_eq!(self.0.as_ptr(), allocation_pointer);
+        debug_assert!(padded.0.is_empty());
+        debug_assert_eq!(padded.0.capacity(), source_capacity);
+        debug_assert_eq!(padded.0.as_ptr(), source_pointer);
         Ok(())
     }
     fn split(mut self) -> Result<(Self, Self), GeneralizedBulletproofErrorV1> {
@@ -1116,16 +1180,38 @@ impl<F: ProofScalar> ScalarVector<F> {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
         let half = self.len() / 2;
-        let mut right = Vec::with_capacity(half);
-        right.extend_from_slice(&self.0[half..]);
-        // `Vec::split_off` copies `Copy` elements into a new allocation but
-        // leaves their bytes beyond the shortened old length. Clear those
-        // stale source slots before truncating them out of Drop's reach.
-        for value in &mut self.0[half..] {
-            value.clear_secret();
+        // Establish the complete zeroizing destination before moving any
+        // private suffix slot. A fallible exact reserve keeps allocation
+        // failure ahead of the first handoff and prevents later growth.
+        let mut right = Self(Vec::new());
+        right
+            .0
+            .try_reserve_exact(half)
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let allocation_capacity = right.0.capacity();
+        if allocation_capacity < half {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
         }
+        let allocation_pointer = right.0.as_ptr();
+        for _ in 0..half {
+            debug_assert!(right.0.len() < allocation_capacity);
+            right.0.push(F::ZERO);
+        }
+        debug_assert_eq!(right.0.len(), half);
+        debug_assert_eq!(right.0.capacity(), allocation_capacity);
+        debug_assert_eq!(right.0.as_ptr(), allocation_pointer);
+        // Swap each suffix value directly between initialized owner slots.
+        // Clear the zeroed source slot through the scalar's erasure boundary
+        // before truncation moves it beyond this owner's reachable length.
+        for (source, destination) in self.0[half..].iter_mut().zip(&mut right.0) {
+            core::mem::swap(source, destination);
+            source.clear_secret();
+        }
+        debug_assert_eq!(right.0.len(), half);
+        debug_assert_eq!(right.0.capacity(), allocation_capacity);
+        debug_assert_eq!(right.0.as_ptr(), allocation_pointer);
         self.0.truncate(half);
-        Ok((self, Self(right)))
+        Ok((self, right))
     }
 }
 /// Sample a secret vector incrementally so successfully sampled prefixes are
@@ -1138,15 +1224,37 @@ where
     F: ProofScalar,
     R: ProofRandomSource,
 {
-    // Allocate the complete retained vector before accepting any entropy, so
-    // insertion cannot reallocate after a secret has been sampled.
-    let mut result = ScalarVector(Vec::with_capacity(len));
+    // Establish the complete retained zeroizing allocation before accepting
+    // any entropy, so neither allocation nor insertion can fail after a
+    // secret has been sampled.
+    let mut result = ScalarVector(Vec::new());
+    result
+        .0
+        .try_reserve_exact(len)
+        .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+    let allocation_capacity = result.0.capacity();
+    if allocation_capacity < len {
+        return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+    }
+    let allocation_pointer = result.0.as_ptr();
     for _ in 0..len {
-        let sampled = random_scalar::<F, _>(rng)?;
-        debug_assert!(result.0.len() < result.0.capacity());
-        result.0.push(*sampled.expose_ref());
+        debug_assert!(result.0.len() < allocation_capacity);
+        result.0.push(F::ZERO);
+    }
+    debug_assert_eq!(result.0.len(), len);
+    debug_assert_eq!(result.0.capacity(), allocation_capacity);
+    debug_assert_eq!(result.0.as_ptr(), allocation_pointer);
+    // Swap each sampled owner directly into its preinitialized destination.
+    // The source receives zero and is cleared immediately before the next
+    // entropy request.
+    for destination in &mut result.0 {
+        let mut sampled = random_scalar::<F, _>(rng)?;
+        core::mem::swap(destination, sampled.expose_mut());
         drop(sampled);
     }
+    debug_assert_eq!(result.0.len(), len);
+    debug_assert_eq!(result.0.capacity(), allocation_capacity);
+    debug_assert_eq!(result.0.as_ptr(), allocation_pointer);
     Ok(result)
 }
 /// Opening of one Pedersen vector commitment used by the FCMP circuit.
@@ -1165,6 +1273,21 @@ impl<F: ProofScalar> Drop for VectorCommitmentOpening<F> {
     }
 }
 impl<F: ProofScalar> VectorCommitmentOpening<F> {
+    /// Construct an opening by moving a caller-owned mask slot into its final
+    /// zeroizing owner. The source slot is replaced with zero before return.
+    pub fn take_mask_from_slot(values: Vec<F>, mask: &mut F) -> Self {
+        let mut opening = Self {
+            values: ScalarVector(values),
+            mask: F::ZERO,
+        };
+        core::mem::swap(&mut opening.mask, mask);
+        opening
+    }
+    /// Move the committed values into their next zeroizing owner while
+    /// retaining this opening's mask for the later polynomial response.
+    fn take_values(&mut self) -> ScalarVector<F> {
+        core::mem::replace(&mut self.values, ScalarVector(Vec::new()))
+    }
     /// Construct an opening from committed values and its blinding scalar.
     pub fn new(values: Vec<F>, mut mask: F) -> Self {
         let incoming = BorrowedSecretScalarSlot(&mut mask);
@@ -1254,7 +1377,7 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
         if a_l.len() != a_r.len() {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-        let a_o = a_l.clone() * &a_r;
+        let a_o = ScalarVector::product_from_borrowed(&a_l, &a_r)?;
         Ok(Self {
             a_l,
             a_r,
@@ -1629,7 +1752,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             for (commitment, weight) in &constraint.wv {
                 *evaluation.expose_mut() += witness.scalar_commitments[*commitment].value * *weight;
             }
-            if !evaluation.expose_copy().is_zero() {
+            if !evaluation.is_zero() {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
@@ -1696,9 +1819,10 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             accumulate(&mut o_weights, &constraint.wo, *z);
         }
         l[ilr] = (r_weights * &y_inverse) + &witness.a_l;
-        l[io] = witness.a_o.clone();
+        l[io] = core::mem::replace(&mut witness.a_o, ScalarVector(Vec::new()));
         l[is] = s_l;
-        r[jlr] = l_weights + &(witness.a_r.clone() * &y_powers);
+        let a_r = core::mem::replace(&mut witness.a_r, ScalarVector(Vec::new()));
+        r[jlr] = l_weights + &(a_r * &y_powers);
         r[jo] = o_weights - &y_powers;
         r[js] = s_r * &y_powers;
         drop(y_powers);
@@ -1735,7 +1859,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         }
         for (mut index, (opening, weights)) in witness
             .vector_commitments
-            .iter()
+            .iter_mut()
             .zip(cg_weights)
             .enumerate()
         {
@@ -1743,7 +1867,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 index += 1;
             }
             let reverse = ni - index;
-            l[index] = opening.values.clone();
+            l[index] = opening.take_values();
             r[reverse] = weights;
         }
         let t_poly_len = 1 + (2 * (l.len() - 1));
@@ -1782,7 +1906,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let evaluate = |polynomial: &[ScalarVector<S::Scalar>]| {
             let mut result = ScalarVector::zero(n);
             for (index, coefficient) in polynomial.iter().enumerate() {
-                result = result + &(coefficient.clone() * x[index]);
+                result.add_scaled_assign(coefficient, &x[index]);
             }
             result
         };
@@ -1795,32 +1919,28 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         for (weight, opening) in scalar_commitment_weights
             .0
             .iter()
-            .copied()
             .zip(&witness.scalar_commitments)
         {
-            *tau_ni.expose_mut() += weight * opening.mask;
+            *tau_ni.expose_mut() += *weight * opening.mask;
         }
         drop(scalar_commitment_weights);
         // The omitted t[ni] commitment is reconstructed from the scalar
         // statement commitments. Vector-commitment masks instead contribute
         // to `u` below.
-        let mut tau_x_poly = ScalarVector(Vec::with_capacity(t_poly_len));
-        tau_x_poly.0.extend(tau_before.0.iter().copied());
-        tau_x_poly.0.push(tau_ni.expose_copy());
-        tau_x_poly.0.extend(tau_after.0.iter().copied());
         let mut tau_x = SecretScalar::new(S::Scalar::ZERO);
-        for (index, coefficient) in tau_x_poly.0.iter().enumerate() {
+        for (index, coefficient) in tau_before.0.iter().enumerate() {
             *tau_x.expose_mut() += *coefficient * x[index];
+        }
+        *tau_x.expose_mut() += *tau_ni.expose_ref() * x[ni];
+        for (index, coefficient) in tau_after.0.iter().enumerate() {
+            *tau_x.expose_mut() += *coefficient * x[ni + 1 + index];
         }
         drop(tau_before);
         drop(tau_after);
-        drop(tau_x_poly);
         drop(tau_ni);
-        let mut u = SecretScalar::new(
-            (alpha.expose_copy() * x[ilr])
-                + (beta.expose_copy() * x[io])
-                + (rho.expose_copy() * x[is]),
-        );
+        let mut u = SecretScalar::new(*alpha.expose_ref() * x[ilr]);
+        *u.expose_mut() += *beta.expose_ref() * x[io];
+        *u.expose_mut() += *rho.expose_ref() * x[is];
         for (mut index, opening) in witness.vector_commitments.iter().enumerate() {
             if index >= ilr {
                 index += 1;
@@ -2160,7 +2280,7 @@ where
             )
         }
     };
-    p.add_scaled_pair_assign(&left, challenge.square(), &right, inverse.square());
+    p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());
     a = (a_left * challenge) + &(a_right * inverse);
     b = (b_left * inverse) + &(b_right * challenge);
     drop(h_bold_weights);
@@ -2261,7 +2381,7 @@ where
                 )
             }
         };
-        p.add_scaled_pair_assign(&left, challenge.square(), &right, inverse.square());
+        p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());
         a = (a_left * challenge) + &(a_right * inverse);
         b = (b_left * inverse) + &(b_right * challenge);
     }
@@ -2593,7 +2713,8 @@ mod secret_cleanup_tests {
     fn secret_scalar_owner_clears_constructor_and_transfer_slots() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
         CLEAR_CALLS.store(0, Ordering::SeqCst);
-        let owned = SecretScalar::new(TrackingScalar(5));
+        let owned = SecretScalar::new(TrackingScalar::ZERO);
+        assert!(owned.is_zero());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(owned);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
@@ -2601,12 +2722,76 @@ mod secret_cleanup_tests {
         let mut source = TrackingScalar(7);
         let owned = SecretScalar::take(&mut source);
         assert_eq!(source, TrackingScalar::ZERO);
+        assert!(!owned.is_zero());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(owned);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         let source = include_str!("generalized_bulletproof.rs");
         assert!(source.contains("fn new(mut value: F) -> Self"));
         assert!(source.contains("fn take(value: &mut F) -> Self"));
+        let production = source
+            .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
+            .expect("production source boundary")
+            .0;
+        let secret_owner = production
+            .split_once("impl<F: ProofScalar> SecretScalar<F> {")
+            .expect("secret scalar owner")
+            .1
+            .split_once("impl<F: ProofScalar> Drop for SecretScalar<F>")
+            .expect("secret scalar owner boundary")
+            .0;
+        assert_eq!(
+            secret_owner.matches("fn is_zero(&self) -> bool {").count(),
+            1
+        );
+        assert!(secret_owner.contains("self.0.eq(&F::ZERO)"));
+        assert!(!secret_owner.contains("fn expose_copy(&self) -> F"));
+        assert!(!secret_owner.contains("self.0.is_zero()"));
+        let constraint_precheck = production
+            .split_once("        for constraint in &self.constraints {")
+            .expect("constraint precheck")
+            .1
+            .split_once("        let alpha = random_scalar::<S::Scalar, _>(rng)?;")
+            .expect("constraint precheck boundary")
+            .0;
+        let final_accumulation = constraint_precheck
+            .rfind("*evaluation.expose_mut() +=")
+            .expect("final constraint accumulation");
+        let inspection = constraint_precheck
+            .find("if !evaluation.is_zero() {")
+            .expect("borrowed constraint inspection");
+        let error = constraint_precheck[inspection..]
+            .find("return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);")
+            .map(|position| inspection + position)
+            .expect("constraint error");
+        assert!(final_accumulation < inspection && inspection < error);
+        assert_eq!(
+            constraint_precheck.matches("evaluation.is_zero()").count(),
+            1
+        );
+        for forbidden in [
+            "evaluation.expose_copy",
+            "*evaluation.expose_ref",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Vec::",
+            "alloc",
+            "random",
+            "rng",
+            "transcript",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "?",
+        ] {
+            assert!(
+                !constraint_precheck.contains(forbidden),
+                "borrowed constraint zero-check {forbidden}"
+            );
+        }
         let random = source
             .split_once("pub fn random_scalar<F, R>(")
             .expect("random scalar function")
@@ -2776,25 +2961,104 @@ mod secret_cleanup_tests {
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
     #[test]
-    fn secret_builder_private_push_copy_clears_successful_parameter_slots() {
+    fn secret_builder_private_push_copy_handoffs_and_clears_every_exit() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        // Exercise the same owner-first handoff used by `push_copy` directly so
+        // both vacated source slots remain observable before their guard drops.
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut source_scalar = TrackingScalar(29);
+        let mut source_point = TrackingPoint(31);
+        let retained = {
+            let mut incoming =
+                BorrowedSecretMsmTerm::<TrackingSuite>::new(&mut source_scalar, &mut source_point);
+            let retained = incoming.take_term();
+            assert_eq!(*incoming.scalar, TrackingScalar::ZERO);
+            assert_eq!(*incoming.point, TrackingPoint::identity());
+            assert_eq!(retained.scalar, TrackingScalar(29));
+            assert_eq!(retained.point, TrackingPoint(31));
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            drop(incoming);
+            retained
+        };
+        assert_eq!(source_scalar, TrackingScalar::ZERO);
+        assert_eq!(source_point, TrackingPoint::identity());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+        drop(retained);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
+
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut terms =
-            SecretMultiexpBuilder::<TrackingSuite>::new(1).expect("fixed tracking capacity");
+            SecretMultiexpBuilder::<TrackingSuite>::new(2).expect("fixed tracking capacity");
+        let allocation = terms.terms.as_ptr();
+        let allocation_capacity = terms.terms.capacity();
         terms
-            .push_copy(TrackingScalar(29), TrackingPoint(31))
-            .expect("term fits exact capacity");
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
-        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+            .push_copy(TrackingScalar(37), TrackingPoint(41))
+            .expect("first term fits exact capacity");
+        terms
+            .push_copy(TrackingScalar(43), TrackingPoint(47))
+            .expect("second term fits exact capacity");
+        assert_eq!(terms.terms.as_ptr(), allocation);
+        assert_eq!(terms.terms.capacity(), allocation_capacity);
+        assert_eq!(terms.terms.len(), 2);
+        assert_eq!(terms.terms[0].scalar, TrackingScalar(37));
+        assert_eq!(terms.terms[0].point, TrackingPoint(41));
+        assert_eq!(terms.terms[1].scalar, TrackingScalar(43));
+        assert_eq!(terms.terms[1].point, TrackingPoint(47));
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            terms.push_copy(TrackingScalar(53), TrackingPoint(59)),
+            Err(GeneralizedBulletproofErrorV1::ResourceOverflow)
+        );
+        assert_eq!(terms.terms.as_ptr(), allocation);
+        assert_eq!(terms.terms.capacity(), allocation_capacity);
+        assert_eq!(terms.terms.len(), 2);
+        assert_eq!(terms.terms[0].scalar, TrackingScalar(37));
+        assert_eq!(terms.terms[0].point, TrackingPoint(41));
+        assert_eq!(terms.terms[1].scalar, TrackingScalar(43));
+        assert_eq!(terms.terms[1].point, TrackingPoint(47));
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 3);
         drop(terms);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 5);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut terms =
+                SecretMultiexpBuilder::<TrackingSuite>::new(1).expect("unwind tracking capacity");
+            let allocation = terms.terms.as_ptr();
+            let allocation_capacity = terms.terms.capacity();
+            terms
+                .push_copy(TrackingScalar(61), TrackingPoint(67))
+                .expect("unwind term fits exact capacity");
+            assert_eq!(terms.terms.as_ptr(), allocation);
+            assert_eq!(terms.terms.capacity(), allocation_capacity);
+            assert_eq!(terms.terms[0].scalar, TrackingScalar(61));
+            assert_eq!(terms.terms[0].point, TrackingPoint(67));
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
+            assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+            panic!("exercise owner-first computed-term unwind");
+        }));
+        assert!(unwind.is_err());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
     #[test]
-    fn secret_builder_source_boundaries_copy_borrows_directly_and_guard_owned_values() {
+    fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         let source = include_str!("generalized_bulletproof.rs");
-        let owner = source
+        let production = source
+            .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
+            .expect("production source boundary")
+            .0;
+        let owner = production
             .split_once("impl<S: ProofSuite> SecretMsmTerm<S> {")
             .expect("retained MSM term owner")
             .1
@@ -2805,7 +3069,7 @@ mod secret_cleanup_tests {
         assert!(owner.contains("scalar: *scalar,"));
         assert!(owner.contains("point: *point,"));
 
-        let borrowed_push = source
+        let borrowed_push = production
             .split_once("pub fn push(\n")
             .expect("borrowed MSM insertion")
             .1
@@ -2824,7 +3088,34 @@ mod secret_cleanup_tests {
         assert!(!borrowed_push.contains("*scalar"));
         assert!(!borrowed_push.contains("*point"));
 
-        let owned_push = source
+        let incoming_owner = production
+            .split_once("impl<'a, S: ProofSuite> BorrowedSecretMsmTerm<'a, S> {")
+            .expect("computed-value parameter owner")
+            .1
+            .split_once("impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S>")
+            .expect("computed-value parameter owner boundary")
+            .0;
+        let handoff = incoming_owner
+            .split_once("fn take_term(&mut self) -> SecretMsmTerm<S> {")
+            .expect("computed-value owner handoff")
+            .1;
+        let mut cursor = 0;
+        for step in [
+            "let mut retained = SecretMsmTerm",
+            "scalar: S::Scalar::ZERO,",
+            "point: S::Point::identity(),",
+            "core::mem::swap(&mut retained.scalar, &mut *self.scalar);",
+            "core::mem::swap(&mut retained.point, &mut *self.point);",
+            "retained",
+        ] {
+            let offset = handoff[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owner-first MSM handoff step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(handoff.matches("core::mem::swap(").count(), 2);
+
+        let owned_push = production
             .split_once("fn push_copy(")
             .expect("computed-value MSM insertion")
             .1
@@ -2832,10 +3123,282 @@ mod secret_cleanup_tests {
             .expect("computed-value MSM insertion boundary")
             .0;
         assert!(owned_push.contains("mut scalar: S::Scalar,"));
-        assert!(owned_push.contains("let incoming = BorrowedSecretMsmTerm::<S>::new("));
-        assert!(owned_push.contains("scalar: incoming.scalar_copy(),"));
-        assert!(owned_push.contains("point: incoming.point_copy(),"));
-        assert!(owned_push.contains("drop(incoming);"));
+        assert!(owned_push.contains("mut point: S::Point,"));
+        let mut cursor = 0;
+        for step in [
+            "let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);",
+            "if self.terms.len() >= self.exact_capacity",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let retained = incoming.take_term();",
+            "self.terms.push(retained);",
+            "drop(incoming);",
+            "Ok(())",
+        ] {
+            let offset = owned_push[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing computed-term insertion step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(owned_push.matches("incoming.take_term()").count(), 1);
+        assert_eq!(owned_push.matches("self.terms.push(retained);").count(), 1);
+        assert_eq!(owned_push.matches("drop(incoming);").count(), 1);
+        for forbidden in [
+            "scalar_copy",
+            "point_copy",
+            "scalar: *",
+            "point: *",
+            "expose_copy",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_owned(",
+            "copy_from_slice",
+            "core::ptr",
+            "copy_nonoverlapping",
+            "core::mem::replace",
+            "unsafe",
+            "Vec::",
+            "vec![",
+            ".reserve(",
+            ".reserve_exact(",
+            ".try_reserve",
+            ".collect",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "random_scalar",
+            "rng",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !handoff.contains(forbidden) && !owned_push.contains(forbidden),
+                "owner-first computed-term path {forbidden}"
+            );
+        }
+
+        assert_eq!(production.matches(".push_copy(").count(), 13);
+        let prover = production
+            .split_once("pub fn prove<R, T>(")
+            .expect("generalized prover")
+            .1
+            .split_once("/// Consume and verify one proof transcript")
+            .expect("generalized prover boundary")
+            .0;
+        let p_terms_start = prover
+            .find("let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;")
+            .expect("prover P-term owner");
+        let p_terms_end = prover
+            .find("transcript.push_scalar(tau_x.expose_ref())?;")
+            .expect("prover P-term boundary");
+        let p_terms = &prover[p_terms_start..p_terms_end];
+        let mut cursor = 0;
+        for step in [
+            "let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;",
+            "for (index, (left, right)) in l_eval.0.iter().zip(&r_eval.0).enumerate()",
+            "p_terms.push(left, &self.generators.g_bold[index])?;",
+            "p_terms.push_copy(y_inverse[index] * *right, self.generators.h_bold[index])?;",
+        ] {
+            let offset = p_terms[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing fixed P-term step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(p_terms.matches("p_terms.push(").count(), 1);
+        assert_eq!(p_terms.matches("p_terms.push_copy(").count(), 1);
+
+        let secret_straus = production
+            .split_once("fn secret_straus_chunk<S: ProofSuite>(")
+            .expect("secret Straus chunk")
+            .1
+            .split_once("/// Encoded scalar material cached by Pippenger")
+            .expect("secret Straus chunk boundary")
+            .0;
+        let scalar_encodings = secret_straus
+            .split_once(
+                "let mut encodings = SecretScalarEncodings([[0_u8; 32]; SECRET_MSM_CHUNK_TERMS_V1]);",
+            )
+            .expect("prezeroed secret scalar encodings")
+            .1
+            .split_once("let mut accumulator = SecretPoint::new(S::Point::identity());")
+            .expect("secret scalar encoding boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "let mut encoding = SecretBytes(term.scalar.bits_le());",
+            "core::mem::swap(&mut encodings.0[index], &mut encoding.0);",
+            "drop(encoding);",
+        ] {
+            let offset = scalar_encodings[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing scalar-encoding owner-transfer step {step}"));
+            cursor += offset + step.len();
+        }
+        for (needle, expected) in [
+            ("let mut encoding = SecretBytes(term.scalar.bits_le());", 1),
+            (
+                "core::mem::swap(&mut encodings.0[index], &mut encoding.0);",
+                1,
+            ),
+            ("drop(encoding);", 1),
+            ("term.scalar.bits_le()", 1),
+            ("encodings.0[index]", 1),
+            ("encoding.0", 1),
+        ] {
+            assert_eq!(scalar_encodings.matches(needle).count(), expected);
+        }
+        for forbidden in [
+            "encodings.0[index] = encoding.0;",
+            "copy",
+            "clone",
+            "*",
+            "unsafe",
+            "ptr",
+            "replace",
+            "Vec",
+            "vec!",
+            "reserve",
+            "push(",
+            "insert",
+            "resize",
+            "append",
+            "extend",
+            "collect",
+            "alloc",
+            "Box",
+            "String",
+            "format!",
+            "to_string",
+            "callback",
+            "Fn",
+            "|",
+            "random",
+            "rng",
+            "entropy",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !scalar_encodings.contains(forbidden),
+                "owner-first scalar-encoding path {forbidden}"
+            );
+        }
+
+        let nibble_comparator = production
+            .split_once(
+                "fn ct_eq_window_nibble(encoded_byte: &u8, shift: usize, candidate: u8) -> u8 {",
+            )
+            .expect("borrowed secret-window nibble comparator")
+            .1
+            .split_once("fn secret_straus_chunk<S: ProofSuite>(")
+            .expect("borrowed secret-window nibble comparator boundary")
+            .0;
+        assert!(nibble_comparator.contains(
+            "((*encoded_byte >> shift) & (SECRET_MSM_TABLE_ENTRIES_V1 as u8 - 1)) ^ candidate"
+        ));
+        assert!(nibble_comparator.contains("difference.wrapping_sub(1)"));
+        for forbidden in [
+            "let digit",
+            "digit:",
+            "left: u8",
+            "SecretBytes",
+            "clone",
+            "copy",
+            "unsafe",
+            "ptr",
+            "Vec",
+            "alloc",
+            "callback",
+            "Fn",
+            "random",
+            "rng",
+            "entropy",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !nibble_comparator.contains(forbidden),
+                "borrowed secret-window nibble comparator {forbidden}"
+            );
+        }
+
+        let window_scan = secret_straus
+            .split_once("let mut accumulator = SecretPoint::new(S::Point::identity());")
+            .expect("secret-window scan")
+            .1
+            .split_once("Ok(accumulator)")
+            .expect("secret-window scan boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "for window in (0..SECRET_MSM_WINDOWS_V1).rev()",
+            "for _ in 0..SECRET_MSM_WINDOW_BITS_V1",
+            "accumulator.double_assign();",
+            "let byte_index = window / 2;",
+            "let shift = (window % 2) * SECRET_MSM_WINDOW_BITS_V1;",
+            "for index in 0..terms.len()",
+            "let mut selected = SecretPoint::new(S::Point::identity());",
+            "for candidate in 0..SECRET_MSM_TABLE_ENTRIES_V1",
+            "ct_eq_window_nibble(",
+            "&encodings.0[index][byte_index],",
+            "shift,",
+            "candidate as u8,",
+            "accumulator.add_assign_secret(selected);",
+        ] {
+            let offset = window_scan[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing fused secret-window scan step {step}"));
+            cursor += offset + step.len();
+        }
+        for (needle, expected) in [
+            ("for index in 0..terms.len()", 1),
+            ("ct_eq_window_nibble(", 1),
+            ("&encodings.0[index][byte_index]", 1),
+            ("candidate as u8", 1),
+        ] {
+            assert_eq!(window_scan.matches(needle).count(), expected);
+        }
+        for forbidden in [
+            "SecretDigits",
+            "digits",
+            "let digit",
+            "ct_eq_u8",
+            "clone",
+            "copy",
+            "SecretBytes",
+            "Vec",
+            "vec!",
+            "reserve",
+            "push(",
+            "insert",
+            "resize",
+            "append",
+            "extend",
+            "collect",
+            "alloc",
+            "Box",
+            "String",
+            "format!",
+            "to_string",
+            "unsafe",
+            "ptr",
+            "replace",
+            "callback",
+            "Fn",
+            "random",
+            "rng",
+            "entropy",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !window_scan.contains(forbidden),
+                "fused secret-window scan {forbidden}"
+            );
+        }
+        assert!(!production.contains("struct SecretDigits("));
+        assert!(!production.contains("fn ct_eq_u8("));
+        assert_eq!(production.matches("ct_eq_window_nibble(").count(), 2);
     }
     #[test]
     fn secret_builder_rejects_overflow_without_reallocation_and_wipes_terms() {
@@ -2947,6 +3510,126 @@ mod secret_cleanup_tests {
             .0;
         assert!(identity.contains("self.0.eq(&P::identity())"));
         assert!(!identity.contains("expose_copy"));
+        let owned_add = owner
+            .split_once("fn add_assign_secret(&mut self, rhs: Self) {")
+            .expect("owned secret-point addition")
+            .1
+            .split_once("fn add_scaled_pair_assign(")
+            .expect("owned secret-point addition boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "let mut sum = self.0 + rhs.0;",
+            "drop(rhs);",
+            "self.replace(&mut sum);",
+        ] {
+            let offset = owned_add[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owned secret-point addition step {step}"));
+            cursor += offset + step.len();
+        }
+        for (needle, expected) in [
+            ("let mut sum = self.0 + rhs.0;", 1),
+            ("drop(rhs);", 1),
+            ("self.replace(&mut sum);", 1),
+        ] {
+            assert_eq!(owned_add.matches(needle).count(), expected);
+        }
+        for forbidden in [
+            "rhs: &Self",
+            "let mut rhs",
+            "BorrowedSecretPoint",
+            "expose_copy",
+            "clone",
+            "copy",
+            "core::mem",
+            "unsafe",
+            "ptr",
+            "Vec",
+            "alloc",
+            "callback",
+            "Fn",
+            "random",
+            "rng",
+            "entropy",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !owned_add.contains(forbidden),
+                "owned secret-point addition {forbidden}"
+            );
+        }
+        let owned_scaled_pair_signature = concat!(
+            "fn add_scaled_pair_assign(\n",
+            "        &mut self,\n",
+            "        left: Self,\n",
+            "        left_scalar: P::Scalar,\n",
+            "        right: Self,\n",
+            "        right_scalar: P::Scalar,\n",
+            "    ) {",
+        );
+        assert_eq!(owner.matches(owned_scaled_pair_signature).count(), 1);
+        assert!(!owner.contains("left: &Self"));
+        assert!(!owner.contains("right: &Self"));
+        let owned_scaled_pair = owner
+            .split_once(owned_scaled_pair_signature)
+            .expect("owned scaled-pair point addition")
+            .1
+            .split_once("fn select_assign(")
+            .expect("owned scaled-pair point addition boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "let mut updated =",
+            "left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);",
+            "drop(right);",
+            "drop(left);",
+            "self.replace(&mut updated);",
+        ] {
+            let offset = owned_scaled_pair[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owned scaled-pair addition step {step}"));
+            cursor += offset + step.len();
+        }
+        for (needle, expected) in [
+            ("let mut updated =", 1),
+            (
+                "left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);",
+                1,
+            ),
+            ("drop(right);", 1),
+            ("drop(left);", 1),
+            ("self.replace(&mut updated);", 1),
+        ] {
+            assert_eq!(owned_scaled_pair.matches(needle).count(), expected);
+        }
+        for forbidden in [
+            "left_point",
+            "current_point",
+            "right_point",
+            "BorrowedSecretPoint",
+            "expose_copy",
+            "clone",
+            "copy",
+            "core::mem",
+            "unsafe",
+            "ptr",
+            "Vec",
+            "alloc",
+            "callback",
+            "Fn",
+            "random",
+            "rng",
+            "entropy",
+            "transcript",
+            "?",
+        ] {
+            assert!(
+                !owned_scaled_pair.contains(forbidden),
+                "owned scaled-pair point addition {forbidden}"
+            );
+        }
         let fold = production
             .split_once("    fn fold_in_order(")
             .expect("secret chunk fold")
@@ -2958,6 +3641,10 @@ mod secret_cleanup_tests {
         assert!(fold.contains("Ok(result)"));
         assert!(!fold.contains("Ok(result.expose_copy())"));
         assert!(!fold.contains("Result<S::Point"));
+        assert_eq!(fold.matches("result.add_assign_secret(chunk);").count(), 1);
+        assert!(!fold.contains("result.add_assign_secret(&chunk);"));
+        assert_eq!(production.matches(".add_assign_secret(").count(), 2);
+        assert!(!production.contains(".add_assign_secret(&"));
 
         let transcript_trait = production
             .split_once("pub trait ProverTranscript<S: ProofSuite>")
@@ -3425,12 +4112,13 @@ mod secret_cleanup_tests {
             chunks.fold_in_order(),
             Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
         ));
-        // The three constructor parameters, accumulator, consumed first
-        // result, its named intermediates, and buffered result all clear.
-        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 9);
+        // Three constructor parameter slots, the consumed first result owner,
+        // replaced accumulator value, sum source, error-path accumulator, and
+        // buffered result all clear.
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 8);
     }
     #[test]
-    fn secret_point_constructor_clears_its_copy_parameter() {
+    fn secret_point_owner_clears_constructor_scaled_pair_success_and_unwind() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
         POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
         let point = SecretPoint::new(TrackingPoint(17));
@@ -3448,16 +4136,62 @@ mod secret_cleanup_tests {
         assert!(constructor.contains("fn new(mut point: P) -> Self"));
         assert!(constructor.contains("BorrowedSecretPoint::new(&mut point)"));
         assert!(constructor.contains("drop(incoming);"));
+
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_ADD_CALLS.store(0, Ordering::SeqCst);
+        PANIC_ON_POINT_ADD.store(usize::MAX, Ordering::SeqCst);
+        let mut p = SecretPoint::new(TrackingPoint(5));
+        let left = SecretPoint::new(TrackingPoint(7));
+        let right = SecretPoint::new(TrackingPoint(11));
+        p.add_scaled_pair_assign(left, TrackingScalar(2), right, TrackingScalar(3));
+        assert_eq!(p.expose_ref(), &TrackingPoint(52));
+        assert_eq!(POINT_ADD_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 7);
+        drop(p);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 8);
+
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_ADD_CALLS.store(0, Ordering::SeqCst);
+        PANIC_ON_POINT_ADD.store(1, Ordering::SeqCst);
+        let mut p = SecretPoint::new(TrackingPoint(13));
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let left = SecretPoint::new(TrackingPoint(17));
+            let right = SecretPoint::new(TrackingPoint(19));
+            p.add_scaled_pair_assign(left, TrackingScalar(2), right, TrackingScalar(3));
+        }));
+        PANIC_ON_POINT_ADD.store(usize::MAX, Ordering::SeqCst);
+        assert!(unwind.is_err());
+        assert_eq!(p.expose_ref(), &TrackingPoint(13));
+        assert_eq!(POINT_ADD_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 5);
+        drop(p);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 6);
     }
     #[test]
-    fn secret_builder_unwind_wipes_terms_digits_tables_and_named_points() {
+    fn secret_builder_unwind_wipes_terms_encodings_tables_and_named_points() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
         POINT_ADD_CALLS.store(0, Ordering::SeqCst);
         SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
+
+        // Exercise the same owner-first encoding transfer directly so the
+        // vacated source and retained bytes remain observable before Drop.
+        assert_eq!(core::mem::size_of::<SecretScalarEncodings>(), 8192);
+        let mut retained = SecretScalarEncodings([[0_u8; 32]; SECRET_MSM_CHUNK_TERMS_V1]);
+        let mut source = SecretBytes([0x5a_u8; 32]);
+        core::mem::swap(&mut retained.0[1], &mut source.0);
+        assert_eq!(source.0, [0_u8; 32]);
+        assert_eq!(retained.0[1], [0x5a_u8; 32]);
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(source);
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 1);
+        drop(retained);
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 257);
+
+        SECRET_BYTE_CLEAR_CALLS.store(0, Ordering::SeqCst);
         // Two 16-entry tables require 30 additions. Panic on the first
-        // scalar-dependent accumulator addition after digits were extracted.
+        // scalar-dependent accumulator addition after its nibble was extracted.
         PANIC_ON_POINT_ADD.store(31, Ordering::SeqCst);
         let mut secret =
             SecretMultiexpBuilder::<TrackingSuite>::new(2).expect("fixed tracking capacity");
@@ -3473,7 +4207,7 @@ mod secret_cleanup_tests {
         PANIC_ON_POINT_ADD.store(usize::MAX, Ordering::SeqCst);
         assert!(unwind.is_err());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-        assert!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst) >= 259);
+        assert_eq!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst), 258);
         assert!(POINT_CLEAR_CALLS.load(Ordering::SeqCst) > 40);
     }
     #[test]
@@ -3530,6 +4264,646 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         drop(left);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+    }
+    #[test]
+    fn scalar_vector_borrowed_scaled_accumulation_clears_without_copy_or_allocation() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let coefficient = ScalarVector(vec![TrackingScalar(2), TrackingScalar(3)]);
+        let coefficient_pointer = coefficient.0.as_ptr();
+        let coefficient_capacity = coefficient.0.capacity();
+        let mut result = ScalarVector(vec![TrackingScalar(5), TrackingScalar(7)]);
+        let result_pointer = result.0.as_ptr();
+        let result_capacity = result.0.capacity();
+        result.add_scaled_assign(&coefficient, &TrackingScalar(11));
+        assert_eq!(
+            result.0.as_slice(),
+            &[TrackingScalar(27), TrackingScalar(40)]
+        );
+        assert_eq!(
+            coefficient.0.as_slice(),
+            &[TrackingScalar(2), TrackingScalar(3)]
+        );
+        assert_eq!(coefficient.0.as_ptr(), coefficient_pointer);
+        assert_eq!(coefficient.0.capacity(), coefficient_capacity);
+        assert_eq!(result.0.as_ptr(), result_pointer);
+        assert_eq!(result.0.capacity(), result_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(result);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        drop(coefficient);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let length_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let coefficient = ScalarVector(vec![TrackingScalar(13)]);
+            let mut result = ScalarVector(vec![TrackingScalar(17), TrackingScalar(19)]);
+            result.add_scaled_assign(&coefficient, &TrackingScalar(23));
+        }));
+        assert!(length_panic.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let post_success_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let coefficient = ScalarVector(vec![TrackingScalar(29), TrackingScalar(31)]);
+            let mut result = ScalarVector(vec![TrackingScalar(37), TrackingScalar(41)]);
+            result.add_scaled_assign(&coefficient, &TrackingScalar(43));
+            assert_eq!(
+                result.0.as_slice(),
+                &[TrackingScalar(1284), TrackingScalar(1374)]
+            );
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            panic!("exercise borrowed scaled accumulation owner unwind");
+        }));
+        assert!(post_success_unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+    }
+    #[test]
+    fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let left = ScalarVector(vec![TrackingScalar(2), TrackingScalar(3)]);
+        let right = ScalarVector(vec![TrackingScalar(5), TrackingScalar(7)]);
+        let left_pointer = left.0.as_ptr();
+        let left_capacity = left.0.capacity();
+        let right_pointer = right.0.as_ptr();
+        let right_capacity = right.0.capacity();
+        let product = ScalarVector::product_from_borrowed(&left, &right)
+            .expect("borrowed elementwise product");
+        assert_eq!(
+            product.0.as_slice(),
+            &[TrackingScalar(10), TrackingScalar(21)]
+        );
+        assert_eq!(left.0.as_slice(), &[TrackingScalar(2), TrackingScalar(3)]);
+        assert_eq!(right.0.as_slice(), &[TrackingScalar(5), TrackingScalar(7)]);
+        assert_eq!(left.0.as_ptr(), left_pointer);
+        assert_eq!(left.0.capacity(), left_capacity);
+        assert_eq!(right.0.as_ptr(), right_pointer);
+        assert_eq!(right.0.capacity(), right_capacity);
+        assert_ne!(product.0.as_ptr(), left_pointer);
+        assert_ne!(product.0.as_ptr(), right_pointer);
+        assert_eq!(product.len(), left.len());
+        assert!(product.0.capacity() >= product.len());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(product);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        drop(left);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        drop(right);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mismatched_left = ScalarVector(vec![TrackingScalar(11)]);
+        let mismatched_right = ScalarVector(vec![TrackingScalar(13), TrackingScalar(17)]);
+        let left_pointer = mismatched_left.0.as_ptr();
+        let right_pointer = mismatched_right.0.as_ptr();
+        assert!(matches!(
+            ScalarVector::product_from_borrowed(&mismatched_left, &mismatched_right),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(mismatched_left.0.as_ptr(), left_pointer);
+        assert_eq!(mismatched_right.0.as_ptr(), right_pointer);
+        assert_eq!(mismatched_left.0.as_slice(), &[TrackingScalar(11)]);
+        assert_eq!(
+            mismatched_right.0.as_slice(),
+            &[TrackingScalar(13), TrackingScalar(17)]
+        );
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(mismatched_left);
+        drop(mismatched_right);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let left = ScalarVector(vec![TrackingScalar(19), TrackingScalar(23)]);
+            let right = ScalarVector(vec![TrackingScalar(29), TrackingScalar(31)]);
+            let product = ScalarVector::product_from_borrowed(&left, &right)
+                .expect("borrowed product unwind fixture");
+            assert_eq!(
+                product.0.as_slice(),
+                &[TrackingScalar(551), TrackingScalar(713)]
+            );
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            panic!("exercise borrowed-product owner unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
+        let source = include_str!("generalized_bulletproof.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
+            .expect("production source boundary")
+            .0;
+        let borrowed_product = production
+            .split_once("fn product_from_borrowed(")
+            .expect("borrowed product owner")
+            .1
+            .split_once("/// Add one borrowed vector multiplied by one borrowed scalar")
+            .expect("borrowed product owner boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "if left.len() != right.len()",
+            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+            "let exact_len = left.len();",
+            "let mut product = Self(Vec::new());",
+            ".try_reserve_exact(exact_len)",
+            ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+            "let allocation_capacity = product.0.capacity();",
+            "if allocation_capacity < exact_len",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let allocation_pointer = product.0.as_ptr();",
+            "for _ in 0..exact_len",
+            "product.0.push(F::ZERO);",
+            "for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0)",
+            "*output = *left;",
+            "*output *= *right;",
+            "Ok(product)",
+        ] {
+            let offset = borrowed_product[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing borrowed-product step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(
+            borrowed_product.matches("product.0.push(F::ZERO);").count(),
+            1
+        );
+        assert_eq!(
+            borrowed_product
+                .matches("debug_assert_eq!(product.0.len(), exact_len);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            borrowed_product
+                .matches("debug_assert_eq!(product.0.capacity(), allocation_capacity);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            borrowed_product
+                .matches("debug_assert_eq!(product.0.as_ptr(), allocation_pointer);")
+                .count(),
+            2
+        );
+        for forbidden in [
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Self::zero(",
+            "Vec::with_capacity",
+            "vec![",
+            "resize",
+            "copy_from_slice",
+            "extend_from_slice",
+            "collect",
+            "*output = *left * *right;",
+            "product.0.push(*left",
+            "core::mem",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !borrowed_product.contains(forbidden),
+                "borrowed product path {forbidden}"
+            );
+        }
+        let witness_constructor = production
+            .split_once("pub(crate) fn new_with_scalar_commitments(")
+            .expect("generalized witness constructor")
+            .1
+            .split_once("/// One constrainable circuit variable")
+            .expect("generalized witness constructor boundary")
+            .0;
+        let length_check = witness_constructor
+            .find("if a_l.len() != a_r.len()")
+            .expect("witness input length check");
+        let product_call = witness_constructor
+            .find("let a_o = ScalarVector::product_from_borrowed(&a_l, &a_r)?;")
+            .expect("borrowed witness-output product");
+        let aggregate = witness_constructor
+            .find("Ok(Self {")
+            .expect("completed witness owner");
+        assert!(length_check < product_call && product_call < aggregate);
+        assert_eq!(
+            witness_constructor
+                .matches("ScalarVector::product_from_borrowed(&a_l, &a_r)?")
+                .count(),
+            1
+        );
+        assert!(!witness_constructor.contains("a_l.clone()"));
+        assert!(!witness_constructor.contains("a_r.clone()"));
+        assert_eq!(production.matches("product_from_borrowed(").count(), 2);
+    }
+    #[test]
+    fn output_witness_polynomial_rehome_moves_allocation_and_clears_exactly_once() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut witness = ArithmeticCircuitWitness::<TrackingSuite>::new(
+            vec![TrackingScalar(2), TrackingScalar(3)],
+            vec![TrackingScalar(5), TrackingScalar(7)],
+            Vec::new(),
+        )
+        .expect("bounded output-witness fixture");
+        let source_pointer = witness.a_o.0.as_ptr();
+        let source_capacity = witness.a_o.0.capacity();
+        let io = 2;
+        let mut l = vec![ScalarVector(Vec::new()); io + 2];
+        assert!(l[io].0.is_empty());
+        assert_eq!(l[io].0.capacity(), 0);
+        l[io] = core::mem::replace(&mut witness.a_o, ScalarVector(Vec::new()));
+        assert!(witness.a_o.0.is_empty());
+        assert_eq!(witness.a_o.0.capacity(), 0);
+        assert_eq!(
+            l[io].0.as_slice(),
+            &[TrackingScalar(10), TrackingScalar(21)]
+        );
+        assert_eq!(l[io].0.as_ptr(), source_pointer);
+        assert_eq!(l[io].0.capacity(), source_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(l);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        drop(witness);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut witness = ArithmeticCircuitWitness::<TrackingSuite>::new(
+                vec![TrackingScalar(11), TrackingScalar(13)],
+                vec![TrackingScalar(17), TrackingScalar(19)],
+                Vec::new(),
+            )
+            .expect("bounded output-witness unwind fixture");
+            let source_pointer = witness.a_o.0.as_ptr();
+            let source_capacity = witness.a_o.0.capacity();
+            let io = 2;
+            let mut l = vec![ScalarVector(Vec::new()); io + 2];
+            assert!(l[io].0.is_empty());
+            assert_eq!(l[io].0.capacity(), 0);
+            l[io] = core::mem::replace(&mut witness.a_o, ScalarVector(Vec::new()));
+            assert!(witness.a_o.0.is_empty());
+            assert_eq!(witness.a_o.0.capacity(), 0);
+            assert_eq!(
+                l[io].0.as_slice(),
+                &[TrackingScalar(187), TrackingScalar(247)]
+            );
+            assert_eq!(l[io].0.as_ptr(), source_pointer);
+            assert_eq!(l[io].0.capacity(), source_capacity);
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            panic!("exercise output-witness polynomial-owner unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+    }
+    #[test]
+    fn right_witness_polynomial_rehome_scales_without_copy_or_allocation() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut witness = ArithmeticCircuitWitness::<TrackingSuite>::new(
+            vec![TrackingScalar(2), TrackingScalar(3)],
+            vec![TrackingScalar(5), TrackingScalar(7)],
+            Vec::new(),
+        )
+        .expect("bounded right-witness fixture");
+        let source_pointer = witness.a_r.0.as_ptr();
+        let source_capacity = witness.a_r.0.capacity();
+        let y_powers = ScalarVector::powers(TrackingScalar(11), 2);
+        let y_pointer = y_powers.0.as_ptr();
+        let y_capacity = y_powers.0.capacity();
+        let l_weights = ScalarVector(vec![TrackingScalar(17), TrackingScalar(19)]);
+        let result_pointer = l_weights.0.as_ptr();
+        let result_capacity = l_weights.0.capacity();
+        let jlr = 1;
+        let mut r = vec![ScalarVector(Vec::new()); 4];
+        assert!(r[jlr].0.is_empty());
+        assert_eq!(r[jlr].0.capacity(), 0);
+        let a_r = core::mem::replace(&mut witness.a_r, ScalarVector(Vec::new()));
+        assert!(witness.a_r.0.is_empty());
+        assert_eq!(witness.a_r.0.capacity(), 0);
+        assert_eq!(a_r.0.as_ptr(), source_pointer);
+        assert_eq!(a_r.0.capacity(), source_capacity);
+        let scaled_a_r = a_r * &y_powers;
+        assert_eq!(scaled_a_r.0.as_ptr(), source_pointer);
+        assert_eq!(scaled_a_r.0.capacity(), source_capacity);
+        assert_eq!(
+            scaled_a_r.0.as_slice(),
+            &[TrackingScalar(5), TrackingScalar(77)]
+        );
+        r[jlr] = l_weights + &scaled_a_r;
+        assert_eq!(
+            r[jlr].0.as_slice(),
+            &[TrackingScalar(22), TrackingScalar(96)]
+        );
+        assert_eq!(r[jlr].0.as_ptr(), result_pointer);
+        assert_eq!(r[jlr].0.capacity(), result_capacity);
+        assert_eq!(
+            y_powers.0.as_slice(),
+            &[TrackingScalar(1), TrackingScalar(11)]
+        );
+        assert_eq!(y_powers.0.as_ptr(), y_pointer);
+        assert_eq!(y_powers.0.capacity(), y_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(scaled_a_r);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        drop(r);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        drop(y_powers);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+        drop(witness);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 10);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut witness = ArithmeticCircuitWitness::<TrackingSuite>::new(
+                vec![TrackingScalar(11), TrackingScalar(13)],
+                vec![TrackingScalar(17), TrackingScalar(19)],
+                Vec::new(),
+            )
+            .expect("bounded right-witness unwind fixture");
+            let source_pointer = witness.a_r.0.as_ptr();
+            let source_capacity = witness.a_r.0.capacity();
+            let y_powers = ScalarVector::powers(TrackingScalar(23), 2);
+            let l_weights = ScalarVector(vec![TrackingScalar(29), TrackingScalar(31)]);
+            let result_pointer = l_weights.0.as_ptr();
+            let result_capacity = l_weights.0.capacity();
+            let jlr = 1;
+            let mut r = vec![ScalarVector(Vec::new()); 4];
+            let a_r = core::mem::replace(&mut witness.a_r, ScalarVector(Vec::new()));
+            assert!(witness.a_r.0.is_empty());
+            assert_eq!(witness.a_r.0.capacity(), 0);
+            assert_eq!(a_r.0.as_ptr(), source_pointer);
+            assert_eq!(a_r.0.capacity(), source_capacity);
+            r[jlr] = l_weights + &(a_r * &y_powers);
+            assert_eq!(
+                r[jlr].0.as_slice(),
+                &[TrackingScalar(46), TrackingScalar(468)]
+            );
+            assert_eq!(r[jlr].0.as_ptr(), result_pointer);
+            assert_eq!(r[jlr].0.capacity(), result_capacity);
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+            panic!("exercise right-witness polynomial-owner unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 10);
+    }
+    #[test]
+    fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
+        let source = include_str!("generalized_bulletproof.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
+            .expect("production source boundary")
+            .0;
+        let accumulation = production
+            .split_once("fn add_scaled_assign(&mut self, coefficient: &Self, scalar: &F) {")
+            .expect("borrowed scaled accumulation")
+            .1
+            .split_once("/// Compute an inner product")
+            .expect("borrowed scaled accumulation boundary")
+            .0;
+        let length_check = accumulation
+            .find("assert_eq!(self.len(), coefficient.len());")
+            .expect("borrowed scaled accumulation length check");
+        let coordinate_loop = accumulation
+            .find("for (result, coefficient) in self.0.iter_mut().zip(&coefficient.0)")
+            .expect("ordered borrowed coordinate accumulation");
+        let coordinate_update = accumulation
+            .find("*result += *coefficient * *scalar;")
+            .expect("borrowed scaled coordinate update");
+        assert!(length_check < coordinate_loop && coordinate_loop < coordinate_update);
+        for forbidden in [
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Vec::",
+            "vec![",
+            "reserve",
+            "collect",
+            "copy_from_slice",
+            "extend_from_slice",
+            "core::mem",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !accumulation.contains(forbidden),
+                "borrowed scaled accumulation path {forbidden}"
+            );
+        }
+
+        let prover = production
+            .split_once("pub fn prove<R, T>(")
+            .expect("generalized prover")
+            .1
+            .split_once("/// Consume and verify one proof transcript")
+            .expect("generalized prover boundary")
+            .0;
+        let polynomial_evaluation = prover
+            .split_once("let x = ScalarVector::powers(transcript.challenge()?, t_poly_len);")
+            .expect("polynomial evaluation challenge")
+            .1
+            .split_once("let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);")
+            .expect("polynomial evaluation boundary")
+            .0;
+        assert_eq!(
+            polynomial_evaluation
+                .matches("ScalarVector::zero(n)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            polynomial_evaluation
+                .matches("result.add_scaled_assign(coefficient, &x[index]);")
+                .count(),
+            1
+        );
+        let evaluate = polynomial_evaluation
+            .find("let evaluate = |polynomial: &[ScalarVector<S::Scalar>]| {")
+            .expect("borrowed polynomial evaluation closure");
+        let result_owner = polynomial_evaluation
+            .find("let mut result = ScalarVector::zero(n);")
+            .expect("polynomial result owner");
+        let coefficient_loop = polynomial_evaluation
+            .find("for (index, coefficient) in polynomial.iter().enumerate()")
+            .expect("ordered polynomial coefficient loop");
+        let accumulation_call = polynomial_evaluation
+            .find("result.add_scaled_assign(coefficient, &x[index]);")
+            .expect("borrowed polynomial accumulation call");
+        let l_eval = polynomial_evaluation
+            .find("let l_eval = evaluate(&l);")
+            .expect("left polynomial evaluation");
+        let r_eval = polynomial_evaluation
+            .find("let r_eval = evaluate(&r);")
+            .expect("right polynomial evaluation");
+        let drop_l = polynomial_evaluation
+            .find("drop(l);")
+            .expect("left polynomial owner drop");
+        let drop_r = polynomial_evaluation
+            .find("drop(r);")
+            .expect("right polynomial owner drop");
+        let t_caret = polynomial_evaluation
+            .find("let t_caret = l_eval.inner_product(r_eval.0.iter());")
+            .expect("evaluated polynomial inner product");
+        assert!(evaluate < result_owner);
+        assert!(result_owner < coefficient_loop && coefficient_loop < accumulation_call);
+        assert!(accumulation_call < l_eval && l_eval < r_eval);
+        assert!(r_eval < drop_l && drop_l < drop_r && drop_r < t_caret);
+        for forbidden in [
+            "coefficient.clone()",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Vec::",
+            "vec![",
+            "reserve",
+            "collect",
+            "copy_from_slice",
+            "extend_from_slice",
+            "core::mem",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !polynomial_evaluation.contains(forbidden),
+                "borrowed polynomial evaluation path {forbidden}"
+            );
+        }
+        assert_eq!(production.matches(".add_scaled_assign(").count(), 1);
+        assert_eq!(production.matches("coefficient.clone()").count(), 0);
+        assert_eq!(production.matches(".clone()").count(), 0);
+        let borrowed_product = "let a_o = ScalarVector::product_from_borrowed(&a_l, &a_r)?;";
+        assert_eq!(production.matches(borrowed_product).count(), 1);
+        assert!(!production.contains("let a_o = a_l.clone() * &a_r;"));
+        assert!(!production.contains("witness.a_r.clone()"));
+        let output_handoff =
+            "l[io] = core::mem::replace(&mut witness.a_o, ScalarVector(Vec::new()));";
+        assert_eq!(prover.matches(output_handoff).count(), 1);
+        assert!(!prover.contains("l[io] = witness.a_o.clone();"));
+        assert_eq!(prover.matches("witness.a_o").count(), 4);
+        let output_padding = prover
+            .find("witness.a_o.pad_with_zeroes(n)?;")
+            .expect("output-wire padding owner");
+        let output_constraint = prover
+            .find("*evaluation.expose_mut() += witness.a_o[*index] * *weight;")
+            .expect("output-wire constraint read");
+        let output_commitment = prover
+            .find("for (scalar, point) in witness.a_o.0.iter().zip(self.generators.g_bold)")
+            .expect("output-wire commitment read");
+        let output_commitment_evaluation = prover[output_commitment..]
+            .find("terms.evaluate()?")
+            .map(|position| output_commitment + position)
+            .expect("output-wire commitment evaluation");
+        let left_polynomial_allocation = prover
+            .find("let mut l = vec![ScalarVector(Vec::new()); is + 1];")
+            .expect("left polynomial owner allocation");
+        let output_handoff_index = prover
+            .find(output_handoff)
+            .expect("output-wire polynomial-owner handoff");
+        let left_randomness = prover
+            .find("l[is] = s_l;")
+            .expect("left polynomial randomness owner");
+        let polynomial_product = prover
+            .find("let t_poly_len")
+            .expect("polynomial product boundary");
+        let left_drop = prover.find("drop(l);").expect("left polynomial owner drop");
+        let witness_drop = prover
+            .find("drop(witness);")
+            .expect("emptied witness owner drop");
+        let right_handoff =
+            "let a_r = core::mem::replace(&mut witness.a_r, ScalarVector(Vec::new()));";
+        let right_product = "r[jlr] = l_weights + &(a_r * &y_powers);";
+        assert_eq!(prover.matches(right_handoff).count(), 1);
+        assert_eq!(prover.matches(right_product).count(), 1);
+        assert_eq!(prover.matches("witness.a_r").count(), 5);
+        let right_shape = prover
+            .find("|| witness.a_l.len() != witness.a_r.len()")
+            .expect("right-witness shape check");
+        let right_padding = prover
+            .find("witness.a_r.pad_with_zeroes(n)?;")
+            .expect("right-witness padding owner");
+        let right_constraint = prover
+            .find("*evaluation.expose_mut() += witness.a_r[*index] * *weight;")
+            .expect("right-witness constraint read");
+        let right_commitment = prover
+            .find("for (scalar, point) in witness.a_r.0.iter().zip(self.generators.h_bold)")
+            .expect("right-witness AI commitment read");
+        let right_commitment_evaluation = prover[right_commitment..]
+            .find("terms.evaluate()?")
+            .map(|position| right_commitment + position)
+            .expect("right-witness AI commitment evaluation");
+        let right_polynomial_allocation = prover
+            .find("let mut r = vec![ScalarVector(Vec::new()); is + 1];")
+            .expect("right polynomial owner allocation");
+        let right_handoff_index = prover
+            .find(right_handoff)
+            .expect("right-witness polynomial-owner handoff");
+        let right_product_index = prover
+            .find(right_product)
+            .expect("right-witness polynomial product");
+        let right_drop = prover
+            .find("drop(r);")
+            .expect("right polynomial owner drop");
+        let right_handoff_region = prover
+            .split_once("l[is] = s_l;")
+            .expect("right-witness handoff region start")
+            .1
+            .split_once("r[jo] = o_weights - &y_powers;")
+            .expect("right-witness handoff region end")
+            .0;
+        assert_eq!(right_handoff_region.matches("Vec::new()").count(), 1);
+        assert_eq!(
+            right_handoff_region.matches("core::mem::replace").count(),
+            1
+        );
+        for forbidden in [
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Vec::with_capacity",
+            "vec![",
+            "reserve",
+            "collect",
+            "copy_from_slice",
+            "extend_from_slice",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !right_handoff_region.contains(forbidden),
+                "right-witness handoff path {forbidden}"
+            );
+        }
+        assert!(output_padding < output_constraint && output_constraint < output_commitment);
+        assert!(output_commitment < output_commitment_evaluation);
+        assert!(output_commitment_evaluation < left_polynomial_allocation);
+        assert!(left_polynomial_allocation < output_handoff_index);
+        assert!(output_handoff_index < left_randomness);
+        assert!(left_randomness < polynomial_product);
+        assert!(polynomial_product < left_drop && left_drop < witness_drop);
+        assert!(!prover[output_handoff_index + output_handoff.len()..].contains("witness.a_o"));
+        assert!(right_shape < right_padding && right_padding < right_constraint);
+        assert!(right_constraint < right_commitment);
+        assert!(right_commitment < right_commitment_evaluation);
+        assert!(right_commitment_evaluation < right_polynomial_allocation);
+        assert!(right_polynomial_allocation < right_handoff_index);
+        assert!(right_handoff_index < right_product_index);
+        assert!(right_product_index < right_drop && right_drop < witness_drop);
+        assert!(!prover[right_handoff_index + right_handoff.len()..].contains("witness.a_r"));
     }
     #[test]
     fn inner_product_owner_source_boundary_covers_every_production_caller() {
@@ -3609,22 +4983,505 @@ mod secret_cleanup_tests {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut padded = ScalarVector(vec![TrackingScalar(1), TrackingScalar(2)]);
+        let source_pointer = padded.0.as_ptr();
         padded
             .pad_with_zeroes(4)
             .expect("tracking vector pads to final length");
+        assert_eq!(
+            padded.0.as_slice(),
+            &[
+                TrackingScalar(1),
+                TrackingScalar(2),
+                TrackingScalar::ZERO,
+                TrackingScalar::ZERO,
+            ]
+        );
+        assert_ne!(padded.0.as_ptr(), source_pointer);
+        assert!(padded.0.capacity() >= padded.len());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         drop(padded);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut unchanged = ScalarVector(vec![TrackingScalar(5), TrackingScalar(7)]);
+        let unchanged_pointer = unchanged.0.as_ptr();
+        let unchanged_capacity = unchanged.0.capacity();
+        unchanged
+            .pad_with_zeroes(2)
+            .expect("equal-length padding is a no-op");
+        assert_eq!(
+            unchanged.0.as_slice(),
+            &[TrackingScalar(5), TrackingScalar(7)]
+        );
+        assert_eq!(unchanged.0.as_ptr(), unchanged_pointer);
+        assert_eq!(unchanged.0.capacity(), unchanged_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(unchanged);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut shrinking = ScalarVector(vec![TrackingScalar(11), TrackingScalar(13)]);
+        let shrinking_pointer = shrinking.0.as_ptr();
+        let shrinking_capacity = shrinking.0.capacity();
+        assert!(matches!(
+            shrinking.pad_with_zeroes(1),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(
+            shrinking.0.as_slice(),
+            &[TrackingScalar(11), TrackingScalar(13)]
+        );
+        assert_eq!(shrinking.0.as_ptr(), shrinking_pointer);
+        assert_eq!(shrinking.0.capacity(), shrinking_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(shrinking);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut overflow = ScalarVector(vec![TrackingScalar(17), TrackingScalar(19)]);
+        let overflow_pointer = overflow.0.as_ptr();
+        let overflow_capacity = overflow.0.capacity();
+        assert!(matches!(
+            overflow.pad_with_zeroes(usize::MAX),
+            Err(GeneralizedBulletproofErrorV1::ResourceOverflow)
+        ));
+        assert_eq!(
+            overflow.0.as_slice(),
+            &[TrackingScalar(17), TrackingScalar(19)]
+        );
+        assert_eq!(overflow.0.as_ptr(), overflow_pointer);
+        assert_eq!(overflow.0.capacity(), overflow_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(overflow);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut padded = ScalarVector(vec![TrackingScalar(23), TrackingScalar(29)]);
+            let source_pointer = padded.0.as_ptr();
+            padded
+                .pad_with_zeroes(4)
+                .expect("tracking unwind vector pads to final length");
+            assert_eq!(
+                padded.0.as_slice(),
+                &[
+                    TrackingScalar(23),
+                    TrackingScalar(29),
+                    TrackingScalar::ZERO,
+                    TrackingScalar::ZERO,
+                ]
+            );
+            assert_ne!(padded.0.as_ptr(), source_pointer);
+            assert!(padded.0.capacity() >= padded.len());
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+            panic!("exercise owner-first scalar padding unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
         let production = include_str!("generalized_bulletproof.rs")
             .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
             .expect("production source boundary")
             .0;
+        let padding = production
+            .split_once(
+                "fn pad_with_zeroes(&mut self, len: usize) -> Result<(), GeneralizedBulletproofErrorV1> {",
+            )
+            .expect("owned scalar padding")
+            .1
+            .split_once("fn split(mut self) -> Result<(Self, Self), GeneralizedBulletproofErrorV1> {")
+            .expect("owned scalar padding boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "let source_len = self.len();",
+            "if source_len > len",
+            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+            "if source_len == len",
+            "return Ok(());",
+            "let source_pointer = self.0.as_ptr();",
+            "let source_capacity = self.0.capacity();",
+            "let mut padded = Self(Vec::new());",
+            ".try_reserve_exact(len)",
+            ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+            "let allocation_capacity = padded.0.capacity();",
+            "if allocation_capacity < len",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let allocation_pointer = padded.0.as_ptr();",
+            "for _ in 0..len",
+            "padded.0.push(F::ZERO);",
+            "self.0.iter_mut().zip(&mut padded.0[..source_len])",
+            "core::mem::swap(source, destination);",
+            "source.clear_secret();",
+            "self.0.truncate(0);",
+            "core::mem::swap(&mut self.0, &mut padded.0);",
+            "Ok(())",
+        ] {
+            let offset = padding[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owner-first padding step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(padding.matches("Vec::new()").count(), 1);
+        assert_eq!(padding.matches(".try_reserve_exact(len)").count(), 1);
+        assert_eq!(padding.matches("padded.0.push(F::ZERO);").count(), 1);
+        assert_eq!(
+            padding
+                .matches("core::mem::swap(source, destination);")
+                .count(),
+            1
+        );
+        assert_eq!(padding.matches("source.clear_secret();").count(), 1);
+        assert_eq!(padding.matches("self.0.truncate(0);").count(), 1);
+        assert_eq!(
+            padding
+                .matches("core::mem::swap(&mut self.0, &mut padded.0);")
+                .count(),
+            1
+        );
+        assert_eq!(
+            padding
+                .matches("debug_assert_eq!(padded.0.len(), len);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            padding
+                .matches("debug_assert_eq!(padded.0.capacity(), allocation_capacity);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            padding
+                .matches("debug_assert_eq!(padded.0.as_ptr(), allocation_pointer);")
+                .count(),
+            2
+        );
+        for forbidden in [
+            "Self::zero(",
+            "Vec::with_capacity",
+            "vec![",
+            ".reserve(",
+            ".reserve_exact(",
+            "copy_from_slice",
+            "extend_from_slice",
+            ".to_vec(",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".resize(",
+            ".split_off(",
+            ".drain(",
+            ".collect",
+            "core::mem::replace",
+            "padded.0.push(*",
+            "*destination = *source",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !padding.contains(forbidden),
+                "owner-first scalar padding path {forbidden}"
+            );
+        }
+        let prover = production
+            .split_once("pub fn prove<R, T>(")
+            .expect("generalized prover")
+            .1
+            .split_once("/// Consume and verify one proof transcript")
+            .expect("generalized prover boundary")
+            .0;
+        assert_eq!(prover.matches(".pad_with_zeroes(n)?;").count(), 4);
+        let mut cursor = 0;
+        for step in [
+            "witness.a_l.pad_with_zeroes(n)?;",
+            "witness.a_r.pad_with_zeroes(n)?;",
+            "witness.a_o.pad_with_zeroes(n)?;",
+            "for opening in &mut witness.vector_commitments",
+            "opening.values.pad_with_zeroes(n)?;",
+            "// Validate every opening and every circuit constraint before emitting",
+            "transcript.push_point(ai.expose_ref())?;",
+        ] {
+            let offset = prover[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing scalar-padding prover step {step}"));
+            cursor += offset + step.len();
+        }
+        for callsite in [
+            "witness.a_l.pad_with_zeroes(n)?;",
+            "witness.a_r.pad_with_zeroes(n)?;",
+            "witness.a_o.pad_with_zeroes(n)?;",
+            "opening.values.pad_with_zeroes(n)?;",
+        ] {
+            assert_eq!(prover.matches(callsite).count(), 1);
+        }
         assert!(production.contains("vector: impl Iterator<Item = &'a F>"));
         assert!(!production.contains("inner_product(right.0.iter().copied())"));
         assert!(!production.contains("inner_product(b.0.iter().copied())"));
         assert!(production.contains("map(|constraint| &constraint.c)"));
-        assert!(!production.contains("tau_x_poly.0.iter().copied()"));
-        assert!(production.contains("tau_x_poly.0.iter().enumerate()"));
+        let response_fold_start = prover
+            .find("let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);")
+            .expect("tau-ni response owner");
+        let response_fold_end = prover
+            .find("let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;")
+            .expect("private response-fold boundary");
+        let response_fold = &prover[response_fold_start..response_fold_end];
+        let mut cursor = 0;
+        for step in [
+            "let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);",
+            "for (weight, opening) in scalar_commitment_weights",
+            ".iter()",
+            ".zip(&witness.scalar_commitments)",
+            "*tau_ni.expose_mut() += *weight * opening.mask;",
+            "drop(scalar_commitment_weights);",
+            "let mut tau_x = SecretScalar::new(S::Scalar::ZERO);",
+            "for (index, coefficient) in tau_before.0.iter().enumerate()",
+            "*tau_x.expose_mut() += *coefficient * x[index];",
+            "*tau_x.expose_mut() += *tau_ni.expose_ref() * x[ni];",
+            "for (index, coefficient) in tau_after.0.iter().enumerate()",
+            "*tau_x.expose_mut() += *coefficient * x[ni + 1 + index];",
+            "drop(tau_before);",
+            "drop(tau_after);",
+            "drop(tau_ni);",
+            "let mut u = SecretScalar::new(*alpha.expose_ref() * x[ilr]);",
+            "*u.expose_mut() += *beta.expose_ref() * x[io];",
+            "*u.expose_mut() += *rho.expose_ref() * x[is];",
+            "for (mut index, opening) in witness.vector_commitments.iter().enumerate()",
+            "if index >= ilr",
+            "index += 1;",
+            "*u.expose_mut() += x[index] * opening.mask;",
+            "drop(alpha);",
+            "drop(beta);",
+            "drop(rho);",
+            "drop(witness);",
+        ] {
+            let offset = response_fold[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing borrowed private-response fold step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(
+            response_fold.matches("scalar_commitment_weights").count(),
+            2
+        );
+        assert_eq!(response_fold.matches("*tau_ni.expose_mut() +=").count(), 1);
+        assert_eq!(
+            response_fold
+                .matches("tau_before.0.iter().enumerate()")
+                .count(),
+            1
+        );
+        assert_eq!(response_fold.matches("tau_ni.expose_ref()").count(), 1);
+        assert_eq!(
+            response_fold
+                .matches("tau_after.0.iter().enumerate()")
+                .count(),
+            1
+        );
+        assert_eq!(response_fold.matches("*tau_x.expose_mut() +=").count(), 3);
+        assert_eq!(response_fold.matches("*u.expose_mut() +=").count(), 3);
+        assert_eq!(response_fold.matches("opening.mask").count(), 1);
+        for (borrowed, copied) in [
+            ("alpha.expose_ref()", "alpha.expose_copy()"),
+            ("beta.expose_ref()", "beta.expose_copy()"),
+            ("rho.expose_ref()", "rho.expose_copy()"),
+        ] {
+            assert_eq!(response_fold.matches(borrowed).count(), 1);
+            assert_eq!(prover.matches(borrowed).count(), 2);
+            assert_eq!(prover.matches(copied).count(), 0);
+        }
+        for source_drop in [
+            "drop(tau_before);",
+            "drop(tau_after);",
+            "drop(tau_ni);",
+            "drop(alpha);",
+            "drop(beta);",
+            "drop(rho);",
+            "drop(witness);",
+        ] {
+            assert_eq!(response_fold.matches(source_drop).count(), 1);
+        }
+        assert_eq!(prover.matches("tau_x_poly").count(), 0);
+        for forbidden in [
+            "expose_copy",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "Vec::",
+            "vec![",
+            "reserve",
+            "collect",
+            "copy_from_slice",
+            "extend_from_slice",
+            "core::mem",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "?",
+            "transcript",
+            "random_scalar",
+        ] {
+            assert!(
+                !response_fold.contains(forbidden),
+                "borrowed private-response fold path {forbidden}"
+            );
+        }
+        let split = production
+            .split_once(
+                "fn split(mut self) -> Result<(Self, Self), GeneralizedBulletproofErrorV1> {",
+            )
+            .expect("owned scalar split")
+            .1
+            .split_once("/// Sample a secret vector incrementally")
+            .expect("owned scalar split boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "if self.len() <= 1 || !self.len().is_multiple_of(2)",
+            "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
+            "let half = self.len() / 2;",
+            "let mut right = Self(Vec::new());",
+            ".try_reserve_exact(half)",
+            ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+            "let allocation_capacity = right.0.capacity();",
+            "if allocation_capacity < half",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let allocation_pointer = right.0.as_ptr();",
+            "for _ in 0..half",
+            "right.0.push(F::ZERO);",
+            "self.0[half..].iter_mut().zip(&mut right.0)",
+            "core::mem::swap(source, destination);",
+            "source.clear_secret();",
+            "self.0.truncate(half);",
+            "Ok((self, right))",
+        ] {
+            let offset = split[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owner-first split step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(split.matches(".try_reserve_exact(half)").count(), 1);
+        assert_eq!(split.matches("right.0.push(F::ZERO);").count(), 1);
+        assert_eq!(
+            split
+                .matches("debug_assert_eq!(right.0.len(), half);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            split
+                .matches("debug_assert_eq!(right.0.capacity(), allocation_capacity);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            split
+                .matches("debug_assert_eq!(right.0.as_ptr(), allocation_pointer);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            split
+                .matches("core::mem::swap(source, destination);")
+                .count(),
+            1
+        );
+        assert_eq!(split.matches("source.clear_secret();").count(), 1);
+        for forbidden in [
+            "Vec::with_capacity",
+            "extend_from_slice",
+            "copy_from_slice",
+            ".to_vec(",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".split_off(",
+            ".drain(",
+            ".collect",
+            "Self::zero(",
+            "core::mem::replace",
+            "right.0.push(*",
+            "*destination = *source",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !split.contains(forbidden),
+                "owner-first scalar split path {forbidden}"
+            );
+        }
+        let ipa = production
+            .split_once("fn prove_inner_product<S, T>(")
+            .expect("inner-product prover")
+            .1
+            .split_once("fn challenge_products<F: ProofScalar>")
+            .expect("inner-product prover boundary")
+            .0;
+        assert_eq!(
+            ipa.matches("let (a_left, a_right) = a.split()?;").count(),
+            2
+        );
+        assert_eq!(
+            ipa.matches("let (b_left, b_right) = b.split()?;").count(),
+            2
+        );
+        let owned_scaled_pair_call =
+            "p.add_scaled_pair_assign(left, challenge.square(), right, inverse.square());";
+        assert_eq!(ipa.matches(owned_scaled_pair_call).count(), 2);
+        assert!(!ipa.contains(
+            "p.add_scaled_pair_assign(&left, challenge.square(), &right, inverse.square());"
+        ));
+        assert_eq!(
+            ipa.matches("a = (a_left * challenge) + &(a_right * inverse);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            ipa.matches("b = (b_left * inverse) + &(b_right * challenge);")
+                .count(),
+            2
+        );
+        assert_eq!(
+            ipa.matches("transcript.push_point(left.expose_ref())?;")
+                .count(),
+            2
+        );
+        assert_eq!(
+            ipa.matches("transcript.push_point(right.expose_ref())?;")
+                .count(),
+            2
+        );
+        let identity_checks = ipa
+            .match_indices("if left.is_identity() || right.is_identity() {")
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
+        let left_publications = ipa
+            .match_indices("transcript.push_point(left.expose_ref())?;")
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
+        let right_publications = ipa
+            .match_indices("transcript.push_point(right.expose_ref())?;")
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
+        let scaled_pair_calls = ipa
+            .match_indices(owned_scaled_pair_call)
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
+        assert_eq!(identity_checks.len(), 2);
+        assert_eq!(left_publications.len(), 2);
+        assert_eq!(right_publications.len(), 2);
+        assert_eq!(scaled_pair_calls.len(), 2);
+        for round in 0..2 {
+            assert!(identity_checks[round] < left_publications[round]);
+            assert!(left_publications[round] < right_publications[round]);
+            assert!(right_publications[round] < scaled_pair_calls[round]);
+        }
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let values = ScalarVector(vec![
             TrackingScalar(1),
@@ -3632,10 +5489,56 @@ mod secret_cleanup_tests {
             TrackingScalar(3),
             TrackingScalar(4),
         ]);
+        let source_pointer = values.0.as_ptr();
+        let source_capacity = values.0.capacity();
         let (left, right) = values.split().expect("tracking vector splits evenly");
+        assert_eq!(left.0.as_slice(), &[TrackingScalar(1), TrackingScalar(2)]);
+        assert_eq!(right.0.as_slice(), &[TrackingScalar(3), TrackingScalar(4)]);
+        assert_eq!(left.0.as_ptr(), source_pointer);
+        assert_eq!(left.0.capacity(), source_capacity);
+        let right_pointer = right.0.as_ptr();
+        let right_capacity = right.0.capacity();
+        assert_ne!(right_pointer, source_pointer);
+        assert_eq!(right.len(), 2);
+        assert!(right_capacity >= right.len());
+        assert_eq!(right.0.as_ptr(), right_pointer);
+        assert_eq!(right.0.capacity(), right_capacity);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         drop(left);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
         drop(right);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            ScalarVector(vec![
+                TrackingScalar(5),
+                TrackingScalar(6),
+                TrackingScalar(7),
+            ])
+            .split(),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let values = ScalarVector(vec![
+                TrackingScalar(11),
+                TrackingScalar(13),
+                TrackingScalar(17),
+                TrackingScalar(19),
+            ]);
+            let (left, right) = values.split().expect("tracking unwind split");
+            assert_eq!(left.0.as_slice(), &[TrackingScalar(11), TrackingScalar(13)]);
+            assert_eq!(
+                right.0.as_slice(),
+                &[TrackingScalar(17), TrackingScalar(19)]
+            );
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+            panic!("exercise owner-first scalar split unwind");
+        }));
+        assert!(unwind.is_err());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
     }
     #[test]
@@ -3648,11 +5551,33 @@ mod secret_cleanup_tests {
         };
         let values = random_scalar_vector::<TrackingScalar, _>(&mut success, 4)
             .expect("scripted random succeeds");
-        // Each decoder slot and returned temporary owner is cleared after its
-        // sole retained copy enters the owned vector.
+        assert_eq!(success.requests, 4);
+        assert_eq!(values.len(), 4);
+        assert!(values.0.capacity() >= values.len());
+        // Each decoder slot and now-zero sampled owner is cleared after its
+        // value enters the retained vector.
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
         drop(values);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 12);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        success.requests = 0;
+        let empty = random_scalar_vector::<TrackingScalar, _>(&mut success, 0)
+            .expect("empty random vector succeeds without entropy");
+        assert_eq!(success.requests, 0);
+        assert!(empty.is_empty());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(empty);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            random_scalar_vector::<TrackingScalar, _>(&mut success, usize::MAX),
+            Err(GeneralizedBulletproofErrorV1::ResourceOverflow)
+        ));
+        assert_eq!(success.requests, 0);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut failure = ScriptedRandom {
             requests: 0,
@@ -3662,7 +5587,10 @@ mod secret_cleanup_tests {
             random_scalar_vector::<TrackingScalar, _>(&mut failure, 5),
             Err(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
         ));
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
+        assert_eq!(failure.requests, 4);
+        // Three decoded and sampled-owner slots clear before the error; the
+        // complete destination then clears three values and two zero slots.
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 11);
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut random = PanickingRandom {
@@ -3672,9 +5600,9 @@ mod secret_cleanup_tests {
             let _ = random_scalar_vector::<TrackingScalar, _>(&mut random, 3);
         }));
         assert!(unwind.is_err());
-        // The first decoder slot and sampled owner clear before the second
-        // request; unwinding then clears its retained vector copy.
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+        // The first decoder and now-zero sampled owner clear before the second
+        // request; unwinding then clears one value and two zero destinations.
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
         let source = include_str!("generalized_bulletproof.rs");
         let random_vector = source
             .split_once("fn random_scalar_vector<F, R>(")
@@ -3683,10 +5611,66 @@ mod secret_cleanup_tests {
             .split_once("/// Opening of one Pedersen vector commitment")
             .expect("random scalar vector boundary")
             .0;
-        assert!(random_vector.contains("let sampled = random_scalar::<F, _>(rng)?;"));
-        assert!(random_vector.contains("result.0.push(*sampled.expose_ref());"));
-        assert!(random_vector.contains("drop(sampled);"));
-        assert!(!random_vector.contains("result.0.push(random_scalar"));
+        let mut cursor = 0;
+        for step in [
+            "let mut result = ScalarVector(Vec::new());",
+            ".try_reserve_exact(len)",
+            ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
+            "let allocation_capacity = result.0.capacity();",
+            "if allocation_capacity < len",
+            "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
+            "let allocation_pointer = result.0.as_ptr();",
+            "for _ in 0..len",
+            "result.0.push(F::ZERO);",
+            "for destination in &mut result.0",
+            "let mut sampled = random_scalar::<F, _>(rng)?;",
+            "core::mem::swap(destination, sampled.expose_mut());",
+            "drop(sampled);",
+            "Ok(result)",
+        ] {
+            let offset = random_vector[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owner-first random-vector step {step}"));
+            cursor += offset + step.len();
+        }
+        for (needle, expected) in [
+            (".try_reserve_exact(len)", 1),
+            ("result.0.push(F::ZERO);", 1),
+            ("let mut sampled = random_scalar::<F, _>(rng)?;", 1),
+            ("core::mem::swap(destination, sampled.expose_mut());", 1),
+            ("drop(sampled);", 1),
+            ("debug_assert_eq!(result.0.len(), len);", 2),
+            ("capacity(), allocation_capacity);", 2),
+            ("as_ptr(), allocation_pointer);", 2),
+        ] {
+            assert_eq!(random_vector.matches(needle).count(), expected);
+        }
+        for forbidden in [
+            "Vec::with_capacity",
+            ".reserve(",
+            ".reserve_exact(",
+            "result.0.push(*",
+            "result.0.push(random_scalar",
+            "sampled.expose_ref",
+            "sampled.expose_copy",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "copy_from_slice",
+            "extend_from_slice",
+            ".collect",
+            "core::mem::replace",
+            "unsafe",
+            "callback",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !random_vector.contains(forbidden),
+                "owner-first random-vector path {forbidden}"
+            );
+        }
         let prover = source
             .split_once("pub fn prove<R, T>(")
             .expect("generalized prover")
@@ -3694,6 +5678,18 @@ mod secret_cleanup_tests {
             .split_once("/// Consume and verify one proof transcript")
             .expect("generalized prover boundary")
             .0;
+        for callsite in [
+            "let s_l = random_scalar_vector::<S::Scalar, _>(rng, n)?;",
+            "let s_r = random_scalar_vector::<S::Scalar, _>(rng, n)?;",
+            "let tau_before = random_scalar_vector::<S::Scalar, _>(rng, ni)?;",
+            "let tau_after = random_scalar_vector::<S::Scalar, _>(rng, t_poly_len - ni - 1)?;",
+        ] {
+            assert_eq!(prover.matches(callsite).count(), 1);
+        }
+        assert_eq!(
+            prover.matches("random_scalar_vector::<S::Scalar").count(),
+            4
+        );
         assert!(prover.contains("let alpha = random_scalar::<S::Scalar, _>(rng)?;"));
         assert!(prover.contains("let beta = random_scalar::<S::Scalar, _>(rng)?;"));
         assert!(prover.contains("let rho = random_scalar::<S::Scalar, _>(rng)?;"));
@@ -3709,7 +5705,7 @@ mod secret_cleanup_tests {
         );
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(opening);
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let legacy = ArithmeticCircuitWitness::<TrackingSuite>::new(
             vec![TrackingScalar(3)],
@@ -3756,6 +5752,158 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
     }
     #[test]
+    fn vector_commitment_mask_slot_handoff_clears_on_success_and_unwind() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut success_mask = TrackingScalar(5);
+        let opening = VectorCommitmentOpening::take_mask_from_slot(
+            vec![TrackingScalar(2), TrackingScalar(3)],
+            &mut success_mask,
+        );
+        assert_eq!(success_mask, TrackingScalar::ZERO);
+        assert_eq!(
+            opening.values.0.as_slice(),
+            &[TrackingScalar(2), TrackingScalar(3)]
+        );
+        assert_eq!(opening.mask, TrackingScalar(5));
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(opening);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut unwind_mask = TrackingScalar(11);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _opening = VectorCommitmentOpening::take_mask_from_slot(
+                vec![TrackingScalar(7), TrackingScalar(9)],
+                &mut unwind_mask,
+            );
+            assert_eq!(unwind_mask, TrackingScalar::ZERO);
+            panic!("exercise vector-opening mask-slot unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(unwind_mask, TrackingScalar::ZERO);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
+    }
+    #[test]
+    fn vector_commitment_values_rehome_without_copy_or_allocation() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut success_mask = TrackingScalar(5);
+        let mut opening = VectorCommitmentOpening::take_mask_from_slot(
+            vec![TrackingScalar(2), TrackingScalar(3)],
+            &mut success_mask,
+        );
+        let source_pointer = opening.values.0.as_ptr();
+        let source_capacity = opening.values.0.capacity();
+        let values = opening.take_values();
+        assert_eq!(success_mask, TrackingScalar::ZERO);
+        assert!(opening.values.0.is_empty());
+        assert_eq!(opening.values.0.capacity(), 0);
+        assert_eq!(opening.mask, TrackingScalar(5));
+        assert_eq!(values.0.as_slice(), &[TrackingScalar(2), TrackingScalar(3)]);
+        assert_eq!(values.0.as_ptr(), source_pointer);
+        assert_eq!(values.0.capacity(), source_capacity);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        drop(opening);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
+        drop(values);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let mut unwind_mask = TrackingScalar(11);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut opening = VectorCommitmentOpening::take_mask_from_slot(
+                vec![TrackingScalar(7), TrackingScalar(9)],
+                &mut unwind_mask,
+            );
+            let source_pointer = opening.values.0.as_ptr();
+            let source_capacity = opening.values.0.capacity();
+            let values = opening.take_values();
+            assert!(opening.values.0.is_empty());
+            assert_eq!(opening.values.0.capacity(), 0);
+            assert_eq!(opening.mask, TrackingScalar(11));
+            assert_eq!(values.0.as_slice(), &[TrackingScalar(7), TrackingScalar(9)]);
+            assert_eq!(values.0.as_ptr(), source_pointer);
+            assert_eq!(values.0.capacity(), source_capacity);
+            assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+            panic!("exercise vector-opening value-owner unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(unwind_mask, TrackingScalar::ZERO);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        let source = include_str!("generalized_bulletproof.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod secret_cleanup_tests")
+            .expect("production source boundary")
+            .0;
+        let opening_owner = production
+            .split_once("impl<F: ProofScalar> VectorCommitmentOpening<F> {")
+            .expect("vector commitment opening owner")
+            .1
+            .split_once("/// Owned opening of one scalar Pedersen commitment")
+            .expect("vector commitment opening boundary")
+            .0;
+        let values_handoff = opening_owner
+            .split_once("fn take_values(&mut self) -> ScalarVector<F> {")
+            .expect("vector value-owner handoff")
+            .1
+            .split_once("/// Construct an opening from committed values")
+            .expect("vector value-owner handoff boundary")
+            .0;
+        assert!(
+            values_handoff
+                .contains("core::mem::replace(&mut self.values, ScalarVector(Vec::new()))")
+        );
+        assert_eq!(values_handoff.matches("Vec::new()").count(), 1);
+        for forbidden in [
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            ".to_vec(",
+            "copy_from_slice",
+            "extend_from_slice",
+            "reserve",
+            "unsafe",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !values_handoff.contains(forbidden),
+                "retained value-owner handoff path {forbidden}"
+            );
+        }
+        let prover = production
+            .split_once("pub fn prove<R, T>(")
+            .expect("generalized prover")
+            .1
+            .split_once("/// Consume and verify one proof transcript")
+            .expect("generalized prover boundary")
+            .0;
+        let commitment_coefficients = prover
+            .split_once("for (mut index, (opening, weights)) in witness")
+            .expect("vector commitment polynomial coefficients")
+            .1
+            .split_once("let t_poly_len")
+            .expect("vector commitment polynomial boundary")
+            .0;
+        let value_move = ["l[index] = opening.", "take_values();"].concat();
+        let raw_clone = ["opening.values", ".clone()"].concat();
+        assert!(commitment_coefficients.contains(".iter_mut()"));
+        assert_eq!(commitment_coefficients.matches(&value_move).count(), 1);
+        assert!(!commitment_coefficients.contains(&raw_clone));
+        assert!(commitment_coefficients.contains("r[reverse] = weights;"));
+        assert!(prover.contains("result.add_scaled_assign(coefficient, &x[index]);"));
+        assert!(!prover.contains("result = result + &(coefficient.clone() * x[index]);"));
+        let value_move_index = commitment_coefficients
+            .find(&value_move)
+            .expect("moved opening values");
+        let public_weights_index = commitment_coefficients
+            .find("r[reverse] = weights;")
+            .expect("moved public commitment weights");
+        assert!(value_move_index < public_weights_index);
+    }
+    #[test]
     fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
         let source = include_str!("generalized_bulletproof.rs");
         let fcmp_bulletproof =
@@ -3766,6 +5914,34 @@ mod secret_cleanup_tests {
         assert!(!source.contains("pub struct ScalarCommitmentOpening"));
         assert!(source.contains("struct ScalarCommitmentOpeningInputs<F: ProofScalar>"));
         assert!(source.contains("pub fn new(values: Vec<F>, mut mask: F) -> Self"));
+        let mask_slot_handoff = source
+            .split_once("pub fn take_mask_from_slot(values: Vec<F>, mask: &mut F) -> Self")
+            .expect("vector-opening mask-slot handoff")
+            .1
+            .split_once("/// Move the committed values into their next zeroizing owner")
+            .expect("vector value-owner handoff boundary")
+            .0;
+        assert!(mask_slot_handoff.contains("mask: F::ZERO"));
+        assert!(mask_slot_handoff.contains("core::mem::swap(&mut opening.mask, mask)"));
+        for forbidden in [
+            "*mask",
+            ".clone(",
+            ".cloned(",
+            ".copied(",
+            "expose_copy",
+            "BorrowedSecretScalarSlot",
+            "SecretScalar::",
+            "Vec::",
+            "reserve",
+            "unsafe",
+            "FnOnce",
+            "FnMut",
+        ] {
+            assert!(
+                !mask_slot_handoff.contains(forbidden),
+                "retained vector-opening mask-slot handoff {forbidden}"
+            );
+        }
         assert!(source.contains("fn new(mut value: F, mut mask: F) -> Self"));
         assert!(source.contains("let incoming_value = BorrowedSecretScalarSlot(&mut value);"));
         assert!(source.contains("let incoming_mask = BorrowedSecretScalarSlot(&mut mask);"));

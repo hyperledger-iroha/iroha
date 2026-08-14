@@ -67,6 +67,19 @@ class RecordingSession(requests.Session):
             raise AssertionError("no queued responses")
         return self._responses.pop(0)
 
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        return self.request(
+            request.method or "",
+            request.url or "",
+            headers=dict(request.headers),
+            data=request.body,
+            **kwargs,
+        )
+
 
 def _vpn_trust_fields() -> Dict[str, str]:
     return {

@@ -21,11 +21,11 @@ final class ToriiOperatorRequestTests: XCTestCase {
         url: URL,
         timestampMs: UInt64,
         nonce: String
-    ) -> Data {
+    ) throws -> Data {
         var message = Data("iroha.operator.http-request.network.v1\0".utf8)
         message.append(networkId.bytes)
         message.append(
-            ToriiCanonicalRequest.canonicalRequestMessage(
+            try ToriiCanonicalRequest.canonicalRequestMessage(
                 method: method,
                 url: url,
                 body: Data()
@@ -62,7 +62,7 @@ final class ToriiOperatorRequestTests: XCTestCase {
         XCTAssertTrue(
             publicKey.isValidSignature(
                 signature,
-                for: signatureMessage(
+                for: try signatureMessage(
                     networkId: TestNetworkIds.canonical,
                     method: "GET",
                     url: url,
@@ -74,7 +74,7 @@ final class ToriiOperatorRequestTests: XCTestCase {
         XCTAssertFalse(
             publicKey.isValidSignature(
                 signature,
-                for: signatureMessage(
+                for: try signatureMessage(
                     networkId: TestNetworkIds.other,
                     method: "GET",
                     url: url,
@@ -87,7 +87,7 @@ final class ToriiOperatorRequestTests: XCTestCase {
         XCTAssertFalse(
             publicKey.isValidSignature(
                 signature,
-                for: signatureMessage(
+                for: try signatureMessage(
                     networkId: TestNetworkIds.canonical,
                     method: "GET",
                     url: otherPath,

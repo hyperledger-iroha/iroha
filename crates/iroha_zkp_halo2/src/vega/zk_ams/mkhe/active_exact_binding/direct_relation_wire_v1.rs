@@ -1,9 +1,9 @@
 //! Candidate-only canonical wire for the six-witness direct relations.
 //!
 //! This module freezes statement/body framing and structural predecode, and
-//! privately replays the candidate RKG-round-one proof equations plus typed
-//! object authentication. It deliberately supplies no admission or release
-//! receipt, no public verification result, and no release transition.
+//! privately replays the candidate RKG-round-one and Galois proof equations
+//! plus typed object authentication. It deliberately supplies no admission or
+//! release receipt, no public verification result, and no release transition.
 use super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyRoundV1,
@@ -24,23 +24,35 @@ mod predecode_v1;
     reason = "candidate-only semantic verifier seam is retained for the pending direct-relation owner and cannot mint admission or release authority"
 )]
 pub(super) use predecode_v1::{
-    CompletedDirectRkgOneSemanticVerificationV1, verify_direct_rkg_one_semantic_candidate_v1,
+    CompletedDirectGaloisSemanticVerificationV1, CompletedDirectRkgOneSemanticVerificationV1,
+    verify_direct_galois_semantic_candidate_v1, verify_direct_rkg_one_semantic_candidate_v1,
 };
 #[path = "direct_relation_wire_v1/response_commitment_v1.rs"]
 pub(super) mod response_commitment_v1;
+#[path = "direct_relation_wire_v1/rkg_one_creator_membership_v1.rs"]
+mod rkg_one_creator_membership_v1;
+#[path = "direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"]
+mod rkg_one_creator_prover_v1;
+#[path = "direct_relation_wire_v1/rkg_one_creator_response_v1.rs"]
+mod rkg_one_creator_response_v1;
 #[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
+pub(super) use rkg_one_creator_prover_v1::{
+    SealedDirectRkgOneProofOwnerV1, seal_direct_rkg_one_proof_owner_v1,
+};
 #[cfg(test)]
 #[allow(
     unused_imports,
     reason = "test namespace preserves every reviewed direct-relation object role while only three are exercised by current cases"
 )]
 pub(super) use statement_v1::{
-    AggregateH0ObjectRoleV1, AggregateH1ObjectRoleV1, DirectPolynomialObjectV1,
-    GaloisBObjectRoleV1, RkgH0ObjectRoleV1, RkgH1ObjectRoleV1, RkgKObjectRoleV1,
+    AggregateH0ObjectRoleV1, AggregateH1ObjectRoleV1, GaloisBObjectRoleV1, RkgKObjectRoleV1,
     RkgNormalizationObjectRoleV1,
 };
-pub(super) use statement_v1::{DirectRelationPublicObjectsV1, ExpectedDirectRelationStatementV1};
+pub(super) use statement_v1::{
+    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, ExpectedDirectRelationStatementV1,
+    PreparedDirectRkgOneStatementCoreV1, RkgH0ObjectRoleV1, RkgH1ObjectRoleV1,
+};
 #[cfg(test)]
 #[path = "direct_relation_wire_v1/kats.rs"]
 mod kats;
@@ -49,7 +61,7 @@ mod kats;
 mod tests;
 const DIRECT_RELATION_WIRE_MAGIC_V1: [u8; 4] = *b"ZAXR";
 const DIRECT_RELATION_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZADS";
-const DIRECT_RELATION_CODEC_VERSION_V1: u8 = 1;
+pub(super) const DIRECT_RELATION_CODEC_VERSION_V1: u8 = 1;
 const HEADER_BYTES_V1: usize = 80;
 const STATEMENT_PREFIX_BYTES_V1: usize = 544;
 const OBJECT_ENTRY_BYTES_V1: usize = 32 + ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1;
@@ -86,7 +98,8 @@ const ORDERED_COMMITMENT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.ordered-commitment-root";
 const ORDERED_MEMBERSHIP_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.ordered-membership-root";
-const RELATION_LINEAGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-relation-wire.lineage";
+pub(super) const RELATION_LINEAGE_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.direct-relation-wire.lineage";
 const RNS_FIRST_MESSAGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.rns-first-message";
 const COMMITMENT_FIRST_MESSAGE_DOMAIN_V1: &[u8] =
@@ -183,20 +196,31 @@ fn membership_share_statement_digest(
     hash.finalize()
 }
 fn canonical_header(expected: &ExpectedDirectRelationStatementV1) -> [u8; HEADER_BYTES_V1] {
-    let total = HEADER_BYTES_V1 + expected.bytes().len() + BODY_BYTES_V1;
+    canonical_header_fields_v1(
+        expected.relation(),
+        expected.bytes().len(),
+        expected.statement_digest(),
+    )
+}
+fn canonical_header_fields_v1(
+    relation: PersistentDirectRelationV1,
+    statement_bytes: usize,
+    statement_digest: [u8; 32],
+) -> [u8; HEADER_BYTES_V1] {
+    let total = HEADER_BYTES_V1 + statement_bytes + BODY_BYTES_V1;
     let mut bytes = [0_u8; HEADER_BYTES_V1];
     bytes[..4].copy_from_slice(&DIRECT_RELATION_WIRE_MAGIC_V1);
     bytes[4] = DIRECT_RELATION_CODEC_VERSION_V1;
-    bytes[5] = expected.relation() as u8;
+    bytes[5] = relation as u8;
     bytes[6] = WITNESS_COUNT_V1 as u8;
     bytes[7] = CHALLENGE_REPETITIONS_V1 as u8;
     bytes[8] = CHUNKS_PER_WITNESS_V1 as u8;
     bytes[9] = BOUND_ONE_WITNESS_COUNT_V1 as u8;
     bytes[10] = BOUND_TWO_WITNESS_COUNT_V1 as u8;
-    bytes[11] = expected.relation().object_count() as u8;
+    bytes[11] = relation.object_count() as u8;
     for (offset, value) in [
         (12, HEADER_BYTES_V1),
-        (16, expected.bytes().len()),
+        (16, statement_bytes),
         (20, MEMBERSHIP_BYTES_V1),
         (24, RESPONSE_BYTES_V1),
         (28, BLIND_RESPONSE_BYTES_V1),
@@ -206,7 +230,7 @@ fn canonical_header(expected: &ExpectedDirectRelationStatementV1) -> [u8; HEADER
     ] {
         bytes[offset..offset + 4].copy_from_slice(&(value as u32).to_be_bytes());
     }
-    bytes[48..80].copy_from_slice(&expected.statement_digest());
+    bytes[48..80].copy_from_slice(&statement_digest);
     bytes
 }
 trait DirectRelationMembershipSummaryV1 {

@@ -258,7 +258,12 @@ class HttpClientTransportVpnParserTest {
         val paymentTxHash = "44".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_050L, "vpn-status-nonce")
+        val auth = ToriiCanonicalRequestAuth(
+            "alice@universal",
+            keyPair.private,
+            1_700_000_000_050L,
+            "vpn-status-nonce",
+        )
         val config = ClientConfig.builder()
             .setBaseUri(URI.create("https://torii.example"))
             .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical()))

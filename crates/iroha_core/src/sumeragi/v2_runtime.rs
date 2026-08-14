@@ -16,13 +16,6 @@
 //! Within the exact eligible set, a small deterministic arbiter and cyclic
 //! class service prevent a saturated normal prefix from starving a locked
 //! Commit vote or trusted local completion.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "recovered-runtime seams remain test-sealed until cutover"
-    )
-)]
 #[cfg(test)]
 use super::v2::{AdapterEquivocationEvidence, DeferredPriority};
 #[cfg(test)]

@@ -115,7 +115,7 @@ The authoritative local byte and native-equation checks are:
 
 - `membership::tests::pinned_upstream_end_to_end_proof_verifies`
 - `membership::tests::replay_public_root_and_every_proof_phase_fail_closed`
-- `prover::tests::native_one_layer_prover_round_trips_end_to_end`
+- `prover::tests::runtime::native_one_layer_prover_round_trips_end_to_end`
 - `range::tests::pinned_serai_bulletproofs_plus_vector_verifies_natively`
 - `range::tests::native_standard_transcript_proof_is_upstream_compatible`
 

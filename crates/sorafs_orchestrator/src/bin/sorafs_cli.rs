@@ -1,26 +1,7 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/pdp.rs"]
 mod pdp;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::TryInto,
-    env,
-    fmt::Write as FmtWrite,
-    fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, BufReader, BufWriter, Cursor, Read, Write},
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
-    path::{Path, PathBuf},
-    process,
-    str::FromStr,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
-    },
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use base64::{
     Engine,
     engine::general_purpose::{
@@ -73,8 +54,6 @@ use reqwest::{
     header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     redirect::Policy as RedirectPolicy,
 };
-#[cfg(test)]
-use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
@@ -131,6 +110,26 @@ use sorafs_orchestrator::{
     },
     proxy::{ProxyKaigiBridgeConfig, ProxyMode, ProxyNoritoBridgeConfig},
     taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryInto,
+    env,
+    fmt::Write as FmtWrite,
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
+    io::{self, BufReader, BufWriter, Cursor, Read, Write},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    process,
+    str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    },
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Runtime;
 const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -193,14 +192,14 @@ fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 #[cfg(test)]
-fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
-    require_canonical_decimal_token(flag, raw, context)?;
+fn parse_decimal_arg(flag: &str, raw: &str, ctx: &str) -> Result<rust_decimal::Decimal, String> {
+    require_canonical_decimal_token(flag, raw, ctx)?;
     let value = raw
-        .parse::<Decimal>()
-        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))?;
+        .parse::<rust_decimal::Decimal>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{ctx}`: {err}"))?;
     if value.to_string() != raw {
         return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+            "failed to parse `{flag}` for `{ctx}`: value must be a canonical decimal"
         ));
     }
     Ok(value)
@@ -9393,12 +9392,12 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
     }
 }
 mod moderation_runner_grpc {
-    use std::{convert::Infallible, sync::Arc, task::Poll};
-    use tonic::codegen::*;
     use super::{
         ModerationRunnerScreenRequest, ModerationRunnerScreenResponse,
         ModerationRunnerStatusRequest, ModerationRunnerStatusResponse,
     };
+    use std::{convert::Infallible, sync::Arc, task::Poll};
+    use tonic::codegen::*;
     pub mod runner_server {
         use super::*;
         #[tonic::async_trait]
@@ -12156,6 +12155,7 @@ fn format_exact(value: &impl std::fmt::Display) -> String {
 }
 #[cfg(test)]
 mod manifest_tests {
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::account::AccountId;
@@ -12163,7 +12163,6 @@ mod manifest_tests {
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
-    use super::*;
     fn account_string(label: u8) -> String {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
@@ -21027,7 +21026,7 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
@@ -21041,8 +21040,8 @@ mod tests {
         GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
+    use std::{fs, path::Path};
     use tempfile::tempdir;
-    use super::*;
     include!("sorafs_cli/appeal_verdict_parser_tests.rs");
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();

@@ -1238,7 +1238,7 @@ mod tests {
         write(&temporary.path().join("src/lib.ko"), "module AppLib {}");
         write(&temporary.path().join("tests/unit.ko"), contents);
         let workspace =
-            load_workspace(temporary.path().join("Musubi.toml")).expect("workspace fixture");
+            load_workspace(&temporary.path().join("Musubi.toml")).expect("workspace fixture");
         (temporary, workspace)
     }
     fn package_manifest(name: &str, dependency: &str) -> String {
@@ -1809,7 +1809,8 @@ core = { package = "test/core", version = "^1.0.0" }
                 )
             },
         )
-        .expect_err("raced declared-source replacement must fail");
+        .err()
+        .expect("raced declared-source replacement must fail");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
@@ -1845,7 +1846,8 @@ core = { package = "test/core", version = "^1.0.0" }
                 )
             },
         )
-        .expect_err("raced FIFO source must fail without hanging");
+        .err()
+        .expect("raced FIFO source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
@@ -1871,7 +1873,8 @@ core = { package = "test/core", version = "^1.0.0" }
             .next()
             .expect("workspace member");
         let error = declared_test_sources(member, Path::new("tests/unit.ko"))
-            .expect_err("oversized test source must fail closed");
+            .err()
+            .expect("oversized test source must fail closed");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("bounded regular file"));
     }
@@ -1900,7 +1903,8 @@ core = { package = "test/core", version = "^1.0.0" }
             .next()
             .expect("workspace member");
         let error = declared_test_sources(member, Path::new("tests"))
-            .expect_err("FIFO test source must fail without hanging");
+            .err()
+            .expect("FIFO test source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("hardlink or special file"));
     }

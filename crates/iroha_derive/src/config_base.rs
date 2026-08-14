@@ -699,7 +699,7 @@ mod codegen {
                 },
             };
             let actual = entry.generate().read.to_string();
-            expect![[r#"let test = __reader . read_parameter ([stringify ! (test)]) . value_optional () . finish () ;"#]].assert_eq(&actual);
+            expect![[r"let test = __reader . read_parameter ([stringify ! (test)]) . value_optional () . finish () ;"]].assert_eq(&actual);
         }
     }
 }

@@ -116,11 +116,10 @@ const _: () = {
     assert!(RKG_ONE_INVERSE_NTTS_V1 == 304);
     assert!(RKG_ONE_RNS_ROW_COEFFICIENTS_V1 == 79_691_776);
     assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 == 8_192);
-    assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 % core::mem::size_of::<u64>() == 0);
+    assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1.is_multiple_of(core::mem::size_of::<u64>()));
     assert!(
         RELEASE_RING_COEFFICIENTS_V1
-            % (ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 / core::mem::size_of::<u64>())
-            == 0
+            .is_multiple_of(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 / core::mem::size_of::<u64>())
     );
     assert!(RKG_ONE_PROVIDER_READ_CALLS_V1 == 9_728);
     assert!(RKG_ONE_PROVIDER_READ_BYTES_V1 == 79_691_776);
@@ -151,6 +150,10 @@ where
     verify_predecoded_direct_rkg_one_semantic_candidate_v1(context, objects, proof, provider)
 }
 
+#[allow(
+    clippy::drop_non_drop,
+    reason = "the explicit post-comparison completion drop is source-contract pinned"
+)]
 fn verify_predecoded_direct_rkg_one_semantic_candidate_v1<P>(
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
@@ -246,6 +249,10 @@ fn provisional_challenges(challenge_seed: [u8; 32]) -> [u32; CHALLENGE_REPETITIO
     })
 }
 
+#[allow(
+    clippy::needless_range_loop,
+    reason = "fixed protocol chunk indices are source-contract pinned"
+)]
 fn reconstruct_commitment_first_messages<BoundOne, BoundTwo>(
     relation: PersistentDirectRelationV1,
     bound_one: &[BoundOne; 2],
@@ -414,6 +421,10 @@ where
     Ok(())
 }
 
+#[allow(
+    clippy::needless_range_loop,
+    reason = "fixed challenge repetition indices are source-contract pinned"
+)]
 fn reconstruct_rkg_one_rns_first_messages(
     responses: &[u8],
     challenges: [u32; CHALLENGE_REPETITIONS_V1],

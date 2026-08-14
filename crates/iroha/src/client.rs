@@ -7,19 +7,42 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
-pub use public_musubi::{
-    PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
-};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::{self, Write as _},
-    future::Future,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Arc, Mutex, OnceLock, Weak},
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
+pub use crate::query::QueryError;
+use crate::{
+    config::Config,
+    crypto::{HashOf, KeyPair},
+    da::{
+        DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
+        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle,
+        DaManifestPersistedPaths, DaPinIntentListRequest, DaPinIntentListResponse,
+        DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaProofArtifactMetadata, DaProofConfig,
+        PDP_COMMITMENT_HEADER, build_car_plan_from_manifest, build_da_request,
+        decode_pdp_commitment_header, generate_da_proof_artifact, generate_da_proof_summary,
+    },
+    data_model::{
+        ChainId,
+        block::SignedBlock,
+        consensus::Qc,
+        events::pipeline::{
+            BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
+            TransactionEventFilter, TransactionStatus,
+        },
+        prelude::*,
+        transaction::{
+            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
+        },
+    },
+    http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
+    http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
+    nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
+    subscriptions::{
+        SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
+        SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
+        SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
+        SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
+        SubscriptionUsageResponse,
+    },
 };
 use base64::Engine as _;
 use bytes::Bytes;
@@ -94,6 +117,9 @@ use norito::{
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
 };
+pub use public_musubi::{
+    PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
+};
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
     alias_cache::{decode_alias_proof_untrusted_signers, unix_now_secs},
@@ -109,45 +135,19 @@ use sorafs_orchestrator::{
         GatewayProviderInput as SorafsGatewayProviderInput, GuardSet, RelayDirectory,
     },
 };
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::{self, Write as _},
+    future::Future,
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex, OnceLock, Weak},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use url::Url;
-use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
-pub use crate::query::QueryError;
-use crate::{
-    config::Config,
-    crypto::{HashOf, KeyPair},
-    da::{
-        DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
-        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams, DaManifestBundle,
-        DaManifestPersistedPaths, DaPinIntentListRequest, DaPinIntentListResponse,
-        DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaProofArtifactMetadata, DaProofConfig,
-        PDP_COMMITMENT_HEADER, build_car_plan_from_manifest, build_da_request,
-        decode_pdp_commitment_header, generate_da_proof_artifact, generate_da_proof_summary,
-    },
-    data_model::{
-        ChainId,
-        block::SignedBlock,
-        consensus::Qc,
-        events::pipeline::{
-            BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
-            TransactionEventFilter, TransactionStatus,
-        },
-        prelude::*,
-        transaction::{
-            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
-        },
-    },
-    http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
-    http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
-    nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
-    subscriptions::{
-        SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCreateRequest,
-        SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
-        SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
-        SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
-        SubscriptionUsageResponse,
-    },
-};
 const APPLICATION_JSON: &str = "application/json";
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -914,6 +914,10 @@ impl AccountOnboardingPlanReceiptV1 {
 /// Deterministic sponsored-onboarding fixtures exposed only to repository tooling and tests.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod account_onboarding_test_fixture {
+    use super::{
+        AccountOnboardingPlanBodyV1, AccountOnboardingPlanReceiptV1,
+        AccountOnboardingPlanRequestV1, decode_and_verify_account_onboarding_plan_for_request,
+    };
     use eyre::{Result, WrapErr as _, eyre};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -928,10 +932,6 @@ pub mod account_onboarding_test_fixture {
         block::BlockHeader,
         isi::{InstructionBox, alias_setup::EnsureAlias, framed_instruction_payload},
         nexus::DataSpaceId,
-    };
-    use super::{
-        AccountOnboardingPlanBodyV1, AccountOnboardingPlanReceiptV1,
-        AccountOnboardingPlanRequestV1, decode_and_verify_account_onboarding_plan_for_request,
     };
     /// One-byte input hashed into the exact fixture genesis identity.
     pub const NETWORK_HASH_SEED_V1: u8 = 0xA1;
@@ -7944,10 +7944,10 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
 }
 #[cfg(test)]
 mod offline_client_tests {
-    use std::sync::{Arc, Mutex};
-    use norito::derive::NoritoSerialize;
     use super::{evidence_http_tests::*, *};
     use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
+    use norito::derive::NoritoSerialize;
+    use std::sync::{Arc, Mutex};
     #[derive(NoritoSerialize)]
     struct CommandFixture {
         nonce: u64,
@@ -8220,12 +8220,12 @@ fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
 }
 #[cfg(test)]
 mod status_tests {
+    use super::*;
     use iroha_telemetry::metrics::{
         BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
         SumeragiConsensusStatus,
     };
     use norito::json::Value as JsonValue;
-    use super::*;
     #[test]
     fn decode_status_prefers_norito_bare() {
         let s = Status {
@@ -8502,9 +8502,9 @@ mod evidence_filter_tests {
 }
 #[cfg(test)]
 mod evidence_response_tests {
+    use super::*;
     use http::Response as HttpResponse;
     use norito::json::Value;
-    use super::*;
     #[test]
     fn parse_json_ok_response_returns_decoded_value() {
         let mut payload = norito::json::Map::new();
@@ -8641,12 +8641,10 @@ fn checked_random_keypair() -> KeyPair {
 }
 #[cfg(test)]
 mod evidence_http_tests {
-    use std::{
-        collections::HashMap,
-        convert::TryInto,
-        panic::{AssertUnwindSafe, catch_unwind},
-        sync::{Arc, Mutex, OnceLock},
-        time::Duration,
+    use super::{default_alias_policy, *};
+    use crate::{
+        http::{Method as HttpMethod, Response as HttpResponse},
+        http_default::{RequestSnapshot, with_send_hook},
     };
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
@@ -8662,10 +8660,12 @@ mod evidence_http_tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
     };
-    use super::{default_alias_policy, *};
-    use crate::{
-        http::{Method as HttpMethod, Response as HttpResponse},
-        http_default::{RequestSnapshot, with_send_hook},
+    use std::{
+        collections::HashMap,
+        convert::TryInto,
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{Arc, Mutex, OnceLock},
+        time::Duration,
     };
     pub(super) type SnapshotStore = Arc<Mutex<Vec<RequestSnapshot>>>;
     pub(super) fn client_with_base_url(url: Url) -> Client {
@@ -10636,9 +10636,6 @@ mod evidence_http_tests {
     }
     #[test]
     fn pipeline_status_queued_does_not_preemptively_query_committed_state() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -10646,6 +10643,9 @@ mod evidence_http_tests {
                 query::CommittedTransaction,
                 transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
             },
+        };
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
         let network_id = test_network_id();
         let public_key: PublicKey =
@@ -10839,9 +10839,6 @@ mod evidence_http_tests {
         reason = "the test keeps the rejected-status fallback and committed-query binding in one fail-closed protocol flow"
     )]
     fn pipeline_status_rejection_without_reason_uses_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -10852,6 +10849,9 @@ mod evidence_http_tests {
                     TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
                 },
             },
+        };
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
         let network_id = test_network_id();
         let public_key: PublicKey =
@@ -11406,11 +11406,6 @@ mod evidence_http_tests {
     }
     #[test]
     fn transaction_committed_limits_query_params() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
-            QueryResponse, SignedQuery,
-        };
-        use iroha_version::codec::DecodeVersioned;
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -11419,6 +11414,11 @@ mod evidence_http_tests {
                 transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
             },
         };
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
+            QueryResponse, SignedQuery,
+        };
+        use iroha_version::codec::DecodeVersioned;
         let network_id = test_network_id();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -20976,13 +20976,13 @@ mod subscription_http_tests {
 }
 #[cfg(test)]
 mod tx_hash_tests {
-    use std::time::Duration;
-    use eyre::eyre;
-    use super::{hashes_match, test_network_id};
+    use super::hashes_match;
     use crate::{
         crypto::{Hash, HashOf},
         data_model::transaction::{SignedTransaction, TransactionEntrypoint},
     };
+    use eyre::eyre;
+    use std::time::Duration;
     #[test]
     fn hashes_match_compares_bytes() {
         let tx_hash: HashOf<SignedTransaction> =
@@ -21317,7 +21317,6 @@ mod tx_hash_tests {
     }
     #[test]
     fn committed_transaction_matches_signed_hash_for_external_entrypoint() {
-        use iroha_primitives::const_vec::ConstVec;
         use crate::{
             crypto::MerkleProof,
             data_model::{
@@ -21327,6 +21326,7 @@ mod tx_hash_tests {
                 trigger::DataTriggerSequence,
             },
         };
+        use iroha_primitives::const_vec::ConstVec;
         let network_id = super::test_network_id();
         let public_key: crate::crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -21400,11 +21400,6 @@ mod tx_hash_tests {
 }
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
-    use std::{future, time::Duration};
-    use eyre::eyre;
-    use futures_util::stream;
-    use tokio::sync::{mpsc, oneshot};
-    use tokio_stream::wrappers::UnboundedReceiverStream;
     use super::{
         listen_for_tx_confirmation_stream, listen_for_tx_confirmation_stream_with_status_check,
     };
@@ -21424,6 +21419,11 @@ mod tx_confirmation_stream_tests {
             transaction::error::TransactionRejectionReason,
         },
     };
+    use eyre::eyre;
+    use futures_util::stream;
+    use std::{future, time::Duration};
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_stream::wrappers::UnboundedReceiverStream;
     #[tokio::test]
     async fn close_tx_confirmation_stream_timeout_is_bounded() {
         let closed = super::Client::close_tx_confirmation_stream_with_timeout(
@@ -22018,12 +22018,12 @@ mod url_join_tests {
 }
 /// Logic for `sync` and `async` Iroha websocket streams
 pub mod stream_api {
-    use futures_util::{SinkExt, Stream, StreamExt};
     use super::*;
     use crate::{
         http::ws::conn_flow::{Events, Init, InitData},
         http_default::DefaultWebSocketRequestBuilder,
     };
+    use futures_util::{SinkExt, Stream, StreamExt};
     fn validate_selected_subprotocol(response: &http_default::WebSocketResponse) -> Result<()> {
         let selected = response
             .headers()
@@ -22398,9 +22398,9 @@ mod blocks_api {
     };
     /// Blocks API flow. For documentation and usage examples, refer to [`crate::http::ws::conn_flow`].
     pub mod flow {
-        use std::num::NonZeroU64;
         use super::*;
         use crate::data_model::block::stream::*;
+        use std::num::NonZeroU64;
         /// Initialization struct for Blocks API flow.
         pub struct Init {
             /// Block height from which to start streaming blocks
@@ -22459,13 +22459,23 @@ mod blocks_api {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        fs,
-        io::{Read, Write},
-        net::TcpListener,
-        sync::{Arc, Mutex},
-        time::{Duration, Instant},
+    use super::{
+        default_alias_policy,
+        evidence_http_tests::{
+            SnapshotStore, assert_signed_headers, assert_signed_json_headers,
+            assert_single_accept_header, base_url, capability_gated_responder,
+            client_with_base_url, empty_response, json_response, respond_with, with_mock_http,
+            with_mock_sorafs_fetch,
+        },
+        *,
+    };
+    use crate::http::ws::conn_flow::Events as _;
+    use crate::http_default::RequestSnapshot;
+    use crate::{
+        config::{BasicAuth, Config},
+        da::PDP_COMMITMENT_HEADER,
+        http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
+        secrecy::SecretString,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
@@ -22541,25 +22551,15 @@ mod tests {
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport},
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
+    use std::{
+        collections::HashMap,
+        fs,
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
     use tempfile::tempdir;
-    use super::{
-        default_alias_policy,
-        evidence_http_tests::{
-            SnapshotStore, assert_signed_headers, assert_signed_json_headers,
-            assert_single_accept_header, base_url, capability_gated_responder,
-            client_with_base_url, empty_response, json_response, respond_with, with_mock_http,
-            with_mock_sorafs_fetch,
-        },
-        *,
-    };
-    use crate::http::ws::conn_flow::Events as _;
-    use crate::http_default::RequestSnapshot;
-    use crate::{
-        config::{BasicAuth, Config},
-        da::PDP_COMMITMENT_HEADER,
-        http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
-        secrecy::SecretString,
-    };
     mod appeal_finance {
         //! Appeal-finance HTTP client contract tests.
         include!("client/appeal_finance.rs");
@@ -25093,7 +25093,6 @@ mod tests {
     }
     #[test]
     fn events_ws_flow_uses_framed_norito() {
-        use std::num::NonZeroU64;
         use crate::data_model::events::{
             EventBox, EventFilterBox,
             pipeline::{
@@ -25101,6 +25100,7 @@ mod tests {
             },
             stream::{EventMessage, EventSubscriptionRequest},
         };
+        use std::num::NonZeroU64;
         let filters = vec![EventFilterBox::Pipeline(
             PipelineEventFilterBox::Transaction(TransactionEventFilter::default()),
         )];
@@ -25190,7 +25190,6 @@ mod tests {
     }
     #[test]
     fn blocks_ws_flow_uses_framed_norito() {
-        use std::num::NonZeroU64;
         use crate::{
             crypto::{PrivateKey, PublicKey},
             data_model::{
@@ -25198,6 +25197,7 @@ mod tests {
                 prelude::{AccountId, TransactionBuilder},
             },
         };
+        use std::num::NonZeroU64;
         let height = NonZeroU64::new(1).expect("height");
         let init = blocks_api::flow::Init::new(
             height,
@@ -29090,28 +29090,7 @@ mod tests {
             }
         };
     }
-    sorafs_filter_query_test!(
-        sorafs_alias_filter_sets_query_params,
-        "v1/sorafs/aliases",
-        SorafsAliasListFilter {
-            limit: Some(10),
-            offset: Some(3),
-            namespace: Some("docs"),
-            manifest_digest: Some("deadbeef"),
-        },
-        "limit=10&offset=3&namespace=docs&manifest_digest=deadbeef",
-    );
-    sorafs_filter_query_test!(
-        sorafs_replication_filter_sets_query_params,
-        "v1/sorafs/replication",
-        SorafsReplicationListFilter {
-            limit: Some(50),
-            offset: Some(2),
-            status: Some("completed"),
-            manifest_digest: Some("abc123"),
-        },
-        "limit=50&offset=2&status=completed&manifest_digest=abc123",
-    );
+    include!("client/sorafs_url_filter_tests.rs");
     sorafs_filter_query_test!(
         sorafs_repair_filters_set_finalized_cursor_params,
         "v1/sorafs/audit/repair/tasks",
@@ -32702,8 +32681,8 @@ mod tests {
     }
     #[cfg(test)]
     mod join_torii_url {
-        use url::Url;
         use super::*;
+        use url::Url;
         fn do_test(url: &str, path: &str, expected: &str) {
             let url = Url::parse(url).unwrap();
             let actual = join_torii_url(&url, path);

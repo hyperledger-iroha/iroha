@@ -20,8 +20,13 @@ public enum AliasSetupModelError: Error, Equatable, Sendable, CustomStringConver
 
 private func canonicalAliasSegment(_ raw: String, field: String) throws -> String {
     guard !raw.isEmpty,
+          raw.utf8.count <= 255,
           raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
-          !raw.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
+          !raw.unicodeScalars.contains(where: {
+              CharacterSet.whitespacesAndNewlines.contains($0)
+                  || CharacterSet.controlCharacters.contains($0)
+                  || isAliasBidiControl($0)
+          }),
           !raw.contains(where: { "@#$.".contains($0) }) else {
         throw AliasSetupModelError.invalidName(field: field)
     }
@@ -34,15 +39,43 @@ private func canonicalAliasSegment(_ raw: String, field: String) throws -> Strin
     components.host = normalized
     guard let ascii = components.url?.host?.lowercased(),
           !ascii.isEmpty,
+          ascii.utf8.count <= 63,
           ascii.unicodeScalars.allSatisfy({ scalar in
               let value = scalar.value
               return (48...57).contains(value) || (97...122).contains(value) || value == 45 || value == 95
           }),
           !ascii.hasPrefix("-"),
-          !ascii.hasSuffix("-") else {
+          !ascii.hasSuffix("-"),
+          ascii.count < 4
+              || ascii[ascii.index(ascii.startIndex, offsetBy: 2)] != "-"
+              || ascii[ascii.index(ascii.startIndex, offsetBy: 3)] != "-"
+              || ascii.hasPrefix("xn--"),
+          !ascii.hasPrefix("xn--") || isValidCanonicalACELabel(ascii, components: components) else {
         throw AliasSetupModelError.invalidName(field: field)
     }
     return ascii
+}
+
+private func isAliasBidiControl(_ scalar: UnicodeScalar) -> Bool {
+    switch scalar.value {
+    case 0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
+        return true
+    default:
+        return false
+    }
+}
+
+private func isValidCanonicalACELabel(_ ascii: String, components: URLComponents) -> Bool {
+    guard let percentEncodedUnicode = components.percentEncodedHost,
+          let unicode = percentEncodedUnicode.removingPercentEncoding,
+          unicode != ascii else {
+        return false
+    }
+
+    var roundTrip = URLComponents()
+    roundTrip.scheme = "https"
+    roundTrip.host = unicode
+    return roundTrip.url?.host?.lowercased() == ascii
 }
 
 private func canonicalAliasAccountId(_ raw: String, field: String) throws -> String {

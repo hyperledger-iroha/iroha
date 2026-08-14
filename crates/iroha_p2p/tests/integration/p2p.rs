@@ -8,7 +8,6 @@ use iroha_config::parameters::{
     },
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
-#[cfg(feature = "p2p_tls")]
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,

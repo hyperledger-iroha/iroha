@@ -1,11 +1,11 @@
 //! Sponsored account-onboarding plan encoding for the Connect C ABI.
-use std::slice;
-use iroha_data_model::{NetworkId, account::AccountId};
-use libc::{c_int, c_uchar, c_ulong};
 use super::{
     BridgeError, DETACHED_TRANSACTION_JSON_MAX_BYTES, bridge_result_to_code, clear_bridge_output,
     write_bytes_bridge,
 };
+use iroha_data_model::{NetworkId, account::AccountId};
+use libc::{c_int, c_uchar, c_ulong};
+use std::slice;
 #[derive(Debug, norito::Encode, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ConnectAccountOnboardingPlanRequestV1 {

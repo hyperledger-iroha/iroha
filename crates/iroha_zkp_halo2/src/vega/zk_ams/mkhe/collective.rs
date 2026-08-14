@@ -23,14 +23,18 @@ use super::{
     active_exact_binding::{PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1},
     checked_coefficient_work, checked_ring_multiplication_work,
     cpk_relation::{
-        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, derive_active_collective_public_a_limb_v1,
+        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkPartyBPointerV1,
+        derive_active_collective_public_a_limb_v1,
     },
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
         zk_ams_mkhe_security_certificate_v1,
     },
     packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1},
-    persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
+    persistent_membership_evidence::{
+        ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1, ZkAmsMkhePersistentMembershipContextV1,
+        ZkAmsMkhePersistentMembershipErrorV1, ZkAmsMkhePersistentMembershipEvidenceV1,
+    },
     wire::{ZkAmsMkheRnsPolynomialWireV1, governed_roster_digest},
 };
 #[cfg(test)]
@@ -42,18 +46,25 @@ use super::{
 };
 #[cfg(test)]
 use crate::vega::sponge::keccak256;
-use crate::vega::{
-    VegaT256PointV1 as Point,
-    bulletproof_t256::{
-        ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
-        commit_zk_ams_t256_membership_chunk_v1,
+use crate::{
+    generalized_bulletproof::ProofRandomSource,
+    vega::{
+        VegaT256PointV1 as Point,
+        bulletproof_t256::{
+            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
+            commit_zk_ams_t256_membership_chunk_v1,
+        },
+        sponge::Keccak256,
     },
-    sponge::Keccak256,
 };
 #[path = "collective/borrowed_product.rs"]
 pub(super) mod borrowed_product;
 #[path = "collective/incremental_source.rs"]
 mod incremental_source;
+#[path = "collective/party_local_rkg_ephemeral_v1.rs"]
+mod party_local_rkg_ephemeral_v1;
+#[path = "collective/persistent_direct_opening_v1.rs"]
+mod persistent_direct_opening_v1;
 #[path = "collective/prepared_public_a.rs"]
 mod prepared_public_a;
 #[expect(
@@ -73,6 +84,12 @@ pub use incremental_source::{
     ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
 };
+pub(super) use party_local_rkg_ephemeral_v1::DirectRkgOneOwnerDerivedProvenanceV1;
+use party_local_rkg_ephemeral_v1::PartyLocalRkgEphemeralOpeningV1;
+pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::{
+    DirectRkgOnePublicationOwnerV1, publish_direct_rkg_one_h0_h1_v1,
+};
+use persistent_direct_opening_v1::{PersistentDirectOpeningAxesV1, PersistentDirectOpeningOwnerV1};
 pub use prepared_public_a::{
     ZkAmsMkhePreparedCollectivePublicAV1, prepare_zk_ams_mkhe_collective_public_a_v1,
 };
@@ -240,6 +257,24 @@ impl Drop for ZeroizingT256MembershipCoefficientsV1 {
         clear_secret_i8_slice_v1(&mut self.0);
     }
 }
+const PERSISTENT_OPENING_POINT_WIRE_BYTES_V1: usize = 33;
+/// Exact canonical payload retained for the eight state-owned public points.
+pub(super) const ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1: usize =
+    ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * PERSISTENT_OPENING_POINT_WIRE_BYTES_V1;
+type PersistentOpeningCommitmentWireV1 =
+    [[u8; PERSISTENT_OPENING_POINT_WIRE_BYTES_V1]; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1];
+fn encode_persistent_opening_commitments_v1(
+    commitments: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+) -> Result<PersistentOpeningCommitmentWireV1, ZkAmsMkheErrorV1> {
+    let mut encoded = [[0_u8; PERSISTENT_OPENING_POINT_WIRE_BYTES_V1];
+        ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1];
+    for (commitment, destination) in commitments.iter().zip(encoded.iter_mut()) {
+        commitment
+            .write_non_identity_wire_bytes_ref(destination)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    }
+    Ok(encoded)
+}
 fn commit_persistent_secret_opening_v1(
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
@@ -266,6 +301,11 @@ fn commit_persistent_secret_opening_v1(
         .try_into()
         .map_err(|_: Vec<Point>| ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
+const _: () = {
+    assert!(PERSISTENT_OPENING_POINT_WIRE_BYTES_V1 == 33);
+    assert!(ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1 == 264);
+    assert!(core::mem::size_of::<PersistentOpeningCommitmentWireV1>() == 264);
+};
 fn ensure_state_owned_cpk_commitments_v1(
     verified: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
     expected: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
@@ -492,9 +532,7 @@ impl Drop for PersistentSecretCommitmentBlindingEntropyV1 {
 /// This type deliberately implements neither `Clone`, `Copy`, `Default`, nor
 /// serialization. Only an immutable array borrow crosses the sibling-module
 /// proof boundary, and every named scalar is erased on drop.
-pub(super) struct PersistentSecretCommitmentBlindingsV1(
-    [Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
-);
+struct PersistentSecretCommitmentBlindingsV1([Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]);
 impl PersistentSecretCommitmentBlindingsV1 {
     fn sample<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         // Own the complete zero-initialized array before making the first
@@ -520,12 +558,11 @@ impl PersistentSecretCommitmentBlindingsV1 {
         }
         Ok(owner)
     }
-    /// Borrow the exact ordered blindings for the sibling native CPK prover.
+    /// Borrow the exact ordered blindings inside the sealed owner/lease path.
     ///
     /// No by-value or mutable access is exposed: the party state remains the
-    /// sole owner until the complete relation is proven or the state drops.
-    #[allow(dead_code)]
-    pub(super) const fn as_array(&self) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
+    /// sole owner while the precursor is produced and until the state drops.
+    const fn as_array(&self) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         &self.0
     }
 }
@@ -563,6 +600,63 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
+/// Exclusive, lifetime-scoped access to one state-owned persistent opening.
+///
+/// The sibling CPK adapter can consume this value but cannot construct it or
+/// obtain either the secret coefficients or the original blindings.
+pub(super) struct PersistentDirectOpeningLeaseV1<'a> {
+    owner: &'a mut PersistentDirectOpeningOwnerV1,
+    coefficients: ZeroizingT256MembershipCoefficientsV1,
+}
+impl PersistentDirectOpeningLeaseV1<'_> {
+    pub(super) const fn profile_digest(&self) -> [u8; 32] {
+        self.owner.axes.profile_digest
+    }
+    pub(super) const fn security_certificate_digest(&self) -> [u8; 32] {
+        self.owner.axes.security_certificate_digest
+    }
+    pub(super) const fn roster_digest(&self) -> [u8; 32] {
+        self.owner.axes.roster_digest
+    }
+    pub(super) const fn key_material_digest(&self) -> [u8; 32] {
+        self.owner.axes.key_material_digest
+    }
+    pub(super) const fn epoch(&self) -> u64 {
+        self.owner.axes.epoch
+    }
+    pub(super) const fn cpk_transcript_digest(&self) -> [u8; 32] {
+        self.owner.axes.cpk_transcript_digest
+    }
+    pub(super) const fn party_index(&self) -> usize {
+        self.owner.axes.party_index as usize
+    }
+    pub(super) const fn party(&self) -> ZkAmsMkhePartyIdV1 {
+        self.owner.axes.party
+    }
+    pub(super) const fn public_share_digest(&self) -> [u8; 32] {
+        self.owner.axes.public_share_digest
+    }
+    /// Consume the exclusive lease into public membership evidence.
+    pub(super) fn prove<R: ProofRandomSource>(
+        self,
+        context: ZkAmsMkhePersistentMembershipContextV1,
+        random: &mut R,
+    ) -> Result<ZkAmsMkhePersistentMembershipEvidenceV1, ZkAmsMkhePersistentMembershipErrorV1> {
+        let evidence = ZkAmsMkhePersistentMembershipEvidenceV1::prove(
+            context,
+            self.coefficients.as_slice(),
+            self.owner.blindings.as_array(),
+            random,
+        )?;
+        let commitments = evidence.commitments();
+        let encoded = encode_persistent_opening_commitments_v1(&commitments)
+            .map_err(|_| ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)?;
+        if encoded != self.owner.retained_commitment_wire {
+            return Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch);
+        }
+        Ok(evidence)
+    }
+}
 /// Opaque RLWE state owned by one exact governed party and secret epoch.
 ///
 /// The ternary secret, centered-binomial public-key error, and eight persistent
@@ -577,47 +671,46 @@ std::thread_local! {
 /// requires_clone::<ZkAmsMkheCollectivePartyStateV1>();
 /// ```
 pub struct ZkAmsMkheCollectivePartyStateV1 {
-    profile_digest: [u8; 32],
-    security_certificate_digest: [u8; 32],
-    roster_digest: [u8; 32],
-    key_material_digest: [u8; 32],
-    epoch: u64,
-    transcript_digest: [u8; 32],
-    party_index: u8,
-    party: ZkAmsMkhePartyIdV1,
-    public_share_digest: [u8; 32],
-    persistent_secret_binding: Option<VerifiedPersistentWitnessBindingV1>,
-    persistent_secret_commitment_blindings: PersistentSecretCommitmentBlindingsV1,
-    secret: SecretPolynomial,
+    persistent_direct_opening: PersistentDirectOpeningOwnerV1,
     public_error: SecretPolynomial,
+    party_local_rkg_ephemeral_opening: Option<PartyLocalRkgEphemeralOpeningV1>,
+    party_local_rkg_ephemeral_creation_mask: u64,
 }
 impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ZkAmsMkheCollectivePartyStateV1")
-            .field("profile_digest", &hex::encode(self.profile_digest))
+            .field(
+                "profile_digest",
+                &hex::encode(self.persistent_direct_opening.axes.profile_digest),
+            )
             .field(
                 "security_certificate_digest",
-                &hex::encode(self.security_certificate_digest),
+                &hex::encode(
+                    self.persistent_direct_opening
+                        .axes
+                        .security_certificate_digest,
+                ),
             )
-            .field("roster_digest", &hex::encode(self.roster_digest))
-            .field("epoch", &self.epoch)
-            .field("transcript_digest", &hex::encode(self.transcript_digest))
-            .field("party_index", &self.party_index)
-            .field("party", &self.party)
+            .field(
+                "roster_digest",
+                &hex::encode(self.persistent_direct_opening.axes.roster_digest),
+            )
+            .field("epoch", &self.persistent_direct_opening.axes.epoch)
+            .field(
+                "transcript_digest",
+                &hex::encode(self.persistent_direct_opening.axes.cpk_transcript_digest),
+            )
+            .field(
+                "party_index",
+                &self.persistent_direct_opening.axes.party_index,
+            )
+            .field("party", &self.persistent_direct_opening.axes.party)
             .field(
                 "public_share_digest",
-                &hex::encode(self.public_share_digest),
+                &hex::encode(self.persistent_direct_opening.axes.public_share_digest),
             )
-            .field(
-                "persistent_secret_binding_verified",
-                &self.persistent_secret_binding.is_some(),
-            )
-            .field(
-                "persistent_secret_commitment_blindings",
-                &self.persistent_secret_commitment_blindings,
-            )
-            .field("secret", &"[REDACTED]")
+            .field("persistent_direct_opening", &self.persistent_direct_opening)
             .field("public_error", &"[REDACTED]")
             .finish()
     }
@@ -625,106 +718,168 @@ impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
 impl ZkAmsMkheCollectivePartyStateV1 {
     #[cfg(test)]
     pub(super) const fn profile_digest(&self) -> [u8; 32] {
-        self.profile_digest
+        self.persistent_direct_opening.axes.profile_digest
     }
     #[cfg(test)]
     pub(super) const fn roster_digest(&self) -> [u8; 32] {
-        self.roster_digest
+        self.persistent_direct_opening.axes.roster_digest
     }
     /// Authentication-key-derived governed party identifier.
     #[must_use]
     pub const fn party(&self) -> ZkAmsMkhePartyIdV1 {
-        self.party
+        self.persistent_direct_opening.axes.party
     }
     /// Exact zero-based position in the governed eight-party roster.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
-        self.party_index
+        self.persistent_direct_opening.axes.party_index
     }
     /// Digest of the matching verified public share.
     #[must_use]
     pub const fn public_share_digest(&self) -> [u8; 32] {
-        self.public_share_digest
+        self.persistent_direct_opening.axes.public_share_digest
     }
     /// Governed secret/key epoch.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
-        self.epoch
+        self.persistent_direct_opening.axes.epoch
     }
     /// Exact collective-key transcript.
     #[must_use]
     pub const fn transcript_digest(&self) -> [u8; 32] {
-        self.transcript_digest
+        self.persistent_direct_opening.axes.cpk_transcript_digest
     }
     pub(super) const fn secret(&self) -> &SecretPolynomial {
-        &self.secret
+        &self.persistent_direct_opening.secret
     }
     pub(super) const fn public_error(&self) -> &SecretPolynomial {
         &self.public_error
     }
-    /// Borrow the retained blindings for the complete sibling CPK relation.
-    /// Absence of a connected consumer remains a release blocker; it is never
-    /// permission to resample or accept an independently supplied opening.
-    #[cfg(test)]
-    pub(super) const fn persistent_secret_commitment_blindings(
-        &self,
-    ) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
-        self.persistent_secret_commitment_blindings.as_array()
-    }
     pub(super) const fn profile_digest_internal(&self) -> [u8; 32] {
-        self.profile_digest
+        self.persistent_direct_opening.axes.profile_digest
     }
     pub(super) const fn security_certificate_digest_internal(&self) -> [u8; 32] {
-        self.security_certificate_digest
+        self.persistent_direct_opening
+            .axes
+            .security_certificate_digest
     }
     pub(super) const fn roster_digest_internal(&self) -> [u8; 32] {
-        self.roster_digest
+        self.persistent_direct_opening.axes.roster_digest
     }
     pub(super) const fn key_material_digest_internal(&self) -> [u8; 32] {
-        self.key_material_digest
+        self.persistent_direct_opening.axes.key_material_digest
     }
-    /// Lend the validated exact state-owned commitment opening to a sibling.
-    ///
-    /// The narrowed copy is erased; caller openings and resampling are rejected.
-    #[allow(dead_code)]
-    fn with_validated_cpk_secret_opening_v1<T>(
+    fn validate_state_owned_cpk_source_v1(
         &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         share: &ZkAmsMkheCollectivePublicKeyShareV1,
-        adapter: impl FnOnce(
-            &[i8],
-            &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
-        ) -> Result<T, ZkAmsMkheErrorV1>,
-    ) -> Result<T, ZkAmsMkheErrorV1> {
+    ) -> Result<(), ZkAmsMkheErrorV1> {
         roster.validate()?;
-        let party_index = usize::from(self.party_index);
-        if self.profile_digest != roster.profile_digest()
-            || self.roster_digest != roster.roster_digest()
-            || self.key_material_digest != roster.key_material_digest()
-            || self.epoch != roster.epoch()
+        let axes = &self.persistent_direct_opening.axes;
+        axes.validate()?;
+        let party_index = usize::from(axes.party_index);
+        if axes.profile_digest != roster.profile_digest()
+            || axes.security_certificate_digest != release_security_certificate_digest()?
+            || axes.roster_digest != roster.roster_digest()
+            || axes.key_material_digest != roster.key_material_digest()
+            || axes.epoch != roster.epoch()
             || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.party != roster.participants()[party_index].party()
-            || self.transcript_digest == [0; 32]
-            || self.public_share_digest == [0; 32]
-            || self.persistent_secret_binding.is_some()
-            || share.profile_digest != self.profile_digest
-            || share.security_certificate_digest != self.security_certificate_digest
-            || share.roster_digest != self.roster_digest
-            || share.key_material_digest != self.key_material_digest
-            || share.epoch != self.epoch
-            || share.transcript_digest != self.transcript_digest
-            || share.party_index != self.party_index
-            || share.party != self.party
-            || share.digest != self.public_share_digest
+            || axes.party != roster.participants()[party_index].party()
+            || self.persistent_direct_opening.verified_binding.is_some()
+            || share.profile_digest != axes.profile_digest
+            || share.security_certificate_digest != axes.security_certificate_digest
+            || share.roster_digest != axes.roster_digest
+            || share.key_material_digest != axes.key_material_digest
+            || share.epoch != axes.epoch
+            || share.transcript_digest != axes.cpk_transcript_digest
+            || share.party_index != axes.party_index
+            || share.party != axes.party
+            || share.digest != axes.public_share_digest
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        validate_collective_public_key_share(roster, self.transcript_digest, party_index, share)?;
-        let coefficients =
-            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&self.secret)?;
-        adapter(
+        validate_collective_public_key_share(
+            roster,
+            axes.cpk_transcript_digest,
+            party_index,
+            share,
+        )?;
+        Ok(())
+    }
+    fn recompute_persistent_direct_commitments_v1(
+        &self,
+    ) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
+        self.persistent_direct_opening.axes.validate()?;
+        let coefficients = ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(
+            &self.persistent_direct_opening.secret,
+        )?;
+        let commitments = commit_persistent_secret_opening_v1(
             coefficients.as_slice(),
-            self.persistent_secret_commitment_blindings.as_array(),
+            self.persistent_direct_opening.blindings.as_array(),
+        )?;
+        let encoded = encode_persistent_opening_commitments_v1(&commitments)?;
+        if encoded != self.persistent_direct_opening.retained_commitment_wire {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(commitments)
+    }
+    fn validated_cpk_secret_commitments_v1(
+        &self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+    ) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
+        self.validate_state_owned_cpk_source_v1(roster, share)?;
+        self.recompute_persistent_direct_commitments_v1()
+    }
+    fn persistent_direct_opening_lease_v1<'a>(
+        &'a mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+    ) -> Result<PersistentDirectOpeningLeaseV1<'a>, ZkAmsMkheErrorV1> {
+        self.validate_state_owned_cpk_source_v1(roster, share)?;
+        let owner = &mut self.persistent_direct_opening;
+        let coefficients =
+            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&owner.secret)?;
+        let commitments = commit_persistent_secret_opening_v1(
+            coefficients.as_slice(),
+            owner.blindings.as_array(),
+        )?;
+        let encoded = encode_persistent_opening_commitments_v1(&commitments)?;
+        if encoded != owner.retained_commitment_wire {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(PersistentDirectOpeningLeaseV1 {
+            owner,
+            coefficients,
+        })
+    }
+    /// Produce only public, membership-only CPK precursor material.
+    ///
+    /// This method cannot mint a persistent witness binding.  The complete
+    /// CPK relation verifier remains the sole authority for that capability.
+    #[allow(dead_code)]
+    pub(super) fn prove_state_owned_cpk_secret_membership_v1<R: ProofRandomSource>(
+        &mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,
+        random: &mut R,
+    ) -> Result<
+        super::cpk_relation::state_owned_secret_adapter_v1::StateOwnedCpkSecretMembershipPrecursorV1,
+        ZkAmsMkheErrorV1,
+    >{
+        self.validate_state_owned_cpk_source_v1(roster, share)?;
+        let expected_party_b_payload_blake3 = cpk_party_b_payload_blake3_v1(&share.party_public_b)?;
+        if party_b_pointer.payload_blake3() != expected_party_b_payload_blake3 {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let lease = self.persistent_direct_opening_lease_v1(roster, share)?;
+        super::cpk_relation::state_owned_secret_adapter_v1::prove_state_owned_cpk_secret_membership_v1(
+            roster,
+            party_b_pointer,
+            expected_party_b_payload_blake3,
+            lease,
+            random,
         )
     }
     /// Admit the move-only party binding atomically emitted with the verified set.
@@ -735,30 +890,27 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         share: &ZkAmsMkheCollectivePublicKeyShareV1,
         binding: VerifiedPersistentWitnessBindingV1,
     ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
-        let party_index = usize::from(self.party_index);
-        let expected_commitments = self.with_validated_cpk_secret_opening_v1(
-            roster,
-            share,
-            commit_persistent_secret_opening_v1,
-        )?;
+        let party_index = usize::from(self.party_index());
+        let expected_commitments = self.validated_cpk_secret_commitments_v1(roster, share)?;
         binding.validate_for(
             roster,
-            self.transcript_digest,
+            self.transcript_digest(),
             party_index,
-            self.public_share_digest,
+            self.public_share_digest(),
             PersistentWitnessConsumerV1::CollectivePublicKey,
         )?;
         ensure_state_owned_cpk_commitments_v1(binding.commitments(), &expected_commitments)?;
-        self.persistent_secret_binding = Some(binding);
+        self.persistent_direct_opening.verified_binding = Some(binding);
         let binding = self
-            .persistent_secret_binding
+            .persistent_direct_opening
+            .verified_binding
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
         binding.validate_for(
             roster,
-            self.transcript_digest,
-            usize::from(self.party_index),
-            self.public_share_digest,
+            self.transcript_digest(),
+            usize::from(self.party_index()),
+            self.public_share_digest(),
             PersistentWitnessConsumerV1::CollectivePublicKey,
         )?;
         Ok(binding)
@@ -776,35 +928,32 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         binding: VerifiedPersistentWitnessBindingV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
         roster.validate()?;
-        let party_index = usize::from(self.party_index);
-        admission.validate_for_v1(roster, self.transcript_digest, party_index)?;
-        if self.profile_digest != roster.profile_digest()
-            || self.security_certificate_digest != release_security_certificate_digest()?
-            || self.roster_digest != roster.roster_digest()
-            || self.key_material_digest != roster.key_material_digest()
-            || self.epoch != roster.epoch()
+        let axes = &self.persistent_direct_opening.axes;
+        axes.validate()?;
+        let party_index = usize::from(axes.party_index);
+        admission.validate_for_v1(roster, axes.cpk_transcript_digest, party_index)?;
+        if axes.profile_digest != roster.profile_digest()
+            || axes.security_certificate_digest != release_security_certificate_digest()?
+            || axes.roster_digest != roster.roster_digest()
+            || axes.key_material_digest != roster.key_material_digest()
+            || axes.epoch != roster.epoch()
             || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.party != roster.participants()[party_index].party()
-            || self.public_share_digest != admission.share_digest
-            || self.persistent_secret_binding.is_some()
+            || axes.party != roster.participants()[party_index].party()
+            || axes.public_share_digest != admission.share_digest
+            || self.persistent_direct_opening.verified_binding.is_some()
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         binding.validate_for(
             roster,
-            self.transcript_digest,
+            axes.cpk_transcript_digest,
             party_index,
-            self.public_share_digest,
+            axes.public_share_digest,
             PersistentWitnessConsumerV1::CollectivePublicKey,
         )?;
-        let coefficients =
-            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&self.secret)?;
-        let expected_commitments = commit_persistent_secret_opening_v1(
-            coefficients.as_slice(),
-            self.persistent_secret_commitment_blindings.as_array(),
-        )?;
+        let expected_commitments = self.recompute_persistent_direct_commitments_v1()?;
         ensure_state_owned_cpk_commitments_v1(binding.commitments(), &expected_commitments)?;
-        self.persistent_secret_binding = Some(binding);
+        self.persistent_direct_opening.verified_binding = Some(binding);
         Ok(())
     }
     /// Borrow the cached capability for a specific consumer.  Absence is a
@@ -816,14 +965,15 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         consumer: PersistentWitnessConsumerV1,
     ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
         let binding = self
-            .persistent_secret_binding
+            .persistent_direct_opening
+            .verified_binding
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
         binding.validate_for(
             roster,
-            self.transcript_digest,
-            usize::from(self.party_index),
-            self.public_share_digest,
+            self.transcript_digest(),
+            usize::from(self.party_index()),
+            self.public_share_digest(),
             consumer,
         )?;
         Ok(binding)
@@ -840,17 +990,13 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         ),
         ZkAmsMkheErrorV1,
     > {
-        let commitments = self.with_validated_cpk_secret_opening_v1(
-            roster,
-            share,
-            commit_persistent_secret_opening_v1,
-        )?;
+        let commitments = self.validated_cpk_secret_commitments_v1(roster, share)?;
         let binding = mint_test_state_owned_collective_secret_binding_v1(
             roster,
-            self.security_certificate_digest,
-            self.transcript_digest,
-            usize::from(self.party_index),
-            self.public_share_digest,
+            self.security_certificate_digest_internal(),
+            self.transcript_digest(),
+            usize::from(self.party_index()),
+            self.public_share_digest(),
             commitments,
         )?;
         Ok(binding.fork_for_state_and_verifier_v1())
@@ -1199,10 +1345,6 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
 /// eight times creates eight independent `P`-sized owners and is therefore not
 /// a supported public construction topology.
 #[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "single-party native generator retained for isolated reference fixtures"
-)]
 pub(super) fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -1314,20 +1456,26 @@ pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1<
     validate_collective_public_key_share_active_admission_v1(&share)?;
     let persistent_secret_commitment_blindings =
         PersistentSecretCommitmentBlindingsV1::sample(random)?;
-    let state = ZkAmsMkheCollectivePartyStateV1 {
-        profile_digest: share.profile_digest,
-        security_certificate_digest,
-        roster_digest: share.roster_digest,
-        key_material_digest: share.key_material_digest,
-        epoch: share.epoch,
-        transcript_digest,
-        party_index: share.party_index,
-        party: share.party,
-        public_share_digest: share.digest,
-        persistent_secret_binding: None,
-        persistent_secret_commitment_blindings,
+    let persistent_direct_opening = PersistentDirectOpeningOwnerV1::new_unverified(
+        PersistentDirectOpeningAxesV1 {
+            profile_digest: share.profile_digest,
+            security_certificate_digest,
+            roster_digest: share.roster_digest,
+            key_material_digest: share.key_material_digest,
+            epoch: share.epoch,
+            cpk_transcript_digest: transcript_digest,
+            party_index: share.party_index,
+            party: share.party,
+            public_share_digest: share.digest,
+        },
         secret,
+        persistent_secret_commitment_blindings,
+    )?;
+    let state = ZkAmsMkheCollectivePartyStateV1 {
+        persistent_direct_opening,
         public_error,
+        party_local_rkg_ephemeral_opening: None,
+        party_local_rkg_ephemeral_creation_mask: 0,
     };
     Ok((state, share))
 }

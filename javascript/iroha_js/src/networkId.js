@@ -130,7 +130,7 @@ export class NetworkId {
   }
 }
 
-Object.defineProperty(NetworkId, "BYTE_LENGTH", {
+/* @__PURE__ */ Object.defineProperty(NetworkId, "BYTE_LENGTH", {
   value: NETWORK_ID_BYTE_LENGTH,
   enumerable: true,
   configurable: false,

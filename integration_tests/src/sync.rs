@@ -181,9 +181,12 @@ mod tests {
         sync::{Mutex, MutexGuard, OnceLock},
     };
     use super::*;
-    use iroha::client::Client;
+    use iroha::{
+        client::Client,
+        crypto::{Hash, HashOf},
+    };
     use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
-    use iroha::data_model::ChainId;
+    use iroha::data_model::{ChainId, NetworkId};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -231,6 +234,9 @@ mod tests {
         let ttl = Duration::from_secs(1);
         let config = Config {
             chain: ChainId::from("test"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"integration_tests::sync::dummy_client",
+            ))),
             key_pair: ALICE_KEYPAIR.clone(),
             account: ALICE_ID.clone(),
             account_chain_discriminant:

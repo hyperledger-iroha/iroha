@@ -3,19 +3,6 @@
 //! This module owns the fixture bytes, schema-hash validation, and SDK manifest
 //! parity checks. Repository-facing command wrappers should delegate here so
 //! every caller exercises the same implementation.
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    fs,
-    fs::File,
-    io::{Read, Write},
-    num::NonZeroU32,
-    path::{Component, Path, PathBuf},
-    time::Duration,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2bVar, digest::VariableOutput};
 use eyre::{Context, Result, bail, eyre};
@@ -45,6 +32,19 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    fs,
+    fs::File,
+    io::{Read, Write},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
+    time::Duration,
+};
 use tempfile::{NamedTempFile, tempdir};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
@@ -2852,11 +2852,11 @@ fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use iroha_data_model::asset::Mintable;
     use iroha_primitives::numeric::NumericSpec;
     use norito::core::DecodeFromSlice;
-    use super::*;
+    use std::fs;
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     fn checked_in_alias_setup_fixture() -> AliasSetupFixtureBytes {
@@ -2868,18 +2868,18 @@ mod tests {
     fn register_asset_definition_fixture_source_is_current_and_semantic() {
         let register = semantic_register_asset_definition().expect("semantic register source");
         assert_eq!(
-            register.object.id.to_string(),
+            register.object().id.to_string(),
             "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
         );
-        assert_eq!(register.object.name, "Rose Token");
-        assert_eq!(register.object.spec, NumericSpec::default());
-        assert_eq!(register.object.mintable, Mintable::Infinitely);
+        assert_eq!(register.object().name, "Rose Token");
+        assert_eq!(register.object().spec, NumericSpec::default());
+        assert_eq!(register.object().mintable, Mintable::Infinitely);
         assert_eq!(
-            register.object.balance_scope_policy,
+            register.object().balance_scope_policy,
             AssetBalancePolicy::Global
         );
-        assert!(register.object.owning_domain.is_none());
-        let value = json::to_value(&register.object).expect("serialize semantic source");
+        assert!(register.object().owning_domain.is_none());
+        let value = json::to_value(register.object()).expect("serialize semantic source");
         let object = value.as_object().expect("NewAssetDefinition JSON object");
         assert_eq!(object.get("owning_domain"), Some(&Value::Null));
         assert!(!object.contains_key("confidential_policy"));
@@ -2931,15 +2931,17 @@ mod tests {
                 (InstructionSourceSlot::Instructions(1), "iroha.register"),
             ],
         ] {
-            validate_semantic_instruction_observations("register_asset_definition", &malformed)
-                .expect_err("semantic source shape must fail closed");
+            let _error =
+                validate_semantic_instruction_observations("register_asset_definition", &malformed)
+                    .expect_err("semantic source shape must fail closed");
         }
         let shifted_batch = [
             (InstructionSourceSlot::Batch(0), "iroha.register"),
             (InstructionSourceSlot::Batch(1), "iroha.register"),
         ];
-        validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
-            .expect_err("mixed-batch semantic instruction slots are exact");
+        let _error =
+            validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
+                .expect_err("mixed-batch semantic instruction slots are exact");
     }
     #[test]
     fn generated_register_asset_definition_roundtrips_current_register_box() {

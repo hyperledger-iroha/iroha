@@ -6,6 +6,38 @@ use crate::tests_runtime_handlers::{
 };
 use iroha_config::parameters::actual::ToriiMcpProfile;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+
+fn test_account_header_hex() -> String {
+    AccountAddress::parse_encoded(TEST_ACCOUNT_I105, None)
+        .expect("canonical I105 fixture")
+        .canonical_hex()
+        .expect("canonical account-header hex")
+}
+
+fn canonical_test_witness_header() -> String {
+    let subject_account = AccountAddress::parse_encoded(TEST_ACCOUNT_I105, None)
+        .expect("canonical I105 fixture")
+        .to_account_id()
+        .expect("fixture account id");
+    let signer = checked_torii_test_ed25519_keypair(0x73, "derive MCP witness fixture signer");
+    crate::app_auth::witness_header_value(&iroha_data_model::soracloud::CanonicalRequestWitnessV1 {
+        schema_version: iroha_data_model::soracloud::CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account,
+        timestamp_ms: 1,
+        nonce: "bounded-mcp-witness".to_owned(),
+        canonical_request_hash: iroha_crypto::Hash::new(b"bounded MCP witness fixture"),
+        signatures: vec![
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: signer.public_key().clone(),
+                signature: iroha_crypto::Signature::new(
+                    signer.private_key(),
+                    b"bounded MCP witness fixture signature",
+                ),
+            },
+        ],
+    })
+    .expect("bounded canonical witness header")
+}
 const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 #[test]
 fn catalog_dispatch_matching_handles_exact_parameters_and_wildcards() {
@@ -84,11 +116,67 @@ fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
     assert!(target_extra_header_policy(&Method::POST, "/v1/mcp").is_err());
     assert!(target_extra_header_policy(&Method::POST, "/v1/not-cataloged").is_err());
 }
+
+#[test]
+fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some(descriptor) = catalog_descriptor_for_method_path(
+            CATALOG_PROJECTION_GROUPS,
+            &tool.method,
+            tool.path_template.as_str(),
+        ) else {
+            continue;
+        };
+        if descriptor.authentication() == AuthenticationPolicy::CanonicalAccountSignature {
+            covered += 1;
+            validate_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
+                panic!(
+                    "{} {} failed schema validation: {error}",
+                    tool.method, tool.path_template
+                )
+            });
+        }
+    }
+    assert!(
+        covered > 0,
+        "canonical-auth catalog projection is non-empty"
+    );
+}
+#[test]
+fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some(descriptor) = catalog_descriptor_for_method_path(
+            CATALOG_PROJECTION_GROUPS,
+            &tool.method,
+            tool.path_template.as_str(),
+        ) else {
+            continue;
+        };
+        if descriptor.authentication() == AuthenticationPolicy::OperatorSignature {
+            covered += 1;
+            validate_operator_auth_tool_schema(tool).unwrap_or_else(|error| {
+                panic!(
+                    "{} {} failed operator schema validation: {error}",
+                    tool.method, tool.path_template
+                )
+            });
+        }
+    }
+    assert!(covered > 0, "operator-auth catalog projection is non-empty");
+}
 #[test]
 fn canonical_target_headers_require_one_complete_unambiguous_proof() {
     let complete = norito::json!({
-        "X-Iroha-Account": "account",
-        "X-Iroha-Signature": "signature",
+        "X-Iroha-Account": "operator@sora",
+        "X-Iroha-Signature": "AQ==",
         "X-Iroha-Timestamp-Ms": "1725000000123",
         "X-Iroha-Nonce": "nonce"
     });
@@ -106,17 +194,17 @@ fn canonical_target_headers_require_one_complete_unambiguous_proof() {
     );
     for invalid in [
         norito::json!({
-            "X-Iroha-Account": "account",
-            "X-Iroha-Signature": "signature"
+            "X-Iroha-Account": "operator@sora",
+            "X-Iroha-Signature": "AQ=="
         }),
         norito::json!({
             "X-Iroha-Witness": "witness",
             "X-Iroha-Signature": "conflict"
         }),
         norito::json!({
-            "X-Iroha-Account": "account",
+            "X-Iroha-Account": "operator@sora",
             "x-iroha-account": "case alias",
-            "X-Iroha-Signature": "signature",
+            "X-Iroha-Signature": "AQ==",
             "X-Iroha-Timestamp-Ms": "1725000000123",
             "X-Iroha-Nonce": "nonce"
         }),
@@ -128,6 +216,118 @@ fn canonical_target_headers_require_one_complete_unambiguous_proof() {
         )
         .expect_err("ambiguous or incomplete target proof must fail closed");
     }
+}
+
+#[test]
+fn canonical_target_headers_reject_noncanonical_wire_values_before_dispatch() {
+    let complete = |account: Value, signature: Value, timestamp: Value, nonce: Value| {
+        norito::json!({
+            "X-Iroha-Account": account,
+            "X-Iroha-Signature": signature,
+            "X-Iroha-Timestamp-Ms": timestamp,
+            "X-Iroha-Nonce": nonce
+        })
+    };
+    let oversized_signature =
+        "A".repeat(((crate::app_auth::CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 + 2) / 3) * 4 + 4);
+    for invalid in [
+        complete(
+            Value::String(TEST_ACCOUNT_I105.to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("not-an-alias".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("Operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AA==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("not-base64".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String(oversized_signature),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("01".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("18446744073709551616".to_owned()),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::from(1_u64),
+            Value::String("nonce".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("contains space".to_owned()),
+        ),
+        complete(
+            Value::String("operator@sora".to_owned()),
+            Value::String("AQ==".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("n".repeat(257)),
+        ),
+        norito::json!({ "X-Iroha-Witness": "not-base64" }),
+        norito::json!({
+            "X-Iroha-Witness": ("A".repeat(
+                ((crate::app_auth::CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1 + 2) / 3) * 4
+                    + 4
+            ))
+        }),
+    ] {
+        apply_extra_headers_with_policy(
+            &mut HeaderMap::new(),
+            Some(&invalid),
+            ExtraHeaderPolicy::CanonicalAccountAuthentication,
+        )
+        .expect_err("noncanonical target proof must fail before dispatch");
+    }
+
+    let witness = canonical_test_witness_header();
+    let valid_witness = norito::json!({ "X-Iroha-Witness": (witness.clone()) });
+    let mut forwarded = HeaderMap::new();
+    apply_extra_headers_with_policy(
+        &mut forwarded,
+        Some(&valid_witness),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication,
+    )
+    .expect("bounded canonical witness must pass forwarding preflight");
+    assert_eq!(
+        forwarded
+            .get(crate::HEADER_WITNESS)
+            .and_then(|value| value.to_str().ok()),
+        Some(witness.as_str())
+    );
 }
 #[test]
 fn outer_mcp_account_headers_are_never_reused_as_inner_route_proof() {
@@ -164,11 +364,25 @@ fn outer_transport_credentials_reject_ambiguous_duplicate_headers() {
 }
 #[test]
 fn operator_target_headers_are_complete_and_cannot_leak_to_public_routes() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0x77, "derive generic operator-auth forwarding fixture");
+    let public_key = key_pair
+        .public_key()
+        .try_to_multihash_string()
+        .expect("canonical operator public key");
+    let signature_bytes = iroha_crypto::Signature::new(
+        key_pair.private_key(),
+        b"generic operator-auth forwarding fixture",
+    );
+    let signature = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signature_bytes.payload(),
+    );
     let headers = norito::json!({
-        "X-Iroha-Operator-Public-Key": "key",
+        "X-Iroha-Operator-Public-Key": (public_key.clone()),
         "X-Iroha-Operator-Timestamp-Ms": "1725000000123",
         "X-Iroha-Operator-Nonce": "nonce",
-        "X-Iroha-Operator-Signature": "signature"
+        "X-Iroha-Operator-Signature": (signature.clone())
     });
     let mut operator = HeaderMap::new();
     apply_extra_headers_with_policy(
@@ -177,7 +391,18 @@ fn operator_target_headers_are_complete_and_cannot_leak_to_public_routes() {
         ExtraHeaderPolicy::OperatorAuthentication,
     )
     .expect("complete operator proof");
-    assert!(operator.contains_key(HEADER_X_IROHA_OPERATOR_SIGNATURE));
+    assert_eq!(
+        operator
+            .get(HEADER_X_IROHA_OPERATOR_PUBLIC_KEY)
+            .and_then(|value| value.to_str().ok()),
+        Some(public_key.as_str())
+    );
+    assert_eq!(
+        operator
+            .get(HEADER_X_IROHA_OPERATOR_SIGNATURE)
+            .and_then(|value| value.to_str().ok()),
+        Some(signature.as_str())
+    );
     let mut public = HeaderMap::new();
     apply_extra_headers_with_policy(&mut public, Some(&headers), ExtraHeaderPolicy::Default)
         .expect("public route ignores reserved authentication headers");
@@ -185,6 +410,111 @@ fn operator_target_headers_are_complete_and_cannot_leak_to_public_routes() {
     assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS));
     assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_NONCE));
     assert!(!public.contains_key(HEADER_X_IROHA_OPERATOR_SIGNATURE));
+}
+
+#[test]
+fn generic_operator_target_headers_reject_noncanonical_or_unbounded_wire_values() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0x78, "derive rejected generic operator-auth fixture");
+    let public_key = key_pair
+        .public_key()
+        .try_to_multihash_string()
+        .expect("canonical operator public key");
+    let signature_bytes = iroha_crypto::Signature::new(
+        key_pair.private_key(),
+        b"rejected generic operator-auth fixture",
+    );
+    let signature = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signature_bytes.payload(),
+    );
+    let oversized_signature =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0x11_u8; 65]);
+    let all_zero_signature =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0_u8; 64]);
+    let complete = |public_key: Value, timestamp_ms: Value, nonce: Value, signature: Value| {
+        norito::json!({
+            "X-Iroha-Operator-Public-Key": public_key,
+            "X-Iroha-Operator-Timestamp-Ms": timestamp_ms,
+            "X-Iroha-Operator-Nonce": nonce,
+            "X-Iroha-Operator-Signature": signature
+        })
+    };
+    for invalid in [
+        complete(
+            Value::from(1_u64),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::from(1_u64),
+            Value::String("nonce".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("1725000000123".to_owned()),
+            Value::from(1_u64),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::from(1_u64),
+        ),
+        complete(
+            Value::String("A".repeat(OPERATOR_PUBLIC_KEY_MAX_LITERAL_BYTES + 1)),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String("ed0120AABB".to_owned()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("01".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("contains space".to_owned()),
+            Value::String(signature.clone()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String("not-base64".to_owned()),
+        ),
+        complete(
+            Value::String(public_key.clone()),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(oversized_signature),
+        ),
+        complete(
+            Value::String(public_key),
+            Value::String("1725000000123".to_owned()),
+            Value::String("nonce".to_owned()),
+            Value::String(all_zero_signature),
+        ),
+    ] {
+        apply_extra_headers_with_policy(
+            &mut HeaderMap::new(),
+            Some(&invalid),
+            ExtraHeaderPolicy::OperatorAuthentication,
+        )
+        .expect_err("invalid generic operator wire values must fail before dispatch");
+    }
 }
 #[test]
 fn every_mcp_post_response_is_private_and_non_cacheable() {
@@ -728,6 +1058,7 @@ fn telemetry_operator_get_tools_are_operator_only_when_feature_enabled() {
     retain_catalog_mcp_tools(&mut tools, TELEMETRY_GROUPS);
     assert_eq!(tools.len(), 2, "telemetry feature keeps both exact routes");
     apply_catalog_operator_effects_to_manual_tools(&mut tools, TELEMETRY_GROUPS);
+    apply_catalog_auth_schemas_to_tools(&mut tools, TELEMETRY_GROUPS);
     validate_tool_registry(&tools, TELEMETRY_GROUPS).expect("valid operator registry");
     for tool in &tools {
         assert_eq!(tool.effect, ToolEffect::Operator, "{}", tool.name);
@@ -971,7 +1302,7 @@ fn vpn_canonical_auth_bridge_replaces_outer_proof_with_exact_signature_tuple() {
     let arguments = norito::json!({
         "canonical_auth": {
             "account": TEST_ACCOUNT_I105,
-            "signature": "inner-target-signature",
+            "signature": "AQ==",
             "timestamp_ms": 1_725_000_000_123_u64,
             "nonce": "inner-target-nonce"
         }
@@ -1003,9 +1334,10 @@ fn vpn_canonical_auth_bridge_replaces_outer_proof_with_exact_signature_tuple() {
         ExtraHeaderPolicy::CanonicalAccountAuthentication,
     )
     .expect("exact inner-target proof installed");
+    let expected_account = test_account_header_hex();
     for (name, expected) in [
-        (crate::HEADER_ACCOUNT, TEST_ACCOUNT_I105),
-        (crate::HEADER_SIGNATURE, "inner-target-signature"),
+        (crate::HEADER_ACCOUNT, expected_account.as_str()),
+        (crate::HEADER_SIGNATURE, "AQ=="),
         (crate::HEADER_TIMESTAMP_MS, "1725000000123"),
         (crate::HEADER_NONCE, "inner-target-nonce"),
     ] {
@@ -1093,9 +1425,10 @@ fn vpn_canonical_auth_bridge_passes_exact_target_proof_to_authoritative_verifier
 }
 #[test]
 fn vpn_canonical_auth_bridge_accepts_witness_and_strips_outer_tuple() {
+    let witness = canonical_test_witness_header();
     let arguments = norito::json!({
         "canonical_auth": {
-            "witness": "inner-target-witness"
+            "witness": (witness.clone())
         }
     });
     let canonical_headers = vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
@@ -1119,7 +1452,7 @@ fn vpn_canonical_auth_bridge_accepts_witness_and_strips_outer_tuple() {
         dispatched
             .get(crate::HEADER_WITNESS)
             .and_then(|value| value.to_str().ok()),
-        Some("inner-target-witness")
+        Some(witness.as_str())
     );
     assert!(
         dispatched

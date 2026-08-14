@@ -29,6 +29,7 @@ def test_serve_terminal_discharge_production_contract_is_complete(
     (
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
+        "v2_worker_recovered_lifecycle_output_cases.rs",
         "v2_worker_serve_unsealed_cases.rs",
         "v2_worker_serve_decision_restart_cases.rs",
     ),
@@ -64,6 +65,7 @@ def test_worker_regression_include_source_seal_rejects_drift(
     (
         "v2_worker_reply_route_cases.rs",
         "v2_worker_backpressure_cases.rs",
+        "v2_worker_recovered_lifecycle_output_cases.rs",
         "v2_worker_serve_unsealed_cases.rs",
         "v2_worker_serve_decision_restart_cases.rs",
     ),
@@ -81,6 +83,7 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
         if filename in {
             "v2_worker_reply_route_cases.rs",
             "v2_worker_backpressure_cases.rs",
+            "v2_worker_recovered_lifecycle_output_cases.rs",
         }
         else "v2_worker_main_04.rs"
     )

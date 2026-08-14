@@ -368,7 +368,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
     )])
     .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&revoke_exact)?;
-    test_client
+    let _ = test_client
         .submit_blocking(
             Transfer::asset_quantity(bob_coin_id.clone(), 1u32, alice_id.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

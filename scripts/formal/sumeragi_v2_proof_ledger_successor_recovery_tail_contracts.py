@@ -2486,6 +2486,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         ),
         (
+            "launch_tests",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        ),
+        (
             "ledger",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         ),
@@ -2546,6 +2550,11 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "launch",
             "v2_lifecycle_preactivation.rs",
             'mod preactivation;',
+        ),
+        (
+            "launch",
+            "v2_lifecycle_launch_tests.rs",
+            'mod tests;',
         ),
         (
             "runner",
@@ -3673,10 +3682,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"forbidden surface {forbidden!r}"
             )
     prepared_state_behavior = item(
-        "launch", "prepared_local_proposal_state_is_affine_and_context_directive_bound"
+        "launch_tests",
+        "prepared_local_proposal_state_is_affine_and_context_directive_bound",
     )
     require_order(
-        "launch",
+        "launch_tests",
         prepared_state_behavior,
         "affine prepared local-Proposal state behavior",
         (
@@ -3806,11 +3816,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     f"exposes forbidden Proposal mutation {forbidden!r}"
                 )
     fail_stop_behavior = item(
-        "launch",
+        "launch_tests",
         "preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete",
     )
     require_order(
-        "launch",
+        "launch_tests",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (
@@ -3821,7 +3831,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     require_tokens(
-        "launch",
+        "launch_tests",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (

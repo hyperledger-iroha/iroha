@@ -1,0 +1,11 @@
+
+            seiyaku Queries {
+                fn account(AccountId id) -> Option<AccountView> {
+                    ledger::query::account(id)
+                }
+
+                fn accounts(int offset, int limit) -> QueryPage<AccountView> {
+                    ledger::query::accounts(offset: offset, limit: limit)
+                }
+            }
+            

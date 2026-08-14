@@ -19,7 +19,6 @@ use iroha::data_model::{
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
         sccp_sora_taira_chain_id_hash_v1, sccp_v1_taira_xor_asset_definition_id,
     },
-    domain::Domain,
     isi::{
         Grant, Mint, Register,
         bridge::{ApplySccpRouteGovernance, SccpRegisterRouteV1, SccpRouteGovernanceActionV1},
@@ -128,14 +127,15 @@ fn integration_route() -> SccpGovernedRouteV1 {
         target: SccpNetworkV1::SoraTaira,
     };
     let verifying_key = integration_verifying_key();
+    let verifier_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(verifying_key.clone())
+        .expect("integration verification key must be curve-valid");
     let deployment = SccpEvmDestinationDeploymentV1 {
         token_address: [0x11; 20],
         token_code_hash: [0x21; 32],
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
-            .expect("integration verification key must be curve-valid"),
+        verifier_key_hash,
         outbound_proof_policy: integration_outbound_policy(),
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],

@@ -4502,34 +4502,6 @@ mod tests {
         bytes.copy_from_slice(&public_key);
         bytes
     }
-    fn governance_auth_ingress_binding(
-        handle: &str,
-        max_body_bytes: u64,
-    ) -> sorafs_node::GovernanceDagRequestIngressBindingV1 {
-        let (scope, endpoint) = if handle == GOVERNANCE_IPFS_HANDLE {
-            (
-                sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
-                GOVERNANCE_IPFS_ENDPOINT,
-            )
-        } else {
-            (
-                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
-                GOVERNANCE_HEAD_ENDPOINT,
-            )
-        };
-        let endpoint_binding =
-            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
-                .expect("test ingress endpoint is canonical");
-        sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
-            scope,
-            endpoint_binding,
-            governance_auth_public_key(handle),
-            max_body_bytes,
-            30,
-            5,
-        )
-        .expect("test Governance DAG request-ingress binding is valid")
-    }
     impl sorafs_node::GovernanceDagRequestAuthenticator for GovernanceAuthenticator {
         fn handle(&self) -> &str {
             self.handle
@@ -5267,46 +5239,6 @@ mod tests {
             }),
             first,
             "{family} load/re-export must be byte-identical"
-        );
-    }
-    fn configure_musubi_provider_attestation_journal(config: &mut Config) {
-        configure_provider_ingest_runtime(config);
-        config
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider-ingest runtime")
-            .provider_attestation_journal = Some(
-            iroha_config::parameters::actual::SorafsProviderAttestationJournal {
-                clock_seal:
-                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
-                        handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
-                        revision: 11,
-                        policy_digest: [0xC1; 32],
-                    },
-                approval_signer:
-                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
-                        handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
-                        revision: 12,
-                        policy_digest: [0xC2; 32],
-                    },
-                inventory:
-                    iroha_config::parameters::actual::SorafsProviderAttestationRuntimeBinding {
-                        handle: "coordinator://sorafs/provider-attestation/inventory-primary"
-                            .to_owned(),
-                        revision: 13,
-                        policy_digest: [0xC3; 32],
-                    },
-                max_entries: 4_096,
-                max_attempts: 8,
-                lease_ttl_ms: 30_000,
-                approval_timeout_ms: 10_000,
-                handoff_timeout_ms: 10_000,
-                retry_delay_ms: 1_000,
-                checkpoint_max_bytes: 16 * 1024 * 1024,
-                max_cas_retries: 16,
-            },
         );
     }
     fn configure_stream_token_runtime(config: &mut Config) {

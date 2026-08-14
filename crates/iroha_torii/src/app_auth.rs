@@ -56,6 +56,7 @@ use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId, ValidationFail,
     account::{AccountController, AccountId, address::AccountAddress, rekey::AccountAlias},
+    alias_setup::AccountAliasName,
     query::{
         ItemKindTag, Query, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
@@ -96,7 +97,7 @@ const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1: usize = 64;
 ///
 /// This matches the complete HTTP/1 parser-buffer ceiling and also protects
 /// direct in-process verifier callers that do not pass through that transport.
-const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
+pub(crate) const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
 /// Maximum method token bytes accepted by the in-process V1 verifier.
 const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: usize = 32;
 /// Maximum percent-encoded path bytes covered by one canonical V1 request.
@@ -111,7 +112,15 @@ const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
 /// This covers the worst-case UTF-8 I105 spelling for every supported V1
 /// single-key controller after the grouped base conversion. Larger multisig
 /// controllers authenticate with the separately bounded witness form instead.
-const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1: usize = 36 * 1024;
+pub(crate) const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1: usize = 36 * 1024;
+/// Maximum bytes in the catalog-free ASCII alias exception accepted by auth.
+///
+/// An account alias contains at most three [`iroha_data_model::name::Name`]
+/// segments plus the `@` and optional `.` separators. Apply this structural
+/// ceiling before normalization or catalog lookup; the wider account limit is
+/// reserved for canonical controller hex.
+const CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1: usize =
+    3 * iroha_data_model::name::MAX_NAME_BYTES + 2;
 /// Maximum number of signatures carried by one canonical V1 witness.
 const CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1: usize = 64;
 /// Maximum decoded size of one canonical V1 witness (768 KiB).
@@ -121,7 +130,7 @@ const CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1: usize = 64;
 /// in-process verifier callers which bypass the HTTP parser, while the outer
 /// routed-read admission owns the overlapping header, decoded frame, and
 /// verification scratch high-water.
-const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 1024 / 4;
+pub(crate) const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 1024 / 4;
 /// Largest detached signature payload supported by the canonical V1 verifier.
 pub(crate) const CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1: usize =
     Algorithm::MlDsa.signature_payload_len();
@@ -347,7 +356,11 @@ impl Iterator for CanonicalRequestFormLossyChars<'_> {
             }
             Err(error) if error.valid_up_to() != 0 => {
                 let valid = &encoded[..error.valid_up_to()];
-                let ch = valid.chars().next().expect("non-empty valid UTF-8 prefix");
+                let ch = std::str::from_utf8(valid)
+                    .expect("UTF-8 validator reported a valid prefix")
+                    .chars()
+                    .next()
+                    .expect("non-empty valid UTF-8 prefix");
                 self.advance(ch.len_utf8());
                 Some(ch)
             }
@@ -718,7 +731,7 @@ pub fn canonical_request_message(
     uri: &Uri,
     body: &[u8],
 ) -> Result<Vec<u8>, crate::Error> {
-    bounded_canonical_request_message(method, uri, body).map(Box::into_vec)
+    bounded_canonical_request_message(method, uri, body).map(|bytes| bytes.into_vec())
 }
 /// Construct exact-network canonical request bytes for signing.
 ///
@@ -732,7 +745,7 @@ pub fn canonical_network_request_message(
     body: &[u8],
 ) -> Result<Vec<u8>, crate::Error> {
     bounded_canonical_network_request_message(network_id, method, uri, body, None)
-        .map(Box::into_vec)
+        .map(|bytes| bytes.into_vec())
 }
 /// Hash an exact-network canonical request for a multisig witness.
 ///
@@ -766,7 +779,7 @@ pub fn canonical_network_request_signature_message(
         body,
         Some((timestamp_ms, nonce)),
     )
-    .map(Box::into_vec)
+    .map(|bytes| bytes.into_vec())
 }
 /// Encode a signature payload for use in `X-Iroha-Signature` headers.
 ///
@@ -1240,6 +1253,80 @@ fn canonical_request_nonce_is_valid(nonce: &str) -> bool {
         && nonce.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
+/// Preflight the exact wire values of a canonical-request authentication proof.
+///
+/// This deliberately stops before account resolution, freshness checks, replay
+/// admission, and cryptographic verification. It is used by internal forwarders
+/// to reject values that the authoritative route verifier cannot parse.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_canonical_request_auth_wire_values(
+    account: Option<&str>,
+    signature: Option<&str>,
+    timestamp_ms: Option<&str>,
+    nonce: Option<&str>,
+    witness: Option<&str>,
+) -> Result<(), crate::Error> {
+    if let Some(account) = account {
+        validate_canonical_account_header_literal(account)?;
+    }
+    if let Some(signature) = signature {
+        let signature = decode_signature_bytes_value(signature, "X-Iroha-Signature")?;
+        if signature.is_empty() || signature.iter().all(|byte| *byte == 0) {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Signature payload".to_owned(),
+            )));
+        }
+    }
+    if let Some(timestamp_ms) = timestamp_ms {
+        let _ = parse_canonical_timestamp_ms(timestamp_ms)?;
+    }
+    if let Some(nonce) = nonce
+        && !canonical_request_nonce_is_valid(nonce)
+    {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Nonce value".to_owned(),
+        )));
+    }
+    if let Some(witness) = witness {
+        let witness = decode_witness_value(witness, "X-Iroha-Witness")?;
+        validate_canonical_request_witness_for_encoding(&witness).map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Witness payload".to_owned(),
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_account_header_literal(account_literal: &str) -> Result<(), crate::Error> {
+    fn invalid_account_header() -> crate::Error {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    }
+
+    if account_literal.is_empty()
+        || !canonical_request_account_literal_fits_v1(account_literal)
+        || !account_literal.is_ascii()
+    {
+        return Err(invalid_account_header());
+    }
+    if account_literal.starts_with("0x") {
+        parse_canonical_account_header_address(account_literal)?;
+        return Ok(());
+    }
+    if account_literal.len() > CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1 {
+        return Err(invalid_account_header());
+    }
+    let alias = account_literal
+        .parse::<AccountAliasName>()
+        .map_err(|_| invalid_account_header())?;
+    if alias.canonical_text() != account_literal {
+        return Err(invalid_account_header());
+    }
+    Ok(())
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1274,6 +1361,7 @@ fn parse_required_header_exact_text<'a>(
 fn parse_canonical_timestamp_ms(value: &str) -> Result<u64, crate::Error> {
     let encoded = value.as_bytes();
     if encoded.is_empty()
+        || encoded.len() > 20
         || !encoded.iter().all(u8::is_ascii_digit)
         || (encoded.len() > 1 && encoded[0] == b'0')
     {
@@ -1313,6 +1401,9 @@ fn parse_account_header_value(
     // controller must verify the request signature. User-directed alias lookup
     // remains permissioned independently.
     if !account_literal.is_ascii() {
+        return Err(invalid_account_header());
+    }
+    if account_literal.len() > CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1 {
         return Err(invalid_account_header());
     }
     let nexus = state.nexus_snapshot();
@@ -1746,9 +1837,10 @@ fn check_replay(
     minimum_ttl: Duration,
 ) -> Result<(), crate::Error> {
     const DOMAIN: &[u8] = b"iroha:app-auth:replay:v1\0";
-    let replay_key = Hash::new_from_writer(|writer| {
+    let replay_key = Hash::new_from_writer(|mut writer| {
         writer.write_all(DOMAIN)?;
-        norito::core::write_canonical_to_writer(account, writer).map_err(std::io::Error::other)?;
+        norito::core::write_canonical_to_writer(account, &mut writer)
+            .map_err(std::io::Error::other)?;
         writer.write_all(nonce.as_bytes())
     })
     .map_err(|_| {
@@ -2246,7 +2338,6 @@ mod tests {
         sumeragi::network_topology::Topology,
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::query::error::FindError;
     use iroha_data_model::{
         Registrable,
         account::{Account, AccountAddress, MultisigMember, MultisigPolicy},
@@ -2418,11 +2509,11 @@ mod tests {
         headers.insert(HEADER_NONCE, nonce.parse().expect("valid nonce header"));
         headers
     }
-    fn assert_missing_account_rejection(error: crate::Error, expected: &AccountId) {
+    fn assert_missing_account_rejection(error: crate::Error) {
         match error {
-            crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                FindError::Account(actual),
-            ))) => assert_eq!(&actual, expected),
+            crate::Error::Query(ValidationFail::NotPermitted(message)) => {
+                assert_eq!(message, "canonical request account is not registered")
+            }
             other => panic!("expected missing-account authentication rejection, got {other:?}"),
         }
     }
@@ -2700,7 +2791,13 @@ mod tests {
         let exact = "x".repeat(CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1);
         validate_canonical_request_raw_query(&exact)
             .expect("the exact V1 raw-query byte limit must be accepted");
-        let exact_uri: Uri = format!("/v1/test?{exact}").parse().expect("exact URI");
+        let exact_uri = Uri::builder()
+            .path_and_query(
+                http::uri::PathAndQuery::try_from(format!("/v1/test?{exact}"))
+                    .expect("exact path-and-query"),
+            )
+            .build()
+            .expect("exact URI");
         canonical_request_message(&Method::GET, &exact_uri, &[])
             .expect("the public builder accepts the exact raw-query limit");
 
@@ -2712,8 +2809,12 @@ mod tests {
             crate::Error::Query(ValidationFail::NotPermitted(message))
                 if message.contains("65536 raw bytes")
         ));
-        let excessive_uri: Uri = format!("/v1/test?{excessive}")
-            .parse()
+        let excessive_uri = Uri::builder()
+            .path_and_query(
+                http::uri::PathAndQuery::try_from(format!("/v1/test?{excessive}"))
+                    .expect("plus-one path-and-query"),
+            )
+            .build()
             .expect("plus-one URI");
         assert!(canonical_request_message(&Method::GET, &excessive_uri, &[]).is_err());
     }
@@ -2810,6 +2911,25 @@ mod tests {
     }
 
     #[test]
+    fn canonical_account_alias_limit_precedes_the_wider_controller_hex_limit() {
+        let excessive = format!(
+            "{}@d",
+            "a".repeat(CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1)
+        );
+        assert!(
+            excessive.len() < CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+            "the alias ceiling must be narrower than the controller-hex ceiling"
+        );
+        let error = validate_canonical_account_header_literal(&excessive)
+            .expect_err("an oversized catalog-free alias must be rejected before parsing");
+        assert!(matches!(
+            error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "invalid X-Iroha-Account value"
+        ));
+    }
+
+    #[test]
     fn canonical_timestamp_accepts_only_exact_unsigned_decimal() {
         assert_eq!(
             parse_canonical_timestamp_ms("0").expect("canonical zero"),
@@ -2890,11 +3010,9 @@ mod tests {
             1024 * 1024
         );
         let exact = BASE64_STANDARD.encode([0x11, 0x22, 0x33]);
-        assert_eq!(
-            decode_bounded_canonical_base64_value(&exact, 3, "test base64")
-                .expect("exact decoded byte limit"),
-            [0x11, 0x22, 0x33]
-        );
+        let decoded = decode_bounded_canonical_base64_value(&exact, 3, "test base64")
+            .expect("exact decoded byte limit");
+        assert_eq!(decoded.as_ref(), &[0x11, 0x22, 0x33]);
 
         let excessive = BASE64_STANDARD.encode([0x11, 0x22, 0x33, 0x44]);
         let error = decode_bounded_canonical_base64_value(&excessive, 3, "test base64")
@@ -3180,7 +3298,7 @@ mod tests {
             None,
         )
         .expect_err("a payload-declared key is not an eligible on-ledger principal");
-        assert_missing_account_rejection(error, &self_declared);
+        assert_missing_account_rejection(error);
     }
     #[test]
     fn fee_quote_auth_accepts_exact_absent_self_registration_and_rejects_replay() {
@@ -3245,7 +3363,7 @@ mod tests {
             &registers_other,
         )
         .expect_err("registration of another account must not qualify");
-        assert_missing_account_rejection(error, &authority);
+        assert_missing_account_rejection(error);
         let mismatched_authority = fee_quote_body(&other, &other);
         let headers = signed_headers_for_test(
             state.network_id_ref(),
@@ -3264,7 +3382,7 @@ mod tests {
             &mismatched_authority,
         )
         .expect_err("header and payload authorities must match");
-        assert_missing_account_rejection(error, &authority);
+        assert_missing_account_rejection(error);
         let multisig_policy = MultisigPolicy::new(
             1,
             vec![MultisigMember::new(key_pair.public_key().clone(), 1).expect("multisig member")],
@@ -3289,7 +3407,7 @@ mod tests {
             &multisig_body,
         )
         .expect_err("absent multisig authority must require a materialised WSV policy");
-        assert_missing_account_rejection(error, &multisig_authority);
+        assert_missing_account_rejection(error);
         let correct_body = fee_quote_body(&authority, &authority);
         let canonical_i105 = authority.canonical_i105().expect("canonical I105 fixture");
         let mut non_header_wire = signed_headers_for_test(
@@ -3363,7 +3481,7 @@ mod tests {
             &correct_body,
         )
         .expect_err("fallback must not broaden another endpoint");
-        assert_missing_account_rejection(error, &authority);
+        assert_missing_account_rejection(error);
         let malformed_body = b"{";
         let headers = signed_headers_for_test(
             state.network_id_ref(),
@@ -3382,7 +3500,7 @@ mod tests {
             malformed_body,
         )
         .expect_err("malformed body must not qualify an absent account");
-        assert_missing_account_rejection(error, &authority);
+        assert_missing_account_rejection(error);
     }
     #[test]
     fn fee_quote_auth_never_bypasses_a_registered_account_controller() {

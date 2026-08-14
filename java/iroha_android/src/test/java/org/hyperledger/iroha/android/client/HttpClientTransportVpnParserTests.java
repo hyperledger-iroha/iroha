@@ -354,7 +354,7 @@ final class HttpClientTransportVpnParserTests {
     final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_050L, "vpn-status-nonce");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_050L, "vpn-status-nonce");
 
     assertVpnWrongStatusRejected(201, vpnProfileJson(), transport -> transport.getVpnProfile().join());
     assertVpnWrongStatusRejected(

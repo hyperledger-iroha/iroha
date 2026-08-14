@@ -102,7 +102,7 @@ fn pdp_signed_request_matches(
         None => return false,
     };
     match URL_SAFE_NO_PAD.decode(nonce.as_bytes()) {
-        Ok(bytes) if bytes.len() == 12 && URL_SAFE_NO_PAD.encode(bytes) == nonce => {}
+        Ok(bytes) if bytes.len() == 12 && URL_SAFE_NO_PAD.encode(&bytes) == nonce => {}
         _ => return false,
     }
     let signature_text = match pdp_single_header(request, "x-iroha-operator-signature") {
